@@ -85,7 +85,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			return
 		}
 
-		request := newRequestState(groupName, group.ID, model.ProtocolOpenAIChatCompletion, string(body), c.GetInt("api_key_id"))
+		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIChatCompletion, string(body), c.GetInt("api_key_id"))
 		ctx := c.Request.Context()
 		failedItemID := 0
 		failures := 0
