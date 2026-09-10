@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -49,6 +50,9 @@ func buildOutbound(channel model.Channel, grant model.ChannelGrant, channelKey m
 	}
 }
 
+// clientHeaderPlaceholder 匹配自定义 Header 值中引用的客户端请求头
+var clientHeaderPlaceholder = regexp.MustCompile(`\{client_header:[^}]+\}`)
+
 // applyChannelConfig 按渠道配置覆盖上游请求的参数并追加自定义 Header; model 与 stream 由转发流程决定, 不允许覆盖。
 func applyChannelConfig(channel model.Channel, request *httpclient.Request) error {
 	if channel.ParamOverride != "" {
@@ -80,7 +84,11 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request) erro
 		if request.Headers.Get(header.HeaderKey) != "" && httpclient.IsSensitiveHeader(header.HeaderKey) {
 			continue
 		}
-		request.Headers.Set(header.HeaderKey, header.HeaderValue)
+		// 值中的 {client_header:xxx} 片段替换为客户端请求头 xxx 的实际值。
+		value := clientHeaderPlaceholder.ReplaceAllStringFunc(header.HeaderValue, func(placeholder string) string {
+			return request.Headers.Get(placeholder[len("{client_header:") : len(placeholder)-1])
+		})
+		request.Headers.Set(header.HeaderKey, value)
 	}
 	return nil
 }

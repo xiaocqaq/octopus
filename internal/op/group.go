@@ -54,8 +54,7 @@ func GroupListModel() []string {
 }
 
 // GroupGetByName 返回客户端模型名称对应的分组配置, 供转发选路使用。
-// 不补齐成员的展示字段: 转发只需成员主键与顺序, 授权详情由 ChannelGrantGet 按主键单独取,
-// 那里会连带校验凭据启用与两侧存在, 使拿到的授权必然可直接转发。
+// 渠道或凭据被禁用及授权两侧缺失的成员不参与选路, 重新可用后会在下一轮读取时自动恢复。
 func GroupGetByName(name string) (model.Group, error) {
 	groupID, ok := groupNameIndex.Get(name)
 	if !ok {
@@ -65,7 +64,8 @@ func GroupGetByName(name string) (model.Group, error) {
 	if !ok {
 		return model.Group{}, fmt.Errorf("group not found")
 	}
-	group.Items = slices.Clone(group.Items)
+	group = groupSnapshot(group)
+	group.Items = slices.DeleteFunc(group.Items, func(item model.GroupItem) bool { return !item.Available })
 	return group, nil
 }
 

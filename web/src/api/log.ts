@@ -25,9 +25,11 @@ export interface RelayLogOverview {
     model: string;
     protocol: number;
     group_id: number;
+    api_key_name: string;
     usage: RelayUsage;
     cost: number;
     round: number;
+    round_started_at: string;
     target_channel: string;
     target_model: string;
     target_protocol: number;

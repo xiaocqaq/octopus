@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Clock, Cpu, Database, DollarSign, Loader2, Square } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Clock, Cpu, Database, DollarSign, KeyRound, Loader2, Square } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import JsonView from '@uiw/react-json-view';
 import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
@@ -45,6 +45,18 @@ function formatMilliseconds(value: number) {
     return `${(milliseconds / 1000).toFixed(2)}s`;
 }
 
+// formatRoundStartedAt 将服务端轮次开始时间格式化为本地时分秒.毫秒, 各部分固定补零。
+function formatRoundStartedAt(value: string) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime()) || date.getUTCFullYear() === 1) return '--:--:--.---';
+    return `${date.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    })}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+}
+
 // PROTOCOL_LABELS 是协议位值对应的界面标识, 与渠道页和分组页的授权标签同一套词。
 // 键是单个协议位而非掩码组合: 日志记录的是本次请求与本轮上游各自实际使用的那一个协议。
 const PROTOCOL_LABELS: Record<number, string> = {
@@ -53,7 +65,7 @@ const PROTOCOL_LABELS: Record<number, string> = {
     [Protocol.AnthropicMessage]: 'Message',
 };
 
-// LogMetrics 渲染耗时, 费用和 Token 指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
+// LogMetrics 渲染时间、API Key、耗时、费用和 Token 指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
 function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; now: number; brandColor: string; variant: 'card' | 'footer' }) {
     const cachedTokens = log.usage.prompt_tokens_details?.cached_tokens ?? 0;
     // 进行中的请求按共享时钟推算耗时, 结束后改用后端记录的最终耗时。
@@ -62,6 +74,7 @@ function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; 
         : formatMilliseconds(log.duration / 1_000_000);
     const metrics = [
         { key: 'time', Icon: Clock, iconClassName: 'size-3.5 shrink-0', iconStyle: { color: brandColor } as CSSProperties, value: formatTime(log.started_at), valueClassName: 'tabular-nums', cellClassName: 'col-span-4 whitespace-nowrap md:col-span-1' },
+        { key: 'apiKey', Icon: KeyRound, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: log.api_key_name || '-', valueClassName: 'truncate', cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'duration', Icon: Cpu, iconClassName: 'size-3.5 shrink-0 text-blue-500', value: duration, cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'cost', Icon: DollarSign, iconClassName: 'size-3.5 shrink-0 text-emerald-500', value: log.cost.toFixed(6), valueClassName: 'font-medium text-emerald-600 dark:text-emerald-400', cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'prompt', Icon: ArrowDownToLine, iconClassName: 'size-3.5 shrink-0 text-green-500', value: (log.usage.prompt_tokens - cachedTokens).toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
@@ -71,7 +84,11 @@ function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; 
     ];
 
     return metrics.map((metric) => (
-        <div key={metric.key} className={cn('flex items-center gap-1.5', variant === 'card' && metric.cellClassName)}>
+        <div
+            key={metric.key}
+            title={metric.key === 'apiKey' ? log.api_key_name : undefined}
+            className={cn('flex min-w-0 items-center gap-1.5', variant === 'card' && metric.cellClassName)}
+        >
             <metric.Icon className={metric.iconClassName} style={metric.iconStyle} />
             <span className={metric.valueClassName}>{metric.value}</span>
         </div>
@@ -84,6 +101,7 @@ interface ObservedRound {
     channel: string; // 本轮实际请求的渠道名称。
     error: string; // 本轮最近一次上游错误。
     sending: boolean; // 本轮是否仍在等待上游响应。
+    startedAt: string; // 服务端记录的本轮开始时间。
 }
 
 // JsonContent 渲染请求或响应正文, 能解析为 JSON 时使用折叠视图, 否则按纯文本展示。
@@ -169,8 +187,16 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
         setObservedRoundKey(roundKey);
         setRounds((current) => {
             if (!log.sending && current.every((item) => item.round !== log.round)) return current;
+            const previous = current.find((item) => item.round === log.round);
+            const startedAt = previous?.startedAt ?? log.round_started_at;
             return [
-                { round: log.round, channel: log.target_channel, error: errorText, sending: log.sending },
+                {
+                    round: log.round,
+                    channel: log.target_channel,
+                    error: errorText,
+                    sending: log.sending,
+                    startedAt,
+                },
                 ...current.filter((item) => item.round !== log.round),
             ];
         });
@@ -184,7 +210,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                 <span className="text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span>
                 <span className="font-semibold text-card-foreground">{log.model || t('unknownModel')}</span>
                 {log.status === 'running' || responseCommitted
-                    ? <Loader2 className="size-3.5 animate-spin text-muted-foreground/50" />
+                    ? <Loader2 className={cn('size-3.5 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
                     : <ArrowRight className="size-3.5 text-muted-foreground/50" />}
                 <span className="text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span>
                 <Badge
@@ -338,8 +364,9 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                         {rounds.map((round) => (
                                             <div key={round.round} className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
-                                                    <span className="font-semibold text-foreground">{round.channel || '-'}</span>
+                                                    <span className="shrink-0 tabular-nums text-muted-foreground">{formatRoundStartedAt(round.startedAt)}</span>
+                                                    <span className="shrink-0 text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
+                                                    <span className="shrink-0 font-semibold text-foreground">{round.channel || '-'}</span>
                                                     {round.sending ? (
                                                         <Loader2 className="ml-auto size-3.5 animate-spin text-muted-foreground" />
                                                     ) : round.error ? (
@@ -431,7 +458,7 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                                 {log.model || t('unknownModel')}
                             </span>
                             {requestRunning
-                                ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/50" />
+                                ? <Loader2 className={cn('size-3.5 shrink-0 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
                                 : <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />}
                             <span className="shrink-0 text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span>
                             <Badge
@@ -445,7 +472,7 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                                 {actualModel}
                             </span>
                         </div>
-                        <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-7">
+                        <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-8">
                             <LogMetrics log={log} now={now} brandColor={brandColor} variant="card" />
                         </div>
                         {requestFailed && errorText && (
