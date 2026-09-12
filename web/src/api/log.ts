@@ -35,6 +35,8 @@ export interface RelayLogOverview {
     target_protocol: number;
     sending: boolean;
     error?: string;
+    // reasoning 是客户端声明的思维强度, 后端已把三种协议各自的字段归一为一段短文本; 未声明时缺省。
+    reasoning?: string;
 }
 
 // useClearLogs 清空已完成的内存日志。

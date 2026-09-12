@@ -20,6 +20,8 @@ import (
 // buildOutbound 在渠道授权支持的协议内选出本轮上游协议, 构造对应的出站转换器, 并返回选中的协议和能否同协议透传。
 // 地址由渠道的协议路径字段与地址拼接, 凭据取自目标绑定的渠道凭据。
 // want 是客户端请求使用的协议, 由调用方按入站格式定出; 选中的协议随请求状态推给界面, 故一并返回。
+// 图片协议不参与此处的选路: 它没有跨协议转换的余地, 由 ForwardImage 自行按协议位过滤成员并原样透传,
+// 故只登记了图片协议的授权在这里选不出可用协议, 会以错误让本轮失败并让位给下一个成员。
 func buildOutbound(channel model.Channel, grant model.ChannelGrant, channelKey model.ChannelKey, want model.Protocol) (transformer.Outbound, model.Protocol, bool, error) {
 	protocol, passthrough := want, grant.Protocols&want != 0
 	if !passthrough {
@@ -46,7 +48,7 @@ func buildOutbound(channel model.Channel, grant model.ChannelGrant, channelKey m
 		outbound, err := anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{Type: anthropic.PlatformDirect, BaseURL: channel.BaseURL, EndpointPath: channel.AnthropicMessagePath, APIKeyProvider: key})
 		return outbound, protocol, passthrough, err
 	default:
-		return nil, 0, false, fmt.Errorf("channel grant %d supports no known protocol: %d", grant.ID, grant.Protocols)
+		return nil, 0, false, fmt.Errorf("channel grant %d supports no chat protocol: %d", grant.ID, grant.Protocols)
 	}
 }
 

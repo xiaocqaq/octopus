@@ -120,7 +120,8 @@
             "period": {
                 "today": "Today",
                 "last7Days": "7 Days",
-                "last30Days": "30 Days"
+                "last30Days": "30 Days",
+                "all": "All"
             }
         },
         "rank": {
@@ -317,7 +318,9 @@
             "empty": "No rules",
             "activate": "Set as active",
             "cooling": "Cooling {seconds}s",
-            "affinity": "Affinity {seconds}s"
+            "affinity": "Affinity {seconds}s",
+            "pinned": "Forced priority",
+            "modeToggleHint": "Click to switch routing mode"
         },
         "detail": {
             "actions": {

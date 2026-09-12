@@ -1,7 +1,9 @@
+import { useMemo } from 'react';
 import { TrendingUp } from 'lucide-react';
 import { useTranslations } from 'use-intl';
-import { useChannelStats } from '@/api/channel';
-import { useHomeViewStore, type MetricKey } from './store';
+import { useChannelStatsByPeriod } from '@/api/channel';
+import { formatCount, formatMoney } from '@/lib/utils';
+import { PERIOD_DAYS, useHomeViewStore, type MetricKey } from './store';
 import { MetricTabs } from './metric-tabs';
 import type { StatsMetricsFormatted } from '@/api/stats';
 
@@ -11,11 +13,24 @@ type RankMetrics = Pick<
     'total_cost' | 'total_token' | 'request_count' | 'request_success' | 'request_failed'
 >;
 
+// sumRankMetrics 把两份榜单统计按 raw 相加并重新格式化。
+// 不能直接相加 formatted: 那是带单位的展示串, 5K + 5K 得重新进位成 10K 才对。
+function sumRankMetrics(a: RankMetrics, b: RankMetrics): RankMetrics {
+    return {
+        total_cost: formatMoney(a.total_cost.raw + b.total_cost.raw),
+        total_token: formatCount(a.total_token.raw + b.total_token.raw),
+        request_count: formatCount(a.request_count.raw + b.request_count.raw),
+        request_success: formatCount(a.request_success.raw + b.request_success.raw),
+        request_failed: formatCount(a.request_failed.raw + b.request_failed.raw),
+    };
+}
+
 // 榜单中的一个条目, 渠道和模型共用。
+// 主标题是否被渠道名模糊开关糊掉由 blurName 决定: 渠道榜的标题本身就是渠道名, 模型榜的模型名不是。
 interface RankItem {
     id: string;
     name: string; // 渠道榜为渠道名, 模型榜为模型名。
-    channelName?: string; // 仅模型榜有值; 有值则 name 是模型名, 模糊渠道名时只糊此项。
+    blurName?: boolean; // 为真时模糊主标题, 仅渠道榜需要。
     formatted: RankMetrics;
 }
 
@@ -60,14 +75,9 @@ function RankCard({
                                 <div className="flex items-center justify-center font-bold text-lg">{index + 1}</div>
 
                                 <div className="min-w-0">
-                                    <p className={`font-medium text-sm truncate ${hideChannelName && !item.channelName ? 'select-none blur-[3px]' : ''}`}>
+                                    <p className={`font-medium text-sm truncate ${hideChannelName && item.blurName ? 'select-none blur-[3px]' : ''}`}>
                                         {item.name}
                                     </p>
-                                    {item.channelName && (
-                                        <p className={`mt-1 truncate text-xs text-muted-foreground ${hideChannelName ? 'select-none blur-[3px]' : ''}`}>
-                                            {item.channelName}
-                                        </p>
-                                    )}
                                     {sortMode === 'count' && (
                                         <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
                                             <span>{t('successRate')}:</span>
@@ -111,9 +121,10 @@ function RankCard({
     );
 }
 
-// Rank 并列渠道榜和模型榜, 两榜各自独立排序。
+// Rank 并列渠道榜和模型榜, 两榜各自独立排序, 统计范围跟随首页共用的时间周期。
 export function Rank() {
-    const { data: channelStats } = useChannelStats();
+    const period = useHomeViewStore((state) => state.chartPeriod);
+    const { data: channelStats } = useChannelStatsByPeriod(PERIOD_DAYS[period]);
     const t = useTranslations('home.rank');
     const channelSortMode = useHomeViewStore((state) => state.channelRankSortMode);
     const setChannelSortMode = useHomeViewStore((state) => state.setChannelRankSortMode);
@@ -124,17 +135,31 @@ export function Rank() {
     const channelItems: RankItem[] = (channelStats ?? []).map((channel) => ({
         id: `channel-${channel.channel_id}`,
         name: channel.channel_name,
+        blurName: true,
         formatted: channel.formatted,
     }));
 
-    const modelItems: RankItem[] = (channelStats ?? []).flatMap((channel) =>
-        channel.models.map((channelModel) => ({
-            id: `model-${channelModel.model_id}`,
-            name: channelModel.model_name,
-            channelName: channel.channel_name,
-            formatted: channelModel.formatted,
-        }))
-    );
+    // 模型榜按模型名合并, 不区分供应商: 同一模型在多个渠道上的调用算作一条。
+    // 名称大小写不敏感, 展示用首次出现的原样。
+    const modelItems: RankItem[] = useMemo(() => {
+        const merged = new Map<string, { name: string; metrics: RankMetrics }>();
+        for (const channel of channelStats ?? []) {
+            for (const channelModel of channel.models) {
+                const key = channelModel.model_name.toLowerCase();
+                const existing = merged.get(key);
+                if (!existing) {
+                    merged.set(key, { name: channelModel.model_name, metrics: { ...channelModel.formatted } });
+                    continue;
+                }
+                existing.metrics = sumRankMetrics(existing.metrics, channelModel.formatted);
+            }
+        }
+        return [...merged.entries()].map(([key, item]) => ({
+            id: `model-${key}`,
+            name: item.name,
+            formatted: item.metrics,
+        }));
+    }, [channelStats]);
 
     return (
         <div className="grid grid-cols-1 @3xl/home:grid-cols-2 gap-4">
@@ -150,7 +175,6 @@ export function Rank() {
                 items={modelItems}
                 sortMode={modelSortMode}
                 onSortModeChange={setModelSortMode}
-                hideChannelName={isChannelNameHidden}
             />
         </div>
     );

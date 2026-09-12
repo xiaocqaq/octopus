@@ -84,6 +84,33 @@ func pickGroupItem(group model.Group) model.GroupItem {
 		route.AffinityUntil = 0
 	}
 
+	// 强制成员优先于优先级顺序与亲和: 只要它不在冷却中就一直选它。
+	// 冷却中则照常按优先级选路, 使强制不至于把请求一直压在一个已经不可用的成员上;
+	// 冷却到期后它重新胜出, 由此无需额外的切回逻辑。
+	if group.PinnedItemID != 0 {
+		if item := itemOf(group, group.PinnedItemID); item.ID != 0 {
+			deadline, cooling := route.Cooldowns[group.PinnedItemID]
+			if !cooling || deadline <= now {
+				changed := false
+				// 冷却已到期的强制成员直接恢复使用, 不占用探测名额: 强制的语义就是尽快回到该成员。
+				// 到期条目须显式删除: recordRouteSuccess 只为探测成员解除冷却, 不删则残留在冷却表里。
+				if cooling {
+					delete(route.Cooldowns, group.PinnedItemID)
+					changed = true
+				}
+				if route.CurrentItemID != group.PinnedItemID {
+					route.CurrentItemID = group.PinnedItemID
+					route.AffinityUntil = 0
+					changed = true
+				}
+				if changed {
+					publishRouteLocked(route)
+				}
+				return item
+			}
+		}
+	}
+
 	// 亲和期内沿用当前成员, 不提前探测已恢复的高优先级成员。
 	if route.CurrentItemID != 0 && route.AffinityUntil > now {
 		return itemOf(group, route.CurrentItemID)

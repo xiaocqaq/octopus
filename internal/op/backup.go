@@ -64,6 +64,12 @@ func DBExportAll(ctx context.Context) (*model.DBDump, error) {
 	if err := conn.Find(&d.StatsAPIKey).Error; err != nil {
 		return nil, fmt.Errorf("export stats_api_key: %w", err)
 	}
+	if err := conn.Find(&d.StatsChannelDaily).Error; err != nil {
+		return nil, fmt.Errorf("export stats_channel_daily: %w", err)
+	}
+	if err := conn.Find(&d.StatsChannelModelDaily).Error; err != nil {
+		return nil, fmt.Errorf("export stats_channel_model_daily: %w", err)
+	}
 
 	return d, nil
 }
@@ -165,6 +171,17 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			return fmt.Errorf("import stats_api_key: %w", err)
 		} else {
 			res.RowsAffected["stats_api_key"] = n
+		}
+		// 按日明细的自然键是 (主体, 日期) 两列, 冲突键需两列齐给, 否则同一渠道的不同日期会互相覆盖。
+		if n, err := createUpsertAll(tx, dump.StatsChannelDaily, []clause.Column{{Name: "channel_id"}, {Name: "date"}}); err != nil {
+			return fmt.Errorf("import stats_channel_daily: %w", err)
+		} else {
+			res.RowsAffected["stats_channel_daily"] = n
+		}
+		if n, err := createUpsertAll(tx, dump.StatsChannelModelDaily, []clause.Column{{Name: "channel_model_id"}, {Name: "date"}}); err != nil {
+			return fmt.Errorf("import stats_channel_model_daily: %w", err)
+		} else {
+			res.RowsAffected["stats_channel_model_daily"] = n
 		}
 
 		return nil

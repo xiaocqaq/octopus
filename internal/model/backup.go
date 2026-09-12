@@ -22,6 +22,9 @@ type DBDump struct {
 	StatsDaily  []StatsDaily  `json:"stats_daily,omitempty"`
 	StatsHourly []StatsHourly `json:"stats_hourly,omitempty"`
 	StatsAPIKey []StatsAPIKey `json:"stats_api_key,omitempty"`
+
+	StatsChannelDaily      []StatsChannelDaily      `json:"stats_channel_daily,omitempty"`       // 渠道按日明细, 供首页榜单按周期统计。
+	StatsChannelModelDaily []StatsChannelModelDaily `json:"stats_channel_model_daily,omitempty"` // 渠道模型按日明细。
 }
 
 type DBImportResult struct {

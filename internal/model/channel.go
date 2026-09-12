@@ -8,6 +8,10 @@ const (
 	ProtocolOpenAIChatCompletion Protocol = 1 << 1 // OpenAI Chat Completions 协议。
 	ProtocolOpenAIResponse       Protocol = 1 << 2 // OpenAI Responses 协议。
 	ProtocolAnthropicMessage     Protocol = 1 << 3 // Anthropic Messages 协议。
+	// ProtocolOpenAIImage 是 OpenAI 图片生成与编辑协议, 覆盖 /v1/images/generations 与 /v1/images/edits。
+	// 两个端点共用一个协议位: 它们收发同一族请求体与响应体, 上游要么都提供要么都不提供,
+	// 分成两位只会让授权矩阵多一列而没有能分别取舍的场景。
+	ProtocolOpenAIImage Protocol = 1 << 4
 )
 
 // 上游在标准协议之上的方言。
@@ -26,23 +30,25 @@ const (
 // 不带 binding 约束: 保存与探测都收这一份配置, 但两者的必填项不同 —— 探测发生在渠道尚未命名时,
 // 故必填校验分别由 normalizeChannelConfig 与 fetchUpstreamModels 按各自的需要给出。
 type ChannelConfig struct {
-	Name                     string         `json:"name" gorm:"unique;not null"`                                                                        // 渠道名称。
-	Dialect                  Dialect        `json:"dialect" gorm:"not null;default:generic"`                                                            // 上游方言, 决定出站转换器的厂商特化配置。
-	Enabled                  bool           `json:"enabled" gorm:"default:true"`                                                                        // 渠道是否可用。
-	BaseURL                  string         `json:"base_url"`                                                                                           // 上游地址, 各协议共用。
-	OpenAIChatCompletionPath string         `json:"openai_chat_completion_path" gorm:"column:openai_chat_completion_path;default:/v1/chat/completions"` // OpenAI Chat Completions 请求路径; 留空由后端填默认路径。
-	OpenAIResponsePath       string         `json:"openai_response_path" gorm:"column:openai_response_path;default:/v1/responses"`                      // OpenAI Responses 请求路径; 留空由后端填默认路径。
-	AnthropicMessagePath     string         `json:"anthropic_message_path" gorm:"column:anthropic_message_path;default:/v1/messages"`                   // Anthropic Messages 请求路径; 留空由后端填默认路径。
-	Proxy                    bool           `json:"proxy" gorm:"default:false"`                                                                         // 是否使用代理。
-	ChannelProxy             string         `json:"channel_proxy"`                                                                                      // 渠道专用代理地址; 留空表示不用渠道专用代理。
-	CustomHeader             []CustomHeader `json:"custom_header" gorm:"serializer:json"`                                                               // 追加到上游请求的 Header。
-	ParamOverride            string         `json:"param_override"`                                                                                     // 请求参数覆盖配置; 留空表示不覆盖。
-	MatchRegex               string         `json:"match_regex"`                                                                                        // 拉取模型列表时的过滤表达式; 留空表示不过滤。
+	Name                      string         `json:"name" gorm:"unique;not null"`                                                                            // 渠道名称。
+	Dialect                   Dialect        `json:"dialect" gorm:"not null;default:generic"`                                                                // 上游方言, 决定出站转换器的厂商特化配置。
+	Enabled                   bool           `json:"enabled" gorm:"default:true"`                                                                            // 渠道是否可用。
+	BaseURL                   string         `json:"base_url"`                                                                                               // 上游地址, 各协议共用。
+	OpenAIChatCompletionPath  string         `json:"openai_chat_completion_path" gorm:"column:openai_chat_completion_path;default:/v1/chat/completions"`     // OpenAI Chat Completions 请求路径; 留空由后端填默认路径。
+	OpenAIResponsePath        string         `json:"openai_response_path" gorm:"column:openai_response_path;default:/v1/responses"`                          // OpenAI Responses 请求路径; 留空由后端填默认路径。
+	AnthropicMessagePath      string         `json:"anthropic_message_path" gorm:"column:anthropic_message_path;default:/v1/messages"`                       // Anthropic Messages 请求路径; 留空由后端填默认路径。
+	OpenAIImageGenerationPath string         `json:"openai_image_generation_path" gorm:"column:openai_image_generation_path;default:/v1/images/generations"` // OpenAI 图片生成请求路径; 留空由后端填默认路径。
+	OpenAIImageEditPath       string         `json:"openai_image_edit_path" gorm:"column:openai_image_edit_path;default:/v1/images/edits"`                   // OpenAI 图片编辑请求路径; 留空由后端填默认路径。
+	Proxy                     bool           `json:"proxy" gorm:"default:false"`                                                                             // 是否使用代理。
+	ChannelProxy              string         `json:"channel_proxy"`                                                                                          // 渠道专用代理地址; 留空表示不用渠道专用代理。
+	CustomHeader              []CustomHeader `json:"custom_header" gorm:"serializer:json"`                                                                   // 追加到上游请求的 Header。
+	ParamOverride             string         `json:"param_override"`                                                                                         // 请求参数覆盖配置; 留空表示不覆盖。
+	MatchRegex                string         `json:"match_regex"`                                                                                            // 拉取模型列表时的过滤表达式; 留空表示不过滤。
 }
 
 // 单个上游渠道的共享配置; 路径按协议分别配置, 凭据由 ChannelKey 提供。
 type Channel struct {
-	ID            int            `json:"id" gorm:"primaryKey"`                                      // 渠道主键。
+	ID            int            `json:"id" gorm:"primaryKey"` // 渠道主键。
 	ChannelConfig                // 可编辑配置, 平铺为 channels 的各列。
 	Keys          []ChannelKey   `json:"-" gorm:"foreignKey:ChannelID;constraint:OnDelete:CASCADE"` // 渠道下的上游凭据; 不出 JSON, 读取走 ChannelDetail。
 	Models        []ChannelModel `json:"-" gorm:"foreignKey:ChannelID;constraint:OnDelete:CASCADE"` // 渠道提供的模型; 不出 JSON, 读取走 ChannelDetail。
@@ -89,7 +95,7 @@ type ChannelGrant struct {
 // 凭据与模型只给界面用得上的字段: 两者在渠道内按名称唯一, 提交时也按名称引用, 主键与统计都无从使用。
 // 集合字段恒为数组, 读取侧承诺不为 null。
 type ChannelDetail struct {
-	ID            int                  `json:"id"`     // 渠道主键; 创建时提交 0, 由数据库分配。
+	ID            int                  `json:"id"` // 渠道主键; 创建时提交 0, 由数据库分配。
 	ChannelConfig                      // 渠道自身的可编辑配置。
 	Keys          []ChannelKeyConfig   `json:"keys"`   // 渠道下的上游凭据。
 	Models        []string             `json:"models"` // 渠道提供的上游模型名称。

@@ -47,6 +47,9 @@ export interface Group {
     id: number;
     name: string;
     mode: GroupMode;
+    // pinned_item_id 是故障转移模式下强制优先使用的成员，0 表示不强制。
+    // 与 active_item_id 不同，它不被响应遮蔽：强制是写入侧的持久配置，界面要据此高亮那一个成员。
+    pinned_item_id: number;
     relay_config: GroupRelayConfig;
     items: GroupItem[]; // 恒为数组，后端读取侧承诺不为 null。
     runtime: GroupRuntime; // 随分组一并返回；当前成员一律读 runtime.current_item_id。
@@ -73,6 +76,7 @@ export interface GroupUpdateRequest {
     relay_config?: GroupRelayConfig;
     items?: GroupItemInput[];
     active_item_id?: number; // 手动模式指定的当前成员，0 表示取消选择。
+    pinned_item_id?: number; // 故障转移模式下强制优先使用的成员，0 表示取消强制。
 }
 
 // writeGroupCache 把一份分组写回列表与详情两处缓存，已存在则替换，不存在则插入。

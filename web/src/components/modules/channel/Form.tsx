@@ -7,7 +7,7 @@ import {
     useCreateChannel,
     useUpdateChannel,
 } from '@/api/channel';
-import { CHANNEL_PRESETS, type ChannelPreset } from '@/lib/channel-presets';
+import { CHANNEL_PRESETS, IMG_EDIT, IMG_GEN, type ChannelPreset } from '@/lib/channel-presets';
 import { useMorphingDialog } from '@/components/ui/morphing-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,8 +66,13 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     // 后端会拒的四项在此先挡: 名称与地址非空, 路径以 / 开头, 至少一份填了 Key 的凭据, 至少一个模型。
     const canSubmit = state.name.trim() !== ''
         && state.base_url.trim() !== ''
-        && [state.openai_chat_completion_path, state.openai_response_path, state.anthropic_message_path]
-            .every((path) => path === '' || path.startsWith('/'))
+        && [
+            state.openai_chat_completion_path,
+            state.openai_response_path,
+            state.anthropic_message_path,
+            state.openai_image_generation_path,
+            state.openai_image_edit_path,
+        ].every((path) => path === '' || path.startsWith('/'))
         && state.keys.length > 0
         && state.keys.every((k) => k.key.trim() !== '')
         && state.models.length > 0;
@@ -89,6 +94,8 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
             openai_chat_completion_path: preset.openai_chat_completion_path,
             openai_response_path: preset.openai_response_path,
             anthropic_message_path: preset.anthropic_message_path,
+            openai_image_generation_path: preset.openai_image_generation_path ?? IMG_GEN,
+            openai_image_edit_path: preset.openai_image_edit_path ?? IMG_EDIT,
         });
         setStep('connection');
     };
@@ -179,6 +186,8 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 ['openai_chat_completion_path', 'OpenAI Chat'],
                                 ['openai_response_path', 'OpenAI Responses'],
                                 ['anthropic_message_path', 'Anthropic'],
+                                ['openai_image_generation_path', 'OpenAI Image Generation'],
+                                ['openai_image_edit_path', 'OpenAI Image Edit'],
                             ] as const).map(([field, label]) => (
                                 <div key={field} className="space-y-2">
                                     <Label htmlFor={`${idPrefix}-${field}`}>{label}</Label>

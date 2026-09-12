@@ -31,6 +31,22 @@ type StatsAPIKey struct {
 	StatsMetrics
 }
 
+// StatsChannelDaily 是单个渠道在某一天的统计。
+// 渠道自身只存累计统计, 无从按时间切片, 故首页按周期切换榜单时需要这一份按日明细。
+// 只留最近若干天: 榜单最长看 30 天, 全时段直接读渠道上的累计列, 无限保留只会让表随运行时长增长。
+type StatsChannelDaily struct {
+	ChannelID    int    `json:"channel_id" gorm:"primaryKey"` // 渠道主键。
+	Date         string `json:"date" gorm:"primaryKey;index"` // 统计日期, 格式 20060102; 按日期清理与范围查询都走该索引。
+	StatsMetrics        // 该渠道当日的统计。
+}
+
+// StatsChannelModelDaily 是单个渠道模型在某一天的统计, 与 StatsChannelDaily 同理。
+type StatsChannelModelDaily struct {
+	ChannelModelID int    `json:"channel_model_id" gorm:"primaryKey"` // 渠道模型主键。
+	Date           string `json:"date" gorm:"primaryKey;index"`       // 统计日期, 格式 20060102。
+	StatsMetrics          // 该渠道模型当日的统计。
+}
+
 // Add aggregates another StatsMetrics into the current one.
 func (s *StatsMetrics) Add(delta StatsMetrics) {
 	s.InputToken += delta.InputToken

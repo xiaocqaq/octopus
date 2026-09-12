@@ -10,14 +10,51 @@ import {
     DollarSign,
     FastForward
 } from 'lucide-react';
+import { useMemo } from 'react';
 import { useTranslations } from 'use-intl';
-import { useStatsTotal } from '@/api/stats';
+import { formatStatsMetrics, useStatsDaily, useStatsHourly, useStatsTotal, type StatsMetrics } from '@/api/stats';
 import { AnimatedNumber } from '@/components/common/AnimatedNumber';
+import { periodSinceDate, useHomeViewStore } from './store';
 
-// Total 展示累计的请求, 总量, 输入和输出四组指标卡片。
+// EMPTY_METRICS 用于周期内暂无数据时的求和初值。
+const EMPTY_METRICS: StatsMetrics = {
+    input_token: 0,
+    output_token: 0,
+    input_cost: 0,
+    output_cost: 0,
+    wait_time: 0,
+    request_success: 0,
+    request_failed: 0,
+};
+
+// Total 展示选定周期内的请求, 总量, 输入和输出四组指标卡片。
+// 全部周期直接读总计接口, 其余周期由每日或每小时统计求和: 两者的字段与总计同名, 求和后按同一口径格式化。
 export function Total() {
-    const { data: stats } = useStatsTotal();
+    const { data: totalStats } = useStatsTotal();
+    const { data: statsDaily } = useStatsDaily();
+    const { data: statsHourly } = useStatsHourly();
     const t = useTranslations('home.total');
+    const period = useHomeViewStore((state) => state.chartPeriod);
+
+    const stats = useMemo(() => {
+        if (period === 'all') return totalStats;
+        // 今天取小时粒度与趋势图一致; 其余取最近 N 天。
+        const since = periodSinceDate(period);
+        const source = period === '1'
+            ? (statsHourly ?? [])
+            : (statsDaily ?? []).filter((stat) => stat.date >= since);
+        // 两个 Hook 给出的是已格式化的取值, 原始数字在 raw 上; 求和后再统一格式化一次。
+        const summed = source.reduce<StatsMetrics>((acc, item) => ({
+            input_token: acc.input_token + item.input_token.raw,
+            output_token: acc.output_token + item.output_token.raw,
+            input_cost: acc.input_cost + item.input_cost.raw,
+            output_cost: acc.output_cost + item.output_cost.raw,
+            wait_time: acc.wait_time + item.wait_time.raw,
+            request_success: acc.request_success + item.request_success.raw,
+            request_failed: acc.request_failed + item.request_failed.raw,
+        }), EMPTY_METRICS);
+        return formatStatsMetrics(summed);
+    }, [period, totalStats, statsDaily, statsHourly]);
 
     const cards = [
         {

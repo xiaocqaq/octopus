@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,8 +35,12 @@ type RequestState struct {
 	Protocol   model.Protocol `json:"protocol"`     // 客户端请求使用的协议, 由入站格式定出, 单个协议位而非掩码组合。
 	GroupID    int            `json:"group_id"`     // 承载本请求的分组 ID, 供界面按主键直接定位分组而不必按名称回查。
 	APIKeyName string         `json:"api_key_name"` // 发起请求时的 API Key 名称。
-	Usage      llm.Usage      `json:"usage"`        // 请求结束时写入的展示用量。
-	Cost       float64        `json:"cost"`         // 请求结束时写入的累计费用。
+	// Reasoning 是客户端请求声明的思维强度, 取自请求体, 空串表示未声明。
+	// 三种协议的字段各不相同: OpenAI Chat 用 reasoning_effort, Responses 用 reasoning.effort,
+	// Anthropic 用 thinking.budget_tokens; 归一为一段短文本, 界面只需展示不需再分协议。
+	Reasoning string    `json:"reasoning,omitempty"`
+	Usage     llm.Usage `json:"usage"` // 请求结束时写入的展示用量。
+	Cost      float64   `json:"cost"`  // 请求结束时写入的累计费用。
 
 	Round          int            `json:"round"`            // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
 	RoundStartedAt time.Time      `json:"round_started_at"` // 最新一轮上游请求的开始时间。
@@ -72,6 +78,7 @@ func newRequestState(ctx context.Context, modelName string, groupID int, protoco
 		Model:     modelName,
 		Protocol:  protocol,
 		GroupID:   groupID,
+		Reasoning: reasoningOf(body),
 		body:      body,
 		apiKeyID:  apiKeyID,
 	}
@@ -222,6 +229,41 @@ func (r *RequestState) finishLocked(usage *llm.Usage) {
 	if finished > maxFinished {
 		delete(requests, oldest)
 	}
+}
+
+// reasoningOf 从客户端请求体中读出思维强度并归一为一段短文本, 未声明时返回空串。
+// 三种协议各有自己的字段, 一次全解: 入站格式在此不可知, 且各字段互不冲突, 谁有值就用谁。
+// Anthropic 的思考预算是 Token 数而非档位, 折成 k 以便与档位并列展示; 关闭思考按未声明处理。
+func reasoningOf(body string) string {
+	if body == "" {
+		return ""
+	}
+	var payload struct {
+		ReasoningEffort string `json:"reasoning_effort"` // OpenAI Chat Completions。
+		Reasoning       *struct {
+			Effort string `json:"effort"` // OpenAI Responses。
+		} `json:"reasoning"`
+		Thinking *struct {
+			Type         string `json:"type"`          // Anthropic: enabled 或 disabled。
+			BudgetTokens int64  `json:"budget_tokens"` // Anthropic 的思考预算。
+		} `json:"thinking"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return ""
+	}
+	if payload.ReasoningEffort != "" {
+		return payload.ReasoningEffort
+	}
+	if payload.Reasoning != nil && payload.Reasoning.Effort != "" {
+		return payload.Reasoning.Effort
+	}
+	if payload.Thinking != nil && payload.Thinking.Type != "disabled" && payload.Thinking.BudgetTokens > 0 {
+		if payload.Thinking.BudgetTokens >= 1000 {
+			return strconv.FormatInt(payload.Thinking.BudgetTokens/1000, 10) + "k"
+		}
+		return strconv.FormatInt(payload.Thinking.BudgetTokens, 10)
+	}
+	return ""
 }
 
 // usageMetrics 将统一用量按模型单价转换为 Token 与费用统计; 无用量或价格时对应费用为零。

@@ -153,6 +153,16 @@ func GroupUpdate(id int, req *model.GroupUpdateRequest, ctx context.Context) (*m
 			}
 			group.ActiveItemID = *req.ActiveItemID
 		}
+		// 强制成员与当前成员同理, 也须在成员集合定稿后才写入并校验归属。
+		if req.PinnedItemID != nil {
+			if *req.PinnedItemID != 0 && !slices.ContainsFunc(group.Items, func(item model.GroupItem) bool { return item.ID == *req.PinnedItemID }) {
+				return fmt.Errorf("group item not found")
+			}
+			if err := tx.Model(&model.Group{}).Where("id = ?", id).Update("pinned_item_id", *req.PinnedItemID).Error; err != nil {
+				return fmt.Errorf("failed to update pinned item: %w", err)
+			}
+			group.PinnedItemID = *req.PinnedItemID
+		}
 		return nil
 	})
 	if err != nil {
@@ -213,6 +223,12 @@ func syncGroupItems(tx *gorm.DB, groupID int, requested []model.GroupItemInput) 
 		Where("id = ? AND active_item_id IN ?", groupID, deletedIDs).
 		Update("active_item_id", 0).Error; err != nil {
 		return fmt.Errorf("failed to clear active item: %w", err)
+	}
+	// 强制成员同理: 指向已删除成员时故障转移会一直选不到它而退回按优先级选路, 但该值留着只会误导界面。
+	if err := tx.Model(&model.Group{}).
+		Where("id = ? AND pinned_item_id IN ?", groupID, deletedIDs).
+		Update("pinned_item_id", 0).Error; err != nil {
+		return fmt.Errorf("failed to clear pinned item: %w", err)
 	}
 	if err := tx.Delete(&model.GroupItem{}, deletedIDs).Error; err != nil {
 		return fmt.Errorf("failed to delete group items: %w", err)

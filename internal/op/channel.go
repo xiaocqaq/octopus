@@ -21,7 +21,8 @@ var (
 )
 
 // 已定义的全部协议位, 用于校验提交的协议掩码。
-const definedProtocols = model.ProtocolOpenAIChatCompletion | model.ProtocolOpenAIResponse | model.ProtocolAnthropicMessage
+const definedProtocols = model.ProtocolOpenAIChatCompletion | model.ProtocolOpenAIResponse |
+	model.ProtocolAnthropicMessage | model.ProtocolOpenAIImage
 
 // ChannelDetailGet 返回指定渠道的完整配置, 供编辑表单读取。
 func ChannelDetailGet(id int) (model.ChannelDetail, error) {
@@ -58,6 +59,40 @@ func ChannelStatsList() []model.ChannelStats {
 		})
 	}
 	return stats
+}
+
+// ChannelStatsListSince 返回全部渠道及其模型在 since 当天及其之后的统计, since 为 20060102 格式。
+// 渠道与模型的集合仍取自缓存而非按日明细: 该响应同时充当列表页的渠道列表, 周期内没有请求的渠道也要列出,
+// 只是统计各项为零。
+func ChannelStatsListSince(ctx context.Context, since string) ([]model.ChannelStats, error) {
+	channelTotals, modelTotals, err := StatsChannelDailyRange(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+
+	modelsByChannel := make(map[int][]model.ChannelModelStats, channelCache.Len())
+	for _, channelModel := range channelModelCache.GetAll() {
+		modelsByChannel[channelModel.ChannelID] = append(modelsByChannel[channelModel.ChannelID], model.ChannelModelStats{
+			ModelID:      channelModel.ID,
+			ModelName:    channelModel.Name,
+			StatsMetrics: modelTotals[channelModel.ID],
+		})
+	}
+	stats := make([]model.ChannelStats, 0, channelCache.Len())
+	for _, channel := range channelCache.GetAll() {
+		models := modelsByChannel[channel.ID]
+		if models == nil {
+			models = []model.ChannelModelStats{}
+		}
+		stats = append(stats, model.ChannelStats{
+			ChannelID:    channel.ID,
+			ChannelName:  channel.Name,
+			Enabled:      channel.Enabled,
+			Models:       models,
+			StatsMetrics: channelTotals[channel.ID],
+		})
+	}
+	return stats, nil
 }
 
 // ChannelCreate 创建渠道及其凭据, 模型与授权, 返回创建后的完整配置。
@@ -104,6 +139,7 @@ func ChannelUpdate(detail *model.ChannelDetail, ctx context.Context) (*model.Cha
 		if err := tx.Model(&model.Channel{}).Where("id = ?", detail.ID).
 			Select("name", "dialect", "enabled", "base_url",
 				"openai_chat_completion_path", "openai_response_path", "anthropic_message_path",
+				"openai_image_generation_path", "openai_image_edit_path",
 				"proxy", "channel_proxy", "custom_header", "param_override", "match_regex").
 			Updates(&model.Channel{ChannelConfig: detail.ChannelConfig}).Error; err != nil {
 			return fmt.Errorf("failed to update channel: %w", err)
@@ -156,6 +192,12 @@ func normalizeChannelConfig(config model.ChannelConfig) (model.ChannelConfig, er
 		return config, err
 	}
 	if config.AnthropicMessagePath, err = normalizedPath(config.AnthropicMessagePath, "/v1/messages"); err != nil {
+		return config, err
+	}
+	if config.OpenAIImageGenerationPath, err = normalizedPath(config.OpenAIImageGenerationPath, "/v1/images/generations"); err != nil {
+		return config, err
+	}
+	if config.OpenAIImageEditPath, err = normalizedPath(config.OpenAIImageEditPath, "/v1/images/edits"); err != nil {
 		return config, err
 	}
 	if config.CustomHeader == nil {

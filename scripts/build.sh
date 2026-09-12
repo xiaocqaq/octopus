@@ -5,10 +5,15 @@ readonly APP_NAME="octopus" # 发布产物和容器内的可执行文件名。
 readonly OUTPUT_DIR="build" # 所有构建、归档和容器输入的根目录。
 readonly VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo 'dev')" # 当前发布版本。
 readonly COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" # 当前提交短哈希。
+# 更新源与启动横幅用的仓库地址, 取自本地 origin: fork 自建时自动指向自己的仓库, 无需改代码。
+# 没有 origin (例如从压缩包构建) 时回退到上游。
+readonly REPO="$(git remote get-url origin 2>/dev/null | sed 's|\.git$||' || true)" # 本地 origin 指向的仓库。
+readonly UPDATE_REPO="${REPO:-https://github.com/bestruirui/octopus}" # 注入用的仓库地址, 没有 origin 时回退到上游。
 readonly LDFLAGS="-X 'github.com/bestruirui/${APP_NAME}/internal/conf.Version=${VERSION}' \
                   -X 'github.com/bestruirui/${APP_NAME}/internal/conf.BuildTime=$(TZ='Asia/Shanghai' date +'%F %T %z')' \
                   -X 'github.com/bestruirui/${APP_NAME}/internal/conf.Author=bestrui' \
                   -X 'github.com/bestruirui/${APP_NAME}/internal/conf.Commit=${COMMIT}' \
+                  -X 'github.com/bestruirui/${APP_NAME}/internal/conf.Repo=${UPDATE_REPO}' \
                   -s -w" # 注入版本信息并缩小发布二进制。
 
 build_standard() {
