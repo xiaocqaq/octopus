@@ -85,6 +85,10 @@ function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip
 }
 
 // FormGrants 模型集合与授权矩阵。
+// ALL_KEYS 是凭据下拉里的"全部"选项, 与具体凭据名区分开。
+// 真实凭据名由用户填写, 用带下划线的保留字可避免与之撞名。
+const ALL_KEYS = '__all__';
+
 // 模型行的复选框一键设置该模型下所有凭据, 凭据子行只改自己那一条授权;
 // 协议位全为空即该授权不存在, 提交时被丢弃。
 export function FormGrants({ state, setState }: {
@@ -95,11 +99,22 @@ export function FormGrants({ state, setState }: {
     const { probe, pendingKey } = useModelProbe();
     const [expanded, setExpanded] = useState<Set<string>>(new Set()); // 已展开的模型名, 支持同时展开多个。
     const [adding, setAdding] = useState('');
-    const [selectedKey, setSelectedKey] = useState('');
+    // 默认停在"全部": 打开时先给出渠道的完整模型视图, 与过滤前一致, 免得看起来像模型丢了。
+    const [selectedKey, setSelectedKey] = useState(ALL_KEYS);
 
     const keyNames = state.keys.map((k) => k.name);
-    const activeKey = selectedKey || keyNames[0] || '';
-    const allExpanded = state.models.length > 0 && state.models.every((m) => expanded.has(m));
+    const isAllKeys = selectedKey === ALL_KEYS;
+    // activeKey 是"添加模型"与"刷新"的凭据目标, 这两件事都必须落到某一个具体凭据上:
+    // 停在"全部"时退回第一份凭据, 与加过滤之前的行为一致。
+    const activeKey = isAllKeys ? (keyNames[0] || '') : selectedKey;
+
+    // 选中具体凭据时只列出它已授权的模型, 选"全部"则列出全部模型。
+    // 协议位为零即该 (模型, 凭据) 的授权不存在, 故非零即为已授权。
+    const visibleModels = isAllKeys
+        ? state.models
+        : state.models.filter((name) => (state.grants.get(grantKey(name, selectedKey)) ?? 0) !== 0);
+
+    const allExpanded = visibleModels.length > 0 && visibleModels.every((m) => expanded.has(m));
 
     // removeGrant 移除该模型在指定凭据上的授权, 模型与凭据本身保留。
     const removeGrant = (modelName: string, keyName: string) => {
@@ -137,11 +152,13 @@ export function FormGrants({ state, setState }: {
     return (
         // 撑满步骤区高度, 模型列表内部滚动, 避免与步骤区形成两层滚动容器。
         <div className="flex flex-col gap-3 h-full min-h-0">
-            {/* 凭据选择同时作用于自定义添加与刷新, 使新增模型与它所属的凭据在同一行里对应清楚。 */}
+            {/* 凭据选择既决定下方列出哪些模型 (具体凭据只看它已授权的, "全部"看所有),
+                也是自定义添加与刷新的目标凭据, 使新增模型与它所属的凭据在同一行里对应清楚。 */}
             <div className="flex items-center gap-2 shrink-0">
-                <Select value={activeKey} onValueChange={setSelectedKey}>
+                <Select value={selectedKey} onValueChange={setSelectedKey}>
                     <SelectTrigger className="rounded-xl h-9 w-32"><SelectValue /></SelectTrigger>
                     <SelectContent className="rounded-xl">
+                        <SelectItem value={ALL_KEYS} className="rounded-lg">{t('grantAllKeys')}</SelectItem>
                         {state.keys.map((k) => (
                             <SelectItem key={k.name} value={k.name} className="rounded-lg">{k.name}</SelectItem>
                         ))}
@@ -178,7 +195,7 @@ export function FormGrants({ state, setState }: {
                 <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
                     {/* 全部展开与全部折叠共用一个按钮: 已全展开时折叠, 否则展开全部。 */}
                     <IconButton
-                        onClick={() => setExpanded(allExpanded ? new Set() : new Set(state.models))}
+                        onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))}
                         disabled={state.models.length === 0}
                         className="size-5"
                         tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}
@@ -199,9 +216,12 @@ export function FormGrants({ state, setState }: {
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-                    {state.models.length === 0 ? (
-                        <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('modelNoSelected')}</p>
-                    ) : state.models.map((modelName) => {
+                    {visibleModels.length === 0 ? (
+                        // 渠道本身没有模型, 与"该凭据名下没有已授权模型"是两回事, 提示要分开。
+                        <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                            {state.models.length === 0 ? t('modelNoSelected') : t('modelNoneForKey')}
+                        </p>
+                    ) : visibleModels.map((modelName) => {
                         const isOpen = expanded.has(modelName);
                         const granted = keyNames.filter(
                             (keyName) => (state.grants.get(grantKey(modelName, keyName)) ?? 0) !== 0

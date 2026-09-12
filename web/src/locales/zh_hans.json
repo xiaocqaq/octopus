@@ -490,7 +490,9 @@
             "backToStats": "返回统计",
             "grantClearAll": "清空全部模型",
             "modelRemove": "移除模型",
-            "grantRemove": "移除该凭据的授权"
+            "grantRemove": "移除该凭据的授权",
+            "grantAllKeys": "全部凭据",
+            "modelNoneForKey": "该凭据暂无已授权模型"
         }
     }
 }
