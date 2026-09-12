@@ -15,10 +15,10 @@ import { IconButton } from '@/components/common/IconButton';
 import { useModelProbe } from './probe';
 import { grantKey, type ChannelFormState } from './state';
 
-// GrantCells 渲染一行右侧固定的四格: chat, response, message 三个协议勾选和一个删除。
+// GrantCells 渲染一行右侧固定的五格: chat, response, message, image 四个协议勾选和一个删除。
 // 表头, 模型行, 凭据子行的差别只是这一行覆盖的 (模型 × 凭据) 范围与删除动作, 勾选,
 // 三态和写入是同一套逻辑, 故三级共用此段, 列宽与对齐也因此天然一致。
-// 三个协议列固定, 凭据作为模型的子行, 故列数不随凭据数变化。
+// 四个协议列固定, 凭据作为模型的子行, 故列数不随凭据数变化。
 function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip }: {
     state: ChannelFormState;
     setState: (next: ChannelFormState) => void;
@@ -67,6 +67,7 @@ function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip
             {cell(Protocol.OpenAIChatCompletion)}
             {cell(Protocol.OpenAIResponse)}
             {cell(Protocol.AnthropicMessage)}
+            {cell(Protocol.OpenAIImage)}
             <span className="w-7 flex justify-center">
                 {remove && (
                     <IconButton
@@ -185,7 +186,7 @@ export function FormGrants({ state, setState }: {
                         {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
                     </IconButton>
                     <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
-                        chat / response / message
+                        chat / response / message / image
                     </span>
                     {/* 表头覆盖全部模型全部凭据, 故勾选即批量, 删除即清空全部模型及其授权。 */}
                     <GrantCells

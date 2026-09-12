@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -76,10 +77,27 @@ func getChannelDetail(c *gin.Context) {
 	resp.Success(c, detail)
 }
 
-// listChannelStats 返回全部渠道及其模型的累计统计, 也是渠道列表页的数据来源。
+// listChannelStats 返回全部渠道及其模型的统计, 也是渠道列表页的数据来源。
 // 不带整份配置: 统计每次转发都在变, 界面按更短的间隔刷新它, 而路径, 代理与凭据明文只在编辑时用得上。
+// days 限定统计周期, 为 1 时只算当天, 缺省或非正数时给出全时段累计:
+// 首页榜单按周期切换读前者, 渠道列表页读后者。
 func listChannelStats(c *gin.Context) {
-	resp.Success(c, op.ChannelStatsList())
+	days, err := strconv.Atoi(c.DefaultQuery("days", "0"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	if days <= 0 {
+		resp.Success(c, op.ChannelStatsList())
+		return
+	}
+	since := time.Now().AddDate(0, 0, -(days - 1)).Format("20060102")
+	stats, err := op.ChannelStatsListSince(c.Request.Context(), since)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, stats)
 }
 
 // listChannelGrant 返回全部渠道授权候选, 供分组页选取成员。

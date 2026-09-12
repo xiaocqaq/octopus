@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Clock, Cpu, Database, DollarSign, KeyRound, Loader2, Square } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Brain, Clock, Cpu, Database, DollarSign, KeyRound, Loader2, Square } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import JsonView from '@uiw/react-json-view';
 import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
@@ -63,7 +63,24 @@ const PROTOCOL_LABELS: Record<number, string> = {
     [Protocol.OpenAIChatCompletion]: 'Chat',
     [Protocol.OpenAIResponse]: 'Response',
     [Protocol.AnthropicMessage]: 'Message',
+    [Protocol.OpenAIImage]: 'Image',
 };
+
+// ReasoningBadge 展示客户端声明的思维强度, 未声明时不渲染。
+// 取值由后端归一: OpenAI 两种协议给出 minimal/low/medium/high 之类的档位, Anthropic 给出折成 k 的思考预算。
+function ReasoningBadge({ reasoning }: { reasoning?: string }) {
+    if (!reasoning) return null;
+
+    return (
+        <Badge
+            variant="outline"
+            className="shrink-0 gap-1 px-1.5 py-0 text-xs font-medium border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400"
+        >
+            <Brain className="size-3" />
+            {reasoning}
+        </Badge>
+    );
+}
 
 // LogMetrics 渲染时间、API Key、耗时、费用和 Token 指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
 function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; now: number; brandColor: string; variant: 'card' | 'footer' }) {
@@ -209,6 +226,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                 <Icon aria-hidden="true" className={iconClassName} width={28} height={28} />
                 <span className="text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span>
                 <span className="font-semibold text-card-foreground">{log.model || t('unknownModel')}</span>
+                <ReasoningBadge reasoning={log.reasoning} />
                 {log.status === 'running' || responseCommitted
                     ? <Loader2 className={cn('size-3.5 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
                     : <ArrowRight className="size-3.5 text-muted-foreground/50" />}
@@ -457,6 +475,7 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                             <span className="font-semibold text-card-foreground truncate">
                                 {log.model || t('unknownModel')}
                             </span>
+                            <ReasoningBadge reasoning={log.reasoning} />
                             {requestRunning
                                 ? <Loader2 className={cn('size-3.5 shrink-0 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
                                 : <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -85,7 +86,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			return
 		}
 
-		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIChatCompletion, string(body), c.GetInt("api_key_id"))
+		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIImage, string(body), c.GetInt("api_key_id"))
 		ctx := c.Request.Context()
 		failedItemID := 0
 		failures := 0
@@ -146,10 +147,15 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				continue
 			}
 
-			// 图片接口是 OpenAI 家族在聊天协议之外的私有扩展, 上游是否提供它与
-			// 授权登记的聊天协议位无关(实测渠道常只登记 Responses 或 Anthropic 位,
-			// 却照样提供 /v1/images/*), 故这里不按协议位过滤成员: 上游不支持时
-			// 会以 404 返回, 交由本轮失败与冷却重试推进到下一个成员。
+			// 图片接口现已是一个独立协议位, 只有登记了它的授权才参与选路: 上游是否提供 /v1/images/*
+			// 与它支持哪种聊天协议无关, 由用户在渠道的授权矩阵上明确勾选。
+			// 未登记该协议位的成员直接打入冷却让位给下一个成员, 且一次即冷却而不消耗尝试次数:
+			// 这是配置事实而非偶发失败, 重试同一个成员不会有别的结果。
+			// 分组内没有任何成员登记时, 尝试轮次很快耗尽并以错误收敛。
+			if grant.Protocols&model.ProtocolOpenAIImage == 0 {
+				recordRouteFailure(group, item.ID, group.RelayConfig.MemberMaxAttempts)
+				continue
+			}
 
 			// JSON 正文按分组成员配置改写真实模型名; multipart 正文原样透传。
 			roundBody := body
@@ -163,7 +169,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			}
 
 			roundCtx, cancelRound := context.WithCancel(ctx)
-			request.startRound(cancelRound, channel.Name, channelModel.Name, model.ProtocolOpenAIChatCompletion)
+			request.startRound(cancelRound, channel.Name, channelModel.Name, model.ProtocolOpenAIImage)
 			roundStartedAt := time.Now()
 
 			httpClient, closeIdle, err := resolveUpstreamClient(channel)
@@ -252,12 +258,12 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 // sendImageUpstream 按渠道配置向上游图片接口发起一次请求, 4xx/5xx 视为本轮失败。
 func sendImageUpstream(ctx context.Context, client *http.Client, channel model.Channel, key model.ChannelKey, contentType string, body []byte, kind string) (*http.Response, error) {
-	// BaseURL 以 ## 结尾表示地址已完整, 不再追加版本号。
+	// BaseURL 以 ## 结尾表示地址已完整, 只取到末段目录, 不再拼渠道配置的协议路径。
 	trimmed := strings.TrimSuffix(channel.BaseURL, "##")
 	base := strings.TrimSuffix(trimmed, "/")
-	target := base + "/v1/" + imageUpstreamPath(kind)
+	target := base + imageUpstreamPath(channel, kind)
 	if trimmed != channel.BaseURL {
-		target = base + "/" + imageUpstreamPath(kind)
+		target = base + "/" + path.Base(imageUpstreamPath(channel, kind))
 	}
 
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
@@ -288,12 +294,13 @@ func sendImageUpstream(ctx context.Context, client *http.Client, channel model.C
 	return response, nil
 }
 
-// imageUpstreamPath 返回图片接口在上游的相对路径段。
-func imageUpstreamPath(kind string) string {
+// imageUpstreamPath 返回图片接口在该渠道上的请求路径, 取自渠道配置。
+// 落库时已由 normalizeChannelConfig 补齐默认值并保证以 / 开头, 故此处无需再兜底。
+func imageUpstreamPath(channel model.Channel, kind string) string {
 	if kind == "edits" {
-		return "images/edits"
+		return channel.OpenAIImageEditPath
 	}
-	return "images/generations"
+	return channel.OpenAIImageGenerationPath
 }
 
 // imageReject 以 OpenAI 风格 JSON 返回请求级失败。

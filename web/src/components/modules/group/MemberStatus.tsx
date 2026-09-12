@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleCheck } from 'lucide-react';
+import { CircleCheck, Pin } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -51,9 +51,10 @@ export function useRuntimeClock(source?: Group | Group[]) {
     return now;
 }
 
-// MemberStatus 展示成员的冷却、亲和倒计时或当前使用圆点。
+// MemberStatus 展示成员的强制标记、冷却、亲和倒计时或当前使用圆点。
 export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
     const t = useTranslations('group.card');
+    const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
 
     if (group.mode === 'failover' && itemId !== undefined) {
         const cooldownUntil = group.runtime.cooldowns[itemId] ?? 0;
@@ -66,24 +67,48 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
             const label = t(cooling ? 'cooling' : 'affinity', { seconds: Math.ceil((deadline - now) / 1000) });
 
             return (
-                <Badge
-                    variant="outline"
-                    className={cn(
-                        'shrink-0 px-1.5 py-0 text-[10px] font-medium',
-                        cooling
-                            ? 'border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400'
-                            : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
-                    )}
-                >
-                    {label}
-                </Badge>
+                <span className="flex shrink-0 items-center gap-1">
+                    {isPinned && <PinnedMark label={t('pinned')} />}
+                    <Badge
+                        variant="outline"
+                        className={cn(
+                            'shrink-0 px-1.5 py-0 text-[10px] font-medium',
+                            cooling
+                                ? 'border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400'
+                                : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
+                        )}
+                    >
+                        {label}
+                    </Badge>
+                </span>
             );
         }
     }
 
-    return active ? (
-        <span aria-hidden="true" className={cn('inline-flex shrink-0 text-primary', activeClassName)}>
-            <CircleCheck className="size-4" />
+    if (!isPinned && !active) return null;
+
+    return (
+        <span className="flex shrink-0 items-center gap-1">
+            {isPinned && <PinnedMark label={t('pinned')} />}
+            {active && (
+                <span aria-hidden="true" className={cn('inline-flex shrink-0 text-primary', activeClassName)}>
+                    <CircleCheck className="size-4" />
+                </span>
+            )}
         </span>
-    ) : null;
+    );
+}
+
+// PinnedMark 标出被强制优先使用的成员。
+// 与当前使用圆点并列而非互斥: 强制成员在冷却期间会让位给别的成员, 此时它仍带强制标记但不是当前成员。
+function PinnedMark({ label }: { label: string }) {
+    return (
+        <Badge
+            variant="outline"
+            className="shrink-0 gap-0.5 px-1 py-0 text-[10px] font-medium border-primary/30 bg-primary/10 text-primary"
+            title={label}
+        >
+            <Pin className="size-2.5" />
+        </Badge>
+    );
 }

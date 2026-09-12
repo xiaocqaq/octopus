@@ -63,6 +63,7 @@ type Group struct {
 	Name         string           `json:"name" gorm:"unique;not null"`                                                   // 客户端请求使用的模型名称。
 	Mode         GroupMode        `json:"mode" gorm:"not null;default:manual" binding:"omitempty,oneof=manual failover"` // 选择成员的模式。
 	ActiveItemID int              `json:"active_item_id" gorm:"not null;default:0"`                                      // 手动模式指定的成员, 故障转移模式忽略该值, 0 表示未指定; 写入侧字段, 读取一律用响应中的 runtime.current_item_id, 出 JSON 仅为让备份转储带上它。
+	PinnedItemID int              `json:"pinned_item_id" gorm:"not null;default:0"`                                      // 故障转移模式下强制优先使用的成员, 0 表示不强制; 该成员失败时仍按故障转移逻辑切到下一个, 恢复后切回。
 	RelayConfig  GroupRelayConfig `json:"relay_config" gorm:"serializer:json"`                                           // 该分组的 Relay 路由配置。
 	Items        []GroupItem      `json:"items" gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE"`                   // 该分组可手动选择或故障转移的分组项; 读取时恒为数组, 空集合也给出以免各消费方各自兜底。
 }
@@ -102,6 +103,7 @@ type GroupUpdateRequest struct {
 	RelayConfig  *GroupRelayConfig `json:"relay_config,omitempty"`                                   // RelayConfig 仅在 Relay 配置变更时发送完整配置。
 	Items        *[]GroupItemInput `json:"items,omitempty"`                                          // 新的成员集合, 整体替换; 提交顺序即优先级顺序。
 	ActiveItemID *int              `json:"active_item_id,omitempty"`                                 // 手动模式指定的当前成员, 0 表示取消选择; 用指针以便与"未提交该字段"区分。
+	PinnedItemID *int              `json:"pinned_item_id,omitempty"`                                 // 故障转移模式下强制优先使用的成员, 0 表示取消强制; 同样用指针区分未提交。
 }
 
 // 提交分组成员时按渠道授权主键引用。

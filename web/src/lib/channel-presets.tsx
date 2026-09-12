@@ -28,12 +28,17 @@ export type ChannelPreset = {
     openai_chat_completion_path: string;
     openai_response_path: string;
     anthropic_message_path: string;
+    // 图片路径只有前缀不带 /v1 的服务商需要给出, 其余留空按 /v1 默认值填入。
+    openai_image_generation_path?: string;
+    openai_image_edit_path?: string;
 };
 
 // 默认协议路径, 与后端 DDL 默认值一致。
 const CHAT = '/v1/chat/completions';
 const RESP = '/v1/responses';
 const ANTH = '/v1/messages';
+export const IMG_GEN = '/v1/images/generations';
+export const IMG_EDIT = '/v1/images/edits';
 
 export const CHANNEL_PRESETS: ChannelPreset[] = [
     {
@@ -59,6 +64,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         dialect: 'generic',
         base_url: 'https://ark.cn-beijing.volces.com/api/v3',
         openai_chat_completion_path: '/chat/completions', openai_response_path: '/responses', anthropic_message_path: '/messages',
+        openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
     },
     {
         id: 'deepseek', label: 'DeepSeek', Icon: DeepSeekIcon,
@@ -95,6 +101,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         dialect: 'generic',
         base_url: 'https://open.bigmodel.cn/api/paas/v4',
         openai_chat_completion_path: '/chat/completions', openai_response_path: '/responses', anthropic_message_path: '/messages',
+        openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
     },
     {
         id: 'xai', label: 'xAI', Icon: XAIIcon, iconClassName: 'brightness-0 dark:invert',

@@ -1,14 +1,17 @@
-import { memo, useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Trash2, X, Pencil } from 'lucide-react';
+import { memo, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Hand, Shuffle, Trash2, X, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { type Group, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup } from '@/api/group';
+import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup } from '@/api/group';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { CopyIconButton } from '@/components/common/CopyButton';
 import { IconButton } from '@/components/common/IconButton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { SelectedMember } from './ItemList';
 import { MemberList } from './ItemList';
+import { useGroupHoverStore } from './hover';
 import { GroupEditor, type GroupEditorValues } from './Editor';
 import {
     MorphingDialog,
@@ -55,9 +58,75 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const activateItem = useUpdateGroup(); // 与配置提交分开持有: 共用一个实例会让点选成员点亮编辑弹窗的提交态。
     const deleteGroup = useDeleteGroup();
 
+    const updateMode = useUpdateGroup(); // 与配置提交和点选成员分开持有: 三者的 pending 各自驱动不同控件。
+
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [members, setMembers] = useState<SelectedMember[]>([]);
+    // 成员区默认收起, 悬停即展开: 展开态由全页面共享, 同一时间只有一张卡片展开,
+    // 指针移到另一张分组上时上一张立刻收起, 不靠各自计时。
+    const activeGroupID = useGroupHoverStore((state) => state.activeGroupID);
+    const setActiveGroup = useGroupHoverStore((state) => state.setActiveGroup);
+    const expanded = activeGroupID === group.id;
     const isDragging = useRef(false);
+    const collapseTimer = useRef(0); // 离开后的延迟收起计时器, 让鼠标短暂擦过卡片时不至于闪开闪关。
+    const cardRef = useRef<HTMLElement>(null); // 浮层的定位基准: 与卡片外框严丝合缝地拼成同一张卡。
+    // 指针是否分别停在卡片与浮层上。用两个标志而非计数: 浮层不在卡片的 DOM 子树里, 两者各自的
+    // enter/leave 由 React 分别派发, 先后顺序不定, 靠"取消计时器"去对抗顺序会出现鼠标还在浮层上却折了。
+    // 每次事件只改自己那个标志再从真实状态重算, 与顺序无关。
+    const overCardRef = useRef(false);
+    const overOverlayRef = useRef(false);
+    // 浮层用 fixed 定位挂在屏外一份, 故需自己算出位置; null 表示尚未测量, 此时不渲染。
+    const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number } | null>(null);
+
+
+    // syncHover 依据两个标志重算展开状态: 仍在任一热区内就展开自己, 都已离开才延迟收起。
+    // 展开写共享状态, 故指针移到另一张卡片时那边一置位, 这张就不再是 active, 立刻收起。
+    const syncHover = useCallback(() => {
+        window.clearTimeout(collapseTimer.current);
+        if (overCardRef.current || overOverlayRef.current) {
+            setActiveGroup(group.id);
+            return;
+        }
+        collapseTimer.current = window.setTimeout(() => {
+            // 计时期间指针又回到任一热区, 或正在拖拽成员, 都不收起: 拖出列表范围时 mouseleave 会先触发, 收了拖拽就断了。
+            if (overCardRef.current || overOverlayRef.current || isDragging.current) return;
+            // 只清自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
+            if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
+        }, 1000);
+    }, [group.id, setActiveGroup]);
+
+    const handleCardEnter = useCallback(() => { overCardRef.current = true; syncHover(); }, [syncHover]);
+    const handleCardLeave = useCallback(() => { overCardRef.current = false; syncHover(); }, [syncHover]);
+    const handleOverlayEnter = useCallback(() => { overOverlayRef.current = true; syncHover(); }, [syncHover]);
+    const handleOverlayLeave = useCallback(() => { overOverlayRef.current = false; syncHover(); }, [syncHover]);
+
+    // 浮层收起后清掉它的悬停标志: 卸载不会补发 leave, 留着会让下一次悬停永远等不到"两个都离开"。
+    useLayoutEffect(() => {
+        if (!expanded) overOverlayRef.current = false;
+    }, [expanded]);
+
+    // 浮层贴在卡片外框正下方, 左右与宽度照抄卡片外框: 两侧边框与圆角由此接得上, 视觉上是同一张卡在向下生长。
+    // 不做贴底钳制: 浮层随滚动重新贴合, 靠近视口底部时滚动即可看到, 强行上移反而会与卡片错位露出接缝。
+    const updateOverlayRect = useCallback(() => {
+        const card = cardRef.current;
+        if (!card) return;
+        const rect = card.getBoundingClientRect();
+        setOverlayRect({ top: rect.bottom, left: rect.left, width: rect.width });
+    }, []);
+
+    // 浮层随卡片滚动/窗口缩放重新贴合; scroll 不冒泡, 故用捕获阶段接住内层滚动容器的滚动。
+    useLayoutEffect(() => {
+        if (!expanded) return;
+        updateOverlayRect();
+        window.addEventListener('scroll', updateOverlayRect, true);
+        window.addEventListener('resize', updateOverlayRect);
+        return () => {
+            window.removeEventListener('scroll', updateOverlayRect, true);
+            window.removeEventListener('resize', updateOverlayRect);
+        };
+    }, [expanded, updateOverlayRect]);
+
+    useEffect(() => () => window.clearTimeout(collapseTimer.current), []);
 
     // 成员的名称, 所属渠道与可用性由后端随分组给出, 此处只做展示形状的转换。
     // 不可用的成员同样列出: 否则用户看不到它的存在也就无法移除。
@@ -84,7 +153,11 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const onError = useCallback((error: Error) => toast.error(t('toast.updateFailed'), { description: error.message }), [t]);
 
     const handleDragStart = useCallback(() => { isDragging.current = true; }, []);
-    const handleDragFinish = useCallback(() => { isDragging.current = false; }, []);
+    const handleDragFinish = useCallback(() => {
+        isDragging.current = false;
+        // 拖拽期间指针可能在卡片外, 那时 mouseleave 已经算过一次"离开"; 在此按当前标志位重算一次。
+        syncHover();
+    }, [syncHover]);
 
     // 成员为整体替换, 拖拽与移除都直接提交当前排列, 优先级由提交顺序决定。
     const submitMembers = useCallback((next: SelectedMember[]) => {
@@ -98,14 +171,24 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         submitMembers(members.filter((m) => m.id !== id));
     }, [members, submitMembers]);
 
-    // 点击当前成员即取消选择, 提交 0。
+    // 点选成员在两种模式下语义不同: 手动模式指定当前成员, 故障转移模式强制优先使用该成员。
+    // 两者都以"再点一次即取消"处理, 提交 0。
     const handleActivate = useCallback((itemId: number) => {
-        if (group.mode !== 'manual' || activateItem.isPending) return;
-        activateItem.mutate(
-            { id: group.id, active_item_id: itemId === group.runtime.current_item_id ? 0 : itemId },
-            { onSuccess, onError },
-        );
-    }, [activateItem, group.id, group.mode, group.runtime.current_item_id, onError, onSuccess]);
+        if (activateItem.isPending) return;
+        const payload: GroupUpdateRequest & { id: number } = { id: group.id };
+        if (group.mode === 'manual') {
+            payload.active_item_id = itemId === group.runtime.current_item_id ? 0 : itemId;
+        } else {
+            payload.pinned_item_id = itemId === group.pinned_item_id ? 0 : itemId;
+        }
+        activateItem.mutate(payload, { onSuccess, onError });
+    }, [activateItem, group.id, group.mode, group.pinned_item_id, group.runtime.current_item_id, onError, onSuccess]);
+
+    // 快捷切换路由模式; 点当前模式不提交。
+    const handleModeChange = useCallback((value: string) => {
+        if (value === group.mode || updateMode.isPending) return;
+        updateMode.mutate({ id: group.id, mode: value as GroupMode }, { onSuccess, onError });
+    }, [group.id, group.mode, updateMode, onSuccess, onError]);
 
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         const payload: GroupUpdateRequest & { id: number } = { id: group.id };
@@ -142,8 +225,23 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     }, [group.id, group.items, group.mode, group.name, group.relay_config, onSuccess, onError, updateGroup]);
 
     return (
-        <article className="flex flex-col rounded-3xl border border-border bg-card text-card-foreground p-4">
-            <header className="flex items-start justify-between mb-3 relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1">
+        <>
+        <article
+            ref={cardRef}
+            onMouseEnter={handleCardEnter}
+            onMouseLeave={handleCardLeave}
+            // 展开时去掉底边框与下方圆角: 浮层接着这一处往下长, 两段拼起来才是原版那张完整的卡。
+            className={cn(
+                'flex flex-col border-border bg-card text-card-foreground',
+                expanded
+                    ? 'rounded-t-3xl border-x border-t px-4 pt-4'
+                    : 'rounded-3xl border p-4',
+            )}
+        >
+            <header className={cn(
+                'flex items-start justify-between relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1',
+                !expanded && 'mb-3',
+            )}>
                 <div className="relative flex-1 mr-2 min-w-0 group/title">
                     <Tooltip>
                         <TooltipTrigger asChild>
@@ -156,6 +254,19 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                    {/* 路由模式开关: 与右侧编辑/复制/删除同款图标按钮, 点一下即切换另一种模式。
+                        图标即当前模式, 说明放在 Tooltip 里; 悬浮展开成员列表已足够表达"当前选了谁"。 */}
+                    <IconButton
+                        onClick={() => handleModeChange(group.mode === 'manual' ? 'failover' : 'manual')}
+                        disabled={updateMode.isPending}
+                        className="size-7"
+                        tip={`${t(group.mode === 'manual' ? 'form.manual' : 'form.failover')} · ${t('card.modeToggleHint')}`}
+                    >
+                        {group.mode === 'manual'
+                            ? <Hand className="size-4" />
+                            : <Shuffle className="size-4" />}
+                    </IconButton>
+
                     <MorphingDialog>
                         {/* trigger 自身渲染 motion.div 承担弹窗形变, 故由它出元素, IconButton 只补样式。 */}
                         <IconButton asChild className="size-7">
@@ -212,22 +323,43 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 </AnimatePresence>
             </header>
 
-            <section className="rounded-xl border border-border/50 bg-muted/30 overflow-hidden relative h-101">
-                <MemberList
-                    members={members}
-                    onReorder={setMembers}
-                    onRemove={handleRemoveMember}
-                    onActivate={group.mode === 'manual' ? handleActivate : undefined}
-                    activeItemId={group.runtime.current_item_id}
-                    group={group}
-                    now={now}
-                    onDragStart={handleDragStart}
-                    onDrop={submitMembers}
-                    onDragFinish={handleDragFinish}
-                    autoScrollOnAdd={false}
-                    layoutScope={`card-${group.id}`}
-                />
-            </section>
         </article >
+
+        {/* 成员浮层挂在 body 上, 而不是留在卡片内: VirtualizedGrid 的行带 transform, 会为每行建立层叠上下文,
+            卡片内的任何 z-index 都被困在自己那一行里, 压不住后面渲染的行。挂到 body 才真正盖得住下方卡片。
+            浮层与卡片无缝拼成同一张卡: 顶部方角无上边框, 接着卡片的去底边版本往下长, 左右边框与宽度照抄卡片外框,
+            底部收成与卡片相同的圆角。高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。
+            层级取 z-40: 高于网格行, 低于拖拽克隆体(5000)与弹窗(z-50), 拖拽和弹窗都不会被它挡住。 */}
+        {expanded && overlayRect && createPortal(
+            <section
+                // 浮层不在卡片的 DOM 子树里, 故需自己维系悬停: 两条热区各记各的标志, 指针停在任一处都保持展开。
+                onMouseEnter={handleOverlayEnter}
+                onMouseLeave={handleOverlayLeave}
+                // 外层给不透明实底: bg-muted/30 只有 30% 不透明度, 直接当最外层背景会让下方卡片整个透出来,
+                // 它必须像原版那样铺在卡片实底之上, 故退到内层面板。
+                className="fixed z-40 rounded-b-3xl border-x border-b border-border bg-card text-card-foreground px-4 pb-4 pt-3"
+                style={{ top: overlayRect.top, left: overlayRect.left, width: overlayRect.width }}
+            >
+                <div className="h-101 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
+                    <MemberList
+                        members={members}
+                        onReorder={setMembers}
+                        onRemove={handleRemoveMember}
+                        // 两种模式都可点选: 手动模式指定当前成员, 故障转移模式强制优先使用。
+                        onActivate={handleActivate}
+                        activeItemId={group.runtime.current_item_id}
+                        group={group}
+                        now={now}
+                        onDragStart={handleDragStart}
+                        onDrop={submitMembers}
+                        onDragFinish={handleDragFinish}
+                        autoScrollOnAdd={false}
+                        layoutScope={`card-${group.id}`}
+                    />
+                </div>
+            </section>,
+            document.body,
+        )}
+        </>
     );
 });

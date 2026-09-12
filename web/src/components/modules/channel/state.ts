@@ -11,6 +11,8 @@ export type ChannelFormState = {
     openai_chat_completion_path: string;
     openai_response_path: string;
     anthropic_message_path: string;
+    openai_image_generation_path: string;
+    openai_image_edit_path: string;
     keys: { name: string; key: string; enabled: boolean }[];
     models: string[];
     grants: Map<string, number>; // 键为 grantKey(模型名, 凭据名), 值为 Protocol 位掩码。
@@ -34,6 +36,8 @@ export const emptyFormState: ChannelFormState = {
     openai_chat_completion_path: '/v1/chat/completions',
     openai_response_path: '/v1/responses',
     anthropic_message_path: '/v1/messages',
+    openai_image_generation_path: '/v1/images/generations',
+    openai_image_edit_path: '/v1/images/edits',
     keys: [],
     models: [],
     grants: new Map(),
@@ -54,6 +58,8 @@ export function fromChannel(channel: ChannelDetail): ChannelFormState {
         openai_chat_completion_path: channel.openai_chat_completion_path,
         openai_response_path: channel.openai_response_path,
         anthropic_message_path: channel.anthropic_message_path,
+        openai_image_generation_path: channel.openai_image_generation_path,
+        openai_image_edit_path: channel.openai_image_edit_path,
         keys: channel.keys.map(({ name, key, enabled }) => ({ name, key, enabled })),
         models: [...channel.models],
         grants: new Map(channel.grants.map((g) => [grantKey(g.model_name, g.key_name), g.protocols])),
@@ -75,6 +81,8 @@ export function toChannelConfig(state: ChannelFormState) {
         openai_chat_completion_path: state.openai_chat_completion_path.trim(),
         openai_response_path: state.openai_response_path.trim(),
         anthropic_message_path: state.anthropic_message_path.trim(),
+        openai_image_generation_path: state.openai_image_generation_path.trim(),
+        openai_image_edit_path: state.openai_image_edit_path.trim(),
         proxy: state.proxy,
         custom_header: state.custom_header.filter((h) => h.header_key.trim() && h.header_value !== ''),
         channel_proxy: state.channel_proxy.trim(),

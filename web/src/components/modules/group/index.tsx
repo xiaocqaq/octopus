@@ -74,7 +74,9 @@ export function Group() {
         <VirtualizedGrid
             items={visibleGroups}
             columns={{ default: 1, md: 2, lg: 3 }}
-            estimateItemHeight={520}
+            // 成员区默认收起, 卡片只有标题行的高度; 展开态挂在浮层上不参与布局, 故估值按收起态给。
+            // 实际高度由 VirtualizedGrid 自行测量, 估值只影响首帧滚动条长度。
+            estimateItemHeight={88}
             getItemKey={(group) => group.id}
             renderItem={(group) => {
                 let deadline = group.runtime.affinity_until;

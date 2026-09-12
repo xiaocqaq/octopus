@@ -120,7 +120,8 @@
             "period": {
                 "today": "今天",
                 "last7Days": "7天",
-                "last30Days": "30天"
+                "last30Days": "30天",
+                "all": "全部"
             }
         },
         "rank": {
@@ -312,7 +313,9 @@
             "empty": "暫無規則",
             "activate": "設為活動項",
             "cooling": "冷卻 {seconds}s",
-            "affinity": "親和 {seconds}s"
+            "affinity": "親和 {seconds}s",
+            "pinned": "強制優先",
+            "modeToggleHint": "點擊切換路由模式"
         },
         "detail": {
             "actions": {

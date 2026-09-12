@@ -9,6 +9,9 @@ export const Protocol = {
     OpenAIChatCompletion: 1 << 1,
     OpenAIResponse: 1 << 2,
     AnthropicMessage: 1 << 3,
+    // OpenAIImage 覆盖 /v1/images/generations 与 /v1/images/edits 两个端点。
+    // 两者共用一位: 它们收发同一族请求体与响应体, 上游要么都提供要么都不提供。
+    OpenAIImage: 1 << 4,
 } as const;
 
 // Dialect 是上游在标准协议之上的方言，决定出站转换器的厂商特化配置。
@@ -65,6 +68,8 @@ export type ChannelDetail = {
     openai_chat_completion_path: string;
     openai_response_path: string;
     anthropic_message_path: string;
+    openai_image_generation_path: string;
+    openai_image_edit_path: string;
     keys: ChannelKey[];
     models: string[]; // 上游模型名称；模型除名称外没有界面用得上的字段。
     grants: ChannelGrant[];
@@ -160,6 +165,35 @@ const channelStatsFormattedQueryOptions = queryOptions({
 // useChannelStats 获取全部渠道及其模型的展示用统计, 也是渠道列表页的数据来源。
 export function useChannelStats(enabled = true) {
     return useQuery({ ...channelStatsFormattedQueryOptions, enabled });
+}
+
+// formatChannelStats 把一份渠道统计转成展示形状; 全时段与按周期两条查询共用。
+function formatChannelStats(item: ChannelStats): ChannelStatsFormatted {
+    return {
+        channel_id: item.channel_id,
+        channel_name: item.channel_name,
+        enabled: item.enabled,
+        models: item.models.map((channelModel) => ({
+            model_id: channelModel.model_id,
+            model_name: channelModel.model_name,
+            formatted: formatStatsMetrics(channelModel),
+        })),
+        formatted: formatStatsMetrics(item),
+    };
+}
+
+// useChannelStatsByPeriod 获取指定天数窗口内的渠道与模型统计, days 为 0 表示全时段累计。
+// 与 useChannelStats 分开缓存: 首页榜单按周期切换, 而渠道列表页只看全时段, 两者的刷新与取值互不相干。
+// 窗口内没有请求的渠道仍会返回, 统计各项为零, 由此榜单的条目集合不随周期跳动。
+export function useChannelStatsByPeriod(days: number, enabled = true) {
+    return useQuery({
+        queryKey: ['channels', 'stats', 'period', days],
+        queryFn: () => apiRequest<ChannelStats[]>(`/api/v1/channel/stats?days=${days}`),
+        select: (data) => data.map(formatChannelStats),
+        enabled,
+        refetchInterval: 30000,
+        refetchOnMount: 'always',
+    });
 }
 
 /**

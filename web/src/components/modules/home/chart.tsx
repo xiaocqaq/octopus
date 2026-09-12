@@ -6,7 +6,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/
 import { AnimatedNumber } from '@/components/common/AnimatedNumber';
 import { formatCount, formatMoney } from '@/lib/utils';
 import { useTheme } from '@/provider/theme';
-import { useHomeViewStore } from './store';
+import { PERIOD_SEQUENCE, periodSinceDate, useHomeViewStore } from './store';
 import { MetricTabs } from './metric-tabs';
 
 // 趋势图上的一个点。小时与每日两种粒度只用到这三项, 且两者取值方式一致, 故统一成同一形状。
@@ -31,13 +31,17 @@ export function StatsChart() {
     const period = useHomeViewStore((state) => state.chartPeriod);
     const setPeriod = useHomeViewStore((state) => state.setChartPeriod);
 
-    // 今天取小时粒度, 其余取最近 N 天; 两种粒度的统计字段同名, 后续处理不再分支。
+    // 今天取小时粒度, 其余取最近 N 天, 全部取每日接口给出的整个窗口;
+    // 两种粒度的统计字段同名, 后续处理不再分支。
     const source = useMemo<ChartPoint[]>(() => {
         if (period === '1') {
             return (statsHourly ?? []).map((stat) => ({ label: `${stat.hour}:00`, stat }));
         }
+        // 按日期过滤而非取最后 N 行: 零流量的日期没有行, 取行数会让周期跨到更早的日历日,
+        // 与顶部汇总和榜单的口径不一致。
+        const since = periodSinceDate(period);
         return (statsDaily ?? [])
-            .slice(-Number(period))
+            .filter((stat) => stat.date >= since)
             .map((stat) => ({ label: `${stat.date.slice(4, 6)}/${stat.date.slice(6, 8)}`, stat }));
     }, [statsDaily, statsHourly, period]);
 
@@ -51,7 +55,7 @@ export function StatsChart() {
     const chartColor = getComputedStyle(document.documentElement)
         .getPropertyValue(metricType === 'cost' ? '--chart-1' : metricType === 'count' ? '--chart-2' : '--chart-3')
         .trim();
-    const periodLabel = { '1': t('period.today'), '7': t('period.last7Days'), '30': t('period.last30Days') }[period];
+    const periodLabel = { '1': t('period.today'), '7': t('period.last7Days'), '30': t('period.last30Days'), all: t('period.all') }[period];
     const summary = [
         { label: t('totalRequests'), metric: formatCount(source.reduce((sum, item) => sum + item.stat.request_count.raw, 0)) },
         { label: t('totalCost'), metric: formatMoney(source.reduce((sum, item) => sum + item.stat.total_cost.raw, 0)) },
@@ -83,7 +87,8 @@ export function StatsChart() {
                     </div>
                     <div
                         className="flex gap-2 text-sm cursor-pointer hover:opacity-80 transition-opacity"
-                        onClick={() => setPeriod(period === '1' ? '7' : period === '7' ? '30' : '1')}
+                        // 周期在首页三处共用, 此处切换会同时改变顶部汇总与下方榜单的统计范围。
+                        onClick={() => setPeriod(PERIOD_SEQUENCE[(PERIOD_SEQUENCE.indexOf(period) + 1) % PERIOD_SEQUENCE.length])}
                     >
                         <div>
                             <div className="text-xs text-muted-foreground">{t('timePeriod')}</div>
