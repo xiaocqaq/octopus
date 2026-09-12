@@ -205,13 +205,21 @@ export function FormGrants({ state, setState }: {
                     <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
                         chat / response / message / image
                     </span>
-                    {/* 表头覆盖全部模型全部凭据, 故勾选即批量, 删除即清空全部模型及其授权。 */}
+                    {/* 表头作用于它覆盖的那一片范围: 选中具体凭据时只改该凭据 (清除即摘掉该凭据名下的
+                        全部授权, 模型与凭据本身保留); 选"全部凭据"时才跨全部模型与全部凭据。 */}
                     <GrantCells
                         state={state} setState={setState}
-                        models={state.models} keyNames={keyNames}
-                        remove={() => setState({ ...state, models: [], grants: new Map() })}
+                        models={isAllKeys ? state.models : visibleModels}
+                        keyNames={isAllKeys ? keyNames : [selectedKey]}
+                        remove={isAllKeys
+                            ? () => setState({ ...state, models: [], grants: new Map() })
+                            : () => {
+                                const grants = new Map(state.grants);
+                                for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
+                                setState({ ...state, grants });
+                            }}
                         icon={Eraser}
-                        tip={t('grantClearAll')}
+                        tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
                     />
                 </div>
 

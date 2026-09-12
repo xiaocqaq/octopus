@@ -492,7 +492,8 @@
             "modelRemove": "移除模型",
             "grantRemove": "移除该凭据的授权",
             "grantAllKeys": "全部凭据",
-            "modelNoneForKey": "该凭据暂无已授权模型"
+            "modelNoneForKey": "该凭据暂无已授权模型",
+            "grantClearCurrentKey": "清除该凭据的全部授权"
         }
     }
 }

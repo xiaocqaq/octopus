@@ -492,7 +492,8 @@
             "modelRemove": "Remove model",
             "grantRemove": "Remove this key’s grant",
             "grantAllKeys": "All keys",
-            "modelNoneForKey": "No models granted to this key"
+            "modelNoneForKey": "No models granted to this key",
+            "grantClearCurrentKey": "Clear this key’s grants"
         }
     }
 }
