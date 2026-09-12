@@ -115,18 +115,35 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     }, []);
 
     // 浮层随卡片滚动/窗口缩放重新贴合; scroll 不冒泡, 故用捕获阶段接住内层滚动容器的滚动。
+    // 另外在展开初期逐帧重算一小段时间: 页面进场等祖先动画带 transform 平移卡片, 动画中量到的外框
+    // 是移动途中的位置, 只量一次会把浮层钉在错位处; 动画结束后位置即稳定, 故只跟随前 800ms。
     useLayoutEffect(() => {
         if (!expanded) return;
-        updateOverlayRect();
+        let frame = 0;
+        const startedAt = performance.now();
+        const follow = () => {
+            updateOverlayRect();
+            if (performance.now() - startedAt < 800) frame = requestAnimationFrame(follow);
+        };
+        frame = requestAnimationFrame(follow);
+
         window.addEventListener('scroll', updateOverlayRect, true);
         window.addEventListener('resize', updateOverlayRect);
         return () => {
+            cancelAnimationFrame(frame);
             window.removeEventListener('scroll', updateOverlayRect, true);
             window.removeEventListener('resize', updateOverlayRect);
         };
     }, [expanded, updateOverlayRect]);
 
     useEffect(() => () => window.clearTimeout(collapseTimer.current), []);
+
+    // 卡片卸载时归还共享的展开态。展开态是模块级的, 不随组件卸载复位, 而卸载时也补不上 mouseleave:
+    // 切走页面再切回, 或卡片被虚拟列表移出渲染范围, 残留的 id 会让卡片凭空呈展开态且再也收不起来。
+    // 只清自己这一次, 免得误清别的卡片刚设上的展开。
+    useEffect(() => () => {
+        if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
+    }, [group.id, setActiveGroup]);
 
     // 成员的名称, 所属渠道与可用性由后端随分组给出, 此处只做展示形状的转换。
     // 不可用的成员同样列出: 否则用户看不到它的存在也就无法移除。
