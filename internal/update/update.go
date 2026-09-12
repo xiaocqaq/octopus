@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,10 +19,27 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-const (
-	updateUrl    = "https://github.com/bestruirui/octopus/releases/latest/download"
-	updateApiUrl = "https://api.github.com/repos/bestruirui/octopus/releases/latest"
+// 更新源取自 conf.Repo, 由构建时注入 (build.sh 从 git origin 取), 换 fork 只需重新构建而不必改代码。
+// 要求该仓库是 GitHub 或与其 releases API 同形的托管: /repos/{owner}/{repo}/releases/latest
+// 与 /releases/latest/download/{asset} 两种路径都要讲得通。
+var (
+	updateRepo   = repoSlug(conf.Repo)
+	updateApiUrl = "https://api.github.com/repos/" + updateRepo + "/releases/latest"
+	updateUrl    = "https://github.com/" + updateRepo + "/releases/latest/download"
 )
+
+// repoSlug 从仓库地址里取出 owner/repo 两段, 供拼接接口与下载地址。
+// 兼容 https://host/owner/repo 与结尾带 .git 或斜杠的写法; 地址不含主机名时按已给的 owner/repo 处理。
+func repoSlug(repo string) string {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(repo), "/")
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return strings.Trim(trimmed, "/")
+	}
+	return strings.Trim(parsed.Path, "/")
+}
 
 type LatestInfo struct {
 	TagName     string `json:"tag_name"`

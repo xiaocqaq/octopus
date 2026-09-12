@@ -8,6 +8,12 @@ import { toast } from 'sonner';
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || 'unknown'; // 当前前端构建对应的应用版本。
 const GITHUB_REPO = import.meta.env.VITE_GITHUB_REPO || 'https://github.com/bestruirui/octopus'; // 项目仓库地址。
 
+// hasRealVersion 判断版本号是否是一个可用于比较的真实版本。
+// 构建时注入失败会得到 unknown 或 dev, 它们与任何真实版本都不相等, 参与比较只会误报。
+function hasRealVersion(version: string) {
+    return !!version && version !== 'unknown' && version !== 'dev';
+}
+
 // SettingInfo 展示版本信息，并在更新后清理本项目的浏览器缓存。
 export function SettingInfo() {
     const t = useTranslations('setting');
@@ -18,10 +24,12 @@ export function SettingInfo() {
     const backendNowVersion = nowVersionQuery.data || '';
     const latestVersion = latestInfoQuery.data?.tag_name || '';
 
-    // 前端版本与后端当前版本不一致 → 浏览器缓存问题
-    const isCacheMismatch = !!backendNowVersion && backendNowVersion !== APP_VERSION;
-    // 最新版本与后端当前版本不一致 → 有新版本可更新
-    const hasNewVersion = latestVersion && backendNowVersion && latestVersion !== backendNowVersion;
+    // 前端版本与后端当前版本不一致 → 浏览器缓存问题。
+    // 任一侧拿不到真实版本号就不比较: 从压缩包或无 git 环境下构建时版本是 dev/unknown,
+    // 与任何真实版本都不相等, 比下去只会每次开页面都误报缓存问题。
+    const isCacheMismatch = hasRealVersion(APP_VERSION) && hasRealVersion(backendNowVersion) && backendNowVersion !== APP_VERSION;
+    // 最新版本与后端当前版本不一致 → 有新版本可更新。
+    const hasNewVersion = hasRealVersion(latestVersion) && hasRealVersion(backendNowVersion) && latestVersion !== backendNowVersion;
 
     // clearCacheAndReload 清理 Octopus 缓存和根作用域注册后刷新页面。
     const clearCacheAndReload = async () => {
