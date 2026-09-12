@@ -77,16 +77,8 @@ jobs:
       - name: Update price
         run: python3 scripts/updatePrice.py
 
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r28c
-
       - name: Build
         run: bash scripts/build.sh
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Generate changelog
         run: npx changelogithub

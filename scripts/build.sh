@@ -28,19 +28,6 @@ build_standard() {
     env "${build_env[@]}" go build -trimpath -o "${OUTPUT_DIR}/bin/${APP_NAME}-${os}-${go_arch}" -ldflags="${LDFLAGS}" -tags=jsoniter .
 }
 
-build_android() {
-    # Android 矩阵显式绑定 NDK API 21 编译器，脚本只面向 workflow 的 Ubuntu runner。
-    local go_arch compiler
-    IFS=: read -r go_arch compiler <<<"$1"
-    local build_env=(GOOS=android GOARCH="${go_arch}" CGO_ENABLED=1 \
-        CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${compiler}")
-    if [ "${go_arch}" = "arm" ]; then
-        build_env+=(GOARM=7)
-    fi
-    echo "Building android/${go_arch}"
-    env "${build_env[@]}" go build -trimpath -o "${OUTPUT_DIR}/bin/${APP_NAME}-android-${go_arch}" -ldflags="${LDFLAGS}" -tags=jsoniter .
-}
-
 readonly -a STANDARD_TARGETS=(
     "linux:amd64"
     "linux:arm64"
@@ -50,34 +37,17 @@ readonly -a STANDARD_TARGETS=(
     "darwin:arm64"
     "darwin:amd64"
 ) # 不依赖 cgo 的固定发布矩阵。
-readonly -a ANDROID_TARGETS=(
-    "amd64:x86_64-linux-android21-clang"
-    "arm64:aarch64-linux-android21-clang"
-    "arm:armv7a-linux-androideabi21-clang"
-    "386:i686-linux-android21-clang"
-) # Android API 21 的固定 ABI 与 NDK clang 映射。
-
-: "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME is required}"
 
 # 构建工具不会创建父目录，因此只保留一次直接创建。
-mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/archives" \
-    "${OUTPUT_DIR}/docker/linux/amd64" "${OUTPUT_DIR}/docker/linux/386" \
-    "${OUTPUT_DIR}/docker/linux/arm/v7" "${OUTPUT_DIR}/docker/linux/arm64"
+mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/archives"
 rm -f "${OUTPUT_DIR}"/bin/"${APP_NAME}"-* "${OUTPUT_DIR}"/archives/*.zip "${OUTPUT_DIR}/archives/SHA256SUMS"
 
 echo "Building ${APP_NAME} ${VERSION} (${COMMIT})"
 for target in "${STANDARD_TARGETS[@]}"; do
     build_standard "${target}"
 done
-for target in "${ANDROID_TARGETS[@]}"; do
-    build_android "${target}"
-done
 
-# Docker buildx 按 TARGETPLATFORM 读取固定目录中的同名可执行文件。
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-amd64" "${OUTPUT_DIR}/docker/linux/amd64/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-386" "${OUTPUT_DIR}/docker/linux/386/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-arm" "${OUTPUT_DIR}/docker/linux/arm/v7/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-arm64" "${OUTPUT_DIR}/docker/linux/arm64/${APP_NAME}"
+# Docker 构建已从 release.yaml 移除, 故不再往 build/docker 下暂存各平台可执行文件。
 
 # 每个平台只替换可执行文件名，许可证报告和发布文档保持一致。
 GOFLAGS="-tags=jsoniter" go run github.com/google/go-licenses/v2@v2.0.1 report . \
