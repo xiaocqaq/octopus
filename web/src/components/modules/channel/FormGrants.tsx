@@ -248,16 +248,23 @@ export function FormGrants({ state, setState }: {
                                     >
                                         <ChevronRight className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? 'rotate-90' : ''}`} />
                                         <span className="text-sm truncate">{modelName}</span>
-                                        <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                                            {granted}/{keyNames.length}
-                                        </span>
+                                        {/* 按凭据过滤时, 列表里的每个模型都已是该凭据授权的, 再标"几个凭据有它"没有意义;
+                                            只在"全部凭据"视图里给出这个计数, 那里的勾选框本就跨凭据, 两者才对应得上。 */}
+                                        {isAllKeys && (
+                                            <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                                                {granted}/{keyNames.length}
+                                            </span>
+                                        )}
                                     </button>
                                     <GrantCells
                                         state={state} setState={setState}
-                                        models={[modelName]} keyNames={keyNames}
-                                        remove={() => removeModel(modelName)}
+                                        models={[modelName]}
+                                        keyNames={isAllKeys ? keyNames : [selectedKey]}
+                                        remove={isAllKeys
+                                            ? () => removeModel(modelName)
+                                            : () => removeGrant(modelName, selectedKey)}
                                         icon={Trash2}
-                                        tip={t('modelRemove')}
+                                        tip={isAllKeys ? t('modelRemove') : t('grantRemove')}
                                     />
                                 </div>
 
