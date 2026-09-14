@@ -2,6 +2,7 @@ package relay
 
 import (
 	"maps"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,9 +20,21 @@ type RouteState struct {
 	ProbeItemID   int           `json:"probe_item_id"`   // 当前占用恢复探测的成员 ID, 同一分组同时只允许一个成员被探测; 手动模式恒为 0。
 	AffinityUntil int64         `json:"affinity_until"`  // 当前路由的亲和截止 Unix 毫秒时间, 0 表示无亲和; 手动模式恒为 0。
 	Cooldowns     map[int]int64 `json:"cooldowns"`       // 失败成员 ID 对应的冷却截止 Unix 毫秒时间, 已到期的条目由前端按当前时间忽略。
+	// Scores 是成员 ID 对应的健康分: 正分在选路时上浮, 负分下沉, 0 表示按配置优先级。
+	// 由调用结果自动升降而来, 与冷却一样只存在于本进程, 不改写人工排定的 Priority。
+	Scores map[int]int `json:"scores"`
 
-	affinityArmed bool // 当前路由下一次成功后是否开始亲和, 仅故障切换后为真。
+	affinityArmed bool        // 当前路由下一次成功后是否开始亲和, 仅故障切换后为真。
+	successes     map[int]int // 各成员当前的连续成功轮数, 满升档阈值后清零; 内部计数, 不出 JSON。
 }
+
+// routeScoreMax 是健康分相对配置优先级的最大偏移, 每一档相当于越过一个成员的位置。
+// 设上限而非任其累加: 长期顺风的成员不该把人工排定的顺序彻底压住, 一时的故障也总有翻回来的余量。
+const routeScoreMax = 3
+
+// routeSuccessStreak 是升一档所需的连续成功轮数。
+// 降档不需要另一个阈值: 触发降档的进入冷却本就已经是多次失败的结果。
+const routeSuccessStreak = 3
 
 const routeStreamBuffer = 16 // 单个路由流连接的非阻塞消息缓冲容量。
 
@@ -39,6 +52,7 @@ func RouteStateOf(group model.Group) RouteState {
 			GroupID:       group.ID,
 			CurrentItemID: group.ActiveItemID,
 			Cooldowns:     map[int]int64{},
+			Scores:        map[int]int{},
 		}
 	}
 
@@ -47,10 +61,11 @@ func RouteStateOf(group model.Group) RouteState {
 
 	route := routes[group.ID]
 	if route == nil {
-		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}}
+		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}}
 	}
 	state := *route
 	state.Cooldowns = maps.Clone(route.Cooldowns)
+	state.Scores = maps.Clone(route.Scores)
 	return state
 }
 
@@ -64,6 +79,7 @@ func ResetRouteState(groupID int) {
 }
 
 // pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
+// 故障转移模式的遍历顺序还要叠上健康分: 连续成功的成员上浮, 进过冷却的成员下沉, 由此把调用顺畅的成员稳定排在前面。
 // 渠道是否可用不在此判断: 渠道禁用或缺少密钥由调用方发现并作为一轮失败上报, 该成员随即进入冷却而在后续轮次被跳过。
 func pickGroupItem(group model.Group) model.GroupItem {
 	if group.Mode == model.GroupModeManual {
@@ -116,8 +132,8 @@ func pickGroupItem(group model.Group) model.GroupItem {
 		return itemOf(group, route.CurrentItemID)
 	}
 
-	for _, item := range group.Items {
-		// 遍历到当前成员说明比它优先级更高的成员都不可选, 沿用当前成员。
+	for _, item := range orderGroupItems(group, route) {
+		// 遍历到当前成员说明排在它前面的成员都不可选, 沿用当前成员。
 		if item.ID == route.CurrentItemID {
 			break
 		}
@@ -144,7 +160,7 @@ func pickGroupItem(group model.Group) model.GroupItem {
 	return model.GroupItem{}
 }
 
-// recordRouteSuccess 上报一轮成功: 结束该成员的冷却与探测占用, 并在故障切换后按配置开始亲和。
+// recordRouteSuccess 上报一轮成功: 结束该成员的冷却与探测占用, 累计健康分, 并在故障切换后按配置开始亲和。
 func recordRouteSuccess(group model.Group, itemID int) {
 	if group.Mode == model.GroupModeManual {
 		return
@@ -169,6 +185,15 @@ func recordRouteSuccess(group model.Group, itemID int) {
 			route.AffinityUntil = 0
 		}
 		changed = true
+	}
+	// 连续成功累计到阈值即升一档, 让稳定可用的成员逐渐排到配置顺序之前。
+	route.successes[itemID]++
+	if route.successes[itemID] >= routeSuccessStreak {
+		route.successes[itemID] = 0
+		if route.Scores[itemID] < routeScoreMax {
+			route.Scores[itemID]++
+			changed = true
+		}
 	}
 	// 亲和只在故障切换后的首次成功时开始, 使请求在一段时间内稳定留在备用成员上。
 	if route.CurrentItemID == itemID && route.affinityArmed {
@@ -204,6 +229,12 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 
 	now := time.Now().UnixMilli()
 	route.Cooldowns[itemID] = now + int64(group.RelayConfig.MemberCooldownSeconds)*1000
+	// 需要冷却说明该成员已经连续失败到不值得再用, 顺手降一档: 冷却到期后它会带着这一档偏移重新排队,
+	// 排到原本不如它的成员之后; 探针成功与后续的连续成功再把它抬回来。
+	route.successes[itemID] = 0
+	if route.Scores[itemID] > -routeScoreMax {
+		route.Scores[itemID]--
+	}
 	if route.ProbeItemID == itemID {
 		route.ProbeItemID = 0
 	}
@@ -215,6 +246,28 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	}
 	publishRouteLocked(route)
 	return true
+}
+
+// ReleaseItemCooldown 解除指定成员的冷却, 用于人工把它指定为强制成员。
+// 人工指定是明确的"现在就用它"的意图, 若还被残留的冷却挡在门外, 这次指定就落不了地。
+// 已经指定但正在冷却的成员不在此列: 那种情况下的让位是刻意的, 见 pickGroupItem。
+func ReleaseItemCooldown(groupID, itemID int) {
+	if itemID == 0 {
+		return
+	}
+
+	routeMu.Lock()
+	defer routeMu.Unlock()
+
+	route := routes[groupID]
+	if route == nil {
+		return
+	}
+	if _, cooling := route.Cooldowns[itemID]; !cooling {
+		return
+	}
+	delete(route.Cooldowns, itemID)
+	publishRouteLocked(route)
 }
 
 // releaseRouteProbe 归还未产生成败结论的探测占用, 用于请求被人工中止或客户端断开。
@@ -232,7 +285,7 @@ func releaseRouteProbe(group model.Group, itemID int) {
 func groupRouteLocked(group model.Group) *RouteState {
 	route := routes[group.ID]
 	if route == nil {
-		route = &RouteState{GroupID: group.ID, Cooldowns: make(map[int]int64)}
+		route = newRouteState(group.ID)
 		routes[group.ID] = route
 	}
 	items := make(map[int]bool, len(group.Items))
@@ -242,6 +295,17 @@ func groupRouteLocked(group model.Group) *RouteState {
 	for itemID := range route.Cooldowns {
 		if !items[itemID] {
 			delete(route.Cooldowns, itemID)
+		}
+	}
+	// 健康分与成功计数同冷却一样按成员索引, 成员被移除后留下的条目只会白占内存。
+	for itemID := range route.Scores {
+		if !items[itemID] {
+			delete(route.Scores, itemID)
+		}
+	}
+	for itemID := range route.successes {
+		if !items[itemID] {
+			delete(route.successes, itemID)
 		}
 	}
 	if route.ProbeItemID != 0 && !items[route.ProbeItemID] {
@@ -255,6 +319,38 @@ func groupRouteLocked(group model.Group) *RouteState {
 	return route
 }
 
+// newRouteState 建立分组的进程内路由状态, 三个按成员索引的 map 一并就位, 写入侧无需再判空。
+func newRouteState(groupID int) *RouteState {
+	return &RouteState{
+		GroupID:   groupID,
+		Cooldowns: make(map[int]int64),
+		Scores:    make(map[int]int),
+		successes: make(map[int]int),
+	}
+}
+
+// orderGroupItems 按健康分与配置优先级共同排出选路顺序: 先比健康分降序, 同分再按 Priority 升序。
+// 全部成员都无偏移时直接返回原序列: group.Items 已按 Priority 定序, 多排一次只会白花一次分配。
+// 用稳定排序而非显式比较 Priority: 原序列本身即是 Priority 顺序, 稳定排序天然把它作为同分时的次序。
+func orderGroupItems(group model.Group, route *RouteState) []model.GroupItem {
+	ranked := false
+	for _, item := range group.Items {
+		if route.Scores[item.ID] != 0 {
+			ranked = true
+			break
+		}
+	}
+	if !ranked {
+		return group.Items
+	}
+	ordered := make([]model.GroupItem, len(group.Items))
+	copy(ordered, group.Items)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return route.Scores[ordered[i].ID] > route.Scores[ordered[j].ID]
+	})
+	return ordered
+}
+
 // itemOf 返回分组内指定 ID 的成员, 不存在时返回零值。
 func itemOf(group model.Group, itemID int) model.GroupItem {
 	for _, item := range group.Items {
@@ -265,10 +361,11 @@ func itemOf(group model.Group, itemID int) model.GroupItem {
 	return model.GroupItem{}
 }
 
-// publishRouteLocked 非阻塞发布路由状态, 连接拥塞时关闭它并交给客户端重连获取全量快照; 冷却表按值复制以免前端读到后续变更; 调用方必须持有锁。
+// publishRouteLocked 非阻塞发布路由状态, 连接拥塞时关闭它并交给客户端重连获取全量快照; 冷却表与健康分按值复制以免前端读到后续变更; 调用方必须持有锁。
 func publishRouteLocked(route *RouteState) {
 	message := *route
 	message.Cooldowns = maps.Clone(route.Cooldowns)
+	message.Scores = maps.Clone(route.Scores)
 	for stream := range routeStreams {
 		select {
 		case stream <- message:

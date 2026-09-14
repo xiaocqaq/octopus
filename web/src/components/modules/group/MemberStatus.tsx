@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleCheck, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleCheck, Pin } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -51,10 +51,12 @@ export function useRuntimeClock(source?: Group | Group[]) {
     return now;
 }
 
-// MemberStatus 展示成员的强制标记、冷却、亲和倒计时或当前使用圆点。
+// MemberStatus 展示成员的强制标记、健康分偏移、冷却、亲和倒计时或当前使用圆点。
 export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
     const t = useTranslations('group.card');
     const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
+    // 健康分只在故障转移模式累积; 手动模式没有进程内路由, 后端恒回空表。
+    const score = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
 
     if (group.mode === 'failover' && itemId !== undefined) {
         const cooldownUntil = group.runtime.cooldowns[itemId] ?? 0;
@@ -69,6 +71,7 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
             return (
                 <span className="flex shrink-0 items-center gap-1">
                     {isPinned && <PinnedMark label={t('pinned')} />}
+                    <RankMark score={score} />
                     <Badge
                         variant="outline"
                         className={cn(
@@ -85,17 +88,42 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
         }
     }
 
-    if (!isPinned && !active) return null;
+    if (!isPinned && !active && score === 0) return null;
 
     return (
         <span className="flex shrink-0 items-center gap-1">
             {isPinned && <PinnedMark label={t('pinned')} />}
+            <RankMark score={score} />
             {active && (
                 <span aria-hidden="true" className={cn('inline-flex shrink-0 text-primary', activeClassName)}>
                     <CircleCheck className="size-4" />
                 </span>
             )}
         </span>
+    );
+}
+
+// RankMark 标出成员相对配置优先级的排名偏移: 正分因连续成功上浮, 负分因进入冷却下沉。
+// 与冷却标记并列而非互斥: 下沉本就由冷却引起, 冷却倒计时与偏移一因一果, 同时可见才看得懂这次让位。
+function RankMark({ score }: { score: number }) {
+    const t = useTranslations('group.card');
+    if (score === 0) return null;
+
+    const up = score > 0;
+    return (
+        <Badge
+            variant="outline"
+            className={cn(
+                'shrink-0 gap-0.5 px-1 py-0 text-[10px] font-medium tabular-nums',
+                up
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
+            )}
+            title={t(up ? 'rankUp' : 'rankDown', { steps: Math.abs(score) })}
+        >
+            {up ? <ArrowUp className="size-2.5" /> : <ArrowDown className="size-2.5" />}
+            {Math.abs(score)}
+        </Badge>
     );
 }
 

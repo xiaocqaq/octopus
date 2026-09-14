@@ -40,6 +40,8 @@ export interface GroupRuntime {
     probe_item_id: number;
     affinity_until: number;
     cooldowns: Record<number, number>;
+    // scores 是成员健康分：正分在选路时上浮、负分下沉，0 表示按配置优先级。仅故障转移模式会累积。
+    scores: Record<number, number>;
 }
 
 // Group 是客户端模型名称对应的渠道分组。
