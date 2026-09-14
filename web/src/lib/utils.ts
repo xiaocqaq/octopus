@@ -34,3 +34,12 @@ export function formatTime(ms: number | undefined): { raw: number, formatted: { 
     formatted: formatNumber(ms, [86400000, 3600000, 60000, 1000], ['', 'd', 'h', 'm', 's', 'ms']),
   };
 }
+
+// formatPercent 把百分比数值格式化为展示字段, 固定两位小数并带上百分号。
+// 不复用 formatCount: 它按 1e3/1e6 定标, 而百分比只有 0 到 100, 套进去既会丢掉百分号, 小数位也与其余卡片对不齐。
+export function formatPercent(num: number | undefined): { raw: number, formatted: { value: string, unit: string } } {
+  return {
+    raw: num ?? 0,
+    formatted: { value: (num ?? 0).toFixed(2), unit: '%' },
+  };
+}

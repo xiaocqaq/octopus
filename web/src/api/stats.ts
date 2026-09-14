@@ -1,13 +1,16 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { apiRequest } from './client';
 import { statsDailyQueryOptions, statsHourlyQueryOptions, statsTotalQueryOptions } from './queries';
-import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import { formatCount, formatMoney, formatPercent, formatTime } from '@/lib/utils';
 
 /**
  * 统计数据
  */
 export interface StatsMetrics {
     input_token: number;
+    // cached_token 与 cache_write_token 是输入中命中缓存和写入缓存的部分, 均为 input_token 的子集。
+    cached_token: number;
+    cache_write_token: number;
     output_token: number;
     input_cost: number;
     output_cost: number;
@@ -18,6 +21,8 @@ export interface StatsMetrics {
 
 export interface StatsMetricsFormatted {
     input_token: ReturnType<typeof formatCount>;
+    cached_token: ReturnType<typeof formatCount>;
+    cache_write_token: ReturnType<typeof formatCount>;
     output_token: ReturnType<typeof formatCount>;
     input_cost: ReturnType<typeof formatMoney>;
     output_cost: ReturnType<typeof formatMoney>;
@@ -28,6 +33,8 @@ export interface StatsMetricsFormatted {
     request_count: ReturnType<typeof formatCount>;
     total_token: ReturnType<typeof formatCount>;
     total_cost: ReturnType<typeof formatMoney>;
+    // cache_rate 是缓存命中率百分比。原始值也一并保留: 渠道榜与模型榜要跨条目合并, 只能先按 raw 求和再重算。
+    cache_rate: ReturnType<typeof formatPercent>;
 }
 
 // formatStatsMetrics 把一组累计统计格式化为界面展示字段，并补齐合计项。
@@ -35,6 +42,8 @@ export interface StatsMetricsFormatted {
 export function formatStatsMetrics(metrics: StatsMetrics): StatsMetricsFormatted {
     return {
         input_token: formatCount(metrics.input_token),
+        cached_token: formatCount(metrics.cached_token),
+        cache_write_token: formatCount(metrics.cache_write_token),
         output_token: formatCount(metrics.output_token),
         total_token: formatCount(metrics.input_token + metrics.output_token),
         input_cost: formatMoney(metrics.input_cost),
@@ -44,7 +53,15 @@ export function formatStatsMetrics(metrics: StatsMetrics): StatsMetricsFormatted
         request_success: formatCount(metrics.request_success),
         request_failed: formatCount(metrics.request_failed),
         request_count: formatCount(metrics.request_success + metrics.request_failed),
+        cache_rate: formatPercent(cacheRate(metrics.input_token, metrics.cached_token)),
     };
+}
+
+// cacheRate 返回缓存命中率百分比，输入为空时为零。
+// 命中 Token 是输入 Token 的子集，故分母取输入总数：未命中的部分同样计入输入。
+export function cacheRate(inputTokens: number, cachedTokens: number): number {
+    if (!inputTokens) return 0;
+    return ((cachedTokens ?? 0) / inputTokens) * 100;
 }
 
 export interface StatsDaily extends StatsMetrics {

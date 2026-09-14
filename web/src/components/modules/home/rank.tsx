@@ -5,12 +5,13 @@ import { useChannelStatsByPeriod } from '@/api/channel';
 import { formatCount, formatMoney } from '@/lib/utils';
 import { PERIOD_DAYS, useHomeViewStore, type MetricKey } from './store';
 import { MetricTabs } from './metric-tabs';
-import type { StatsMetricsFormatted } from '@/api/stats';
+import { cacheRate, type StatsMetricsFormatted } from '@/api/stats';
 
 // 榜单只展示这几项, 渠道可直接复用 api/channel 已算好的 formatted。
+// 输入与命中词元只取其 raw: 缓存率要按累计 Tokens 重算, 直接平均各条目的百分比会算错。
 type RankMetrics = Pick<
     StatsMetricsFormatted,
-    'total_cost' | 'total_token' | 'request_count' | 'request_success' | 'request_failed'
+    'total_cost' | 'total_token' | 'request_count' | 'request_success' | 'request_failed' | 'input_token' | 'cached_token'
 >;
 
 // sumRankMetrics 把两份榜单统计按 raw 相加并重新格式化。
@@ -22,6 +23,8 @@ function sumRankMetrics(a: RankMetrics, b: RankMetrics): RankMetrics {
         request_count: formatCount(a.request_count.raw + b.request_count.raw),
         request_success: formatCount(a.request_success.raw + b.request_success.raw),
         request_failed: formatCount(a.request_failed.raw + b.request_failed.raw),
+        input_token: formatCount(a.input_token.raw + b.input_token.raw),
+        cached_token: formatCount(a.cached_token.raw + b.cached_token.raw),
     };
 }
 
@@ -69,6 +72,9 @@ function RankCard({
                     {ranked.map((item, index) => {
                         const successCount = item.formatted.request_success.raw;
                         const totalCount = successCount + item.formatted.request_failed.raw;
+                        const successRate = totalCount > 0 ? (successCount / totalCount) * 100 : 0;
+                        // 模型榜把同一模型的多个渠道合并成一条, 分母与分子都要用合并后的累计词元, 不能平均各渠道的百分比。
+                        const hitRate = cacheRate(item.formatted.input_token.raw, item.formatted.cached_token.raw);
 
                         return (
                             <div key={item.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 py-3">
@@ -78,12 +84,17 @@ function RankCard({
                                     <p className={`font-medium text-sm truncate ${hideChannelName && item.blurName ? 'select-none blur-[3px]' : ''}`}>
                                         {item.name}
                                     </p>
-                                    {sortMode === 'count' && (
-                                        <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-                                            <span>{t('successRate')}:</span>
-                                            <span>{(totalCount > 0 ? (successCount / totalCount) * 100 : 0).toFixed(1)}%</span>
-                                        </div>
-                                    )}
+                                    {/* 缓存率与排序维度无关, 始终展示; 成功率只在按次数排序时才有意义, 与失败数并排看。 */}
+                                    <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground mt-1">
+                                        <span>
+                                            {t('cacheRate')}: <span className="tabular-nums">{hitRate.toFixed(1)}%</span>
+                                        </span>
+                                        {sortMode === 'count' && (
+                                            <span>
+                                                {t('successRate')}: <span className="tabular-nums">{successRate.toFixed(1)}%</span>
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="flex items-center gap-1 text-right">

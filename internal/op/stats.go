@@ -251,7 +251,7 @@ func persistStatsSnapshots(
 		}
 		if result := dbConn.Model(&model.Channel{}).
 			Where("id = ?", channel.ID).
-			Select("input_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
+			Select("input_token", "cached_token", "cache_write_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
 			Updates(&channel); result.Error != nil {
 			return result.Error
 		}
@@ -264,7 +264,7 @@ func persistStatsSnapshots(
 		}
 		if result := dbConn.Model(&model.ChannelModel{}).
 			Where("id = ?", channelModel.ID).
-			Select("input_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
+			Select("input_token", "cached_token", "cache_write_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
 			Updates(&channelModel); result.Error != nil {
 			return result.Error
 		}
@@ -277,7 +277,7 @@ func persistStatsSnapshots(
 		}
 		if result := dbConn.Model(&model.ChannelKey{}).
 			Where("id = ?", channelKey.ID).
-			Select("input_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
+			Select("input_token", "cached_token", "cache_write_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
 			Updates(&channelKey); result.Error != nil {
 			return result.Error
 		}

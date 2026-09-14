@@ -1,13 +1,17 @@
 package model
 
 type StatsMetrics struct {
-	InputToken     int64   `json:"input_token" gorm:"bigint"`
-	OutputToken    int64   `json:"output_token" gorm:"bigint"`
-	InputCost      float64 `json:"input_cost" gorm:"type:real"`
-	OutputCost     float64 `json:"output_cost" gorm:"type:real"`
-	WaitTime       int64   `json:"wait_time" gorm:"bigint"`
-	RequestSuccess int64   `json:"request_success" gorm:"bigint"`
-	RequestFailed  int64   `json:"request_failed" gorm:"bigint"`
+	InputToken int64 `json:"input_token" gorm:"bigint"` // 输入 Token 总数, 已包含命中与写入缓存的部分。
+	// CachedToken 与 CacheWriteToken 是输入中命中缓存和写入缓存的部分, 均为 InputToken 的子集。
+	// 命中率取 CachedToken/InputToken: 上游按提示缓存计价, 只报总数的话界面无从判断缓存是否在生效。
+	CachedToken     int64   `json:"cached_token" gorm:"bigint"`
+	CacheWriteToken int64   `json:"cache_write_token" gorm:"bigint"`
+	OutputToken     int64   `json:"output_token" gorm:"bigint"`
+	InputCost       float64 `json:"input_cost" gorm:"type:real"`
+	OutputCost      float64 `json:"output_cost" gorm:"type:real"`
+	WaitTime        int64   `json:"wait_time" gorm:"bigint"`
+	RequestSuccess  int64   `json:"request_success" gorm:"bigint"`
+	RequestFailed   int64   `json:"request_failed" gorm:"bigint"`
 }
 
 type StatsTotal struct {
@@ -50,6 +54,8 @@ type StatsChannelModelDaily struct {
 // Add aggregates another StatsMetrics into the current one.
 func (s *StatsMetrics) Add(delta StatsMetrics) {
 	s.InputToken += delta.InputToken
+	s.CachedToken += delta.CachedToken
+	s.CacheWriteToken += delta.CacheWriteToken
 	s.OutputToken += delta.OutputToken
 	s.InputCost += delta.InputCost
 	s.OutputCost += delta.OutputCost

@@ -8,7 +8,8 @@ import {
     ArrowUpFromLine,
     Rewind,
     DollarSign,
-    FastForward
+    FastForward,
+    Percent
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslations } from 'use-intl';
@@ -19,6 +20,8 @@ import { periodSinceDate, useHomeViewStore } from './store';
 // EMPTY_METRICS 用于周期内暂无数据时的求和初值。
 const EMPTY_METRICS: StatsMetrics = {
     input_token: 0,
+    cached_token: 0,
+    cache_write_token: 0,
     output_token: 0,
     input_cost: 0,
     output_cost: 0,
@@ -46,6 +49,8 @@ export function Total() {
         // 两个 Hook 给出的是已格式化的取值, 原始数字在 raw 上; 求和后再统一格式化一次。
         const summed = source.reduce<StatsMetrics>((acc, item) => ({
             input_token: acc.input_token + item.input_token.raw,
+            cached_token: acc.cached_token + item.cached_token.raw,
+            cache_write_token: acc.cache_write_token + item.cache_write_token.raw,
             output_token: acc.output_token + item.output_token.raw,
             input_cost: acc.input_cost + item.input_cost.raw,
             output_cost: acc.output_cost + item.output_cost.raw,
@@ -79,6 +84,8 @@ export function Total() {
             items: [
                 { label: t('inputTokens'), metric: stats?.input_token, icon: Rewind, bgColor: 'bg-chart-3/10' },
                 { label: t('inputCost'), metric: stats?.input_cost, icon: DollarSign, bgColor: 'bg-chart-3/10' },
+                // 缓存命中率归在输入侧: 命中的部分本就是输入词元里的一个子集, 单列一张卡片会与输入统计重复。
+                { label: t('cacheRate'), metric: stats?.cache_rate, icon: Percent, bgColor: 'bg-chart-3/10' },
             ],
         },
         {
