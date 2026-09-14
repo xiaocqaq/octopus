@@ -11,7 +11,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/looplj/axonhub/llm v0.0.0-20260909170523-3786f2c5c8de
+	github.com/looplj/axonhub/llm v0.0.0-20260912143604-4352a73fab0d
 	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
