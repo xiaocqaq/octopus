@@ -101,6 +101,7 @@
             "requestStats": "請求統計",
             "totalStats": "全部統計",
             "inputStats": "輸入統計",
+            "cacheRate": "快取命中率",
             "outputStats": "輸出統計",
             "requestCount": "請求次數",
             "timeConsumed": "消耗時間",
@@ -128,6 +129,7 @@
             "channel": "渠道",
             "model": "模型",
             "noData": "暫無排行數據",
+            "cacheRate": "快取命中率",
             "successRate": "成功率"
         }
     },
@@ -320,6 +322,8 @@
             "cooling": "冷卻 {seconds}s",
             "affinity": "親和 {seconds}s",
             "pinned": "強制優先",
+            "rankUp": "連續成功，排名上升 {steps} 檔",
+            "rankDown": "進入冷卻，排名下降 {steps} 檔",
             "modeToggleHint": "點擊切換路由模式"
         },
         "detail": {
@@ -408,6 +412,9 @@
             "channelChanged": "供應源已切換",
             "channelCleared": "已取消供應源選擇",
             "channelChangeFailed": "供應源切換失敗",
+            "channelPinned": "已強制優先使用該供應源",
+            "pinCleared": "已取消強制優先",
+            "pinChangeFailed": "強制優先設定失敗",
             "responseContent": "回應內容",
             "noRequestContent": "(無請求內容)",
             "noResponseContent": "(無回應內容)",
@@ -417,6 +424,8 @@
             "stopRound": "停止目前輪次",
             "stopFailed": "停止目前輪次失敗",
             "waitingChannelSelection": "正在等待選擇供應源",
+            "firstToken": "首字耗時",
+            "cacheRate": "快取命中率",
             "waitingResponse": "正在等待上游回應",
             "responseStreaming": "上游已回應，串流傳輸正在進行"
         }

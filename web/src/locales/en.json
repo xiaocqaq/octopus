@@ -101,6 +101,7 @@
             "requestStats": "Request Stats",
             "totalStats": "Total Stats",
             "inputStats": "Input Stats",
+            "cacheRate": "Cache Hit Rate",
             "outputStats": "Output Stats",
             "requestCount": "Requests",
             "timeConsumed": "Time Consumed",
@@ -128,6 +129,7 @@
             "channel": "Channel",
             "model": "Model",
             "noData": "No ranking data",
+            "cacheRate": "Cache Hit Rate",
             "successRate": "Success Rate"
         }
     },
@@ -320,6 +322,8 @@
             "cooling": "Cooling {seconds}s",
             "affinity": "Affinity {seconds}s",
             "pinned": "Forced priority",
+            "rankUp": "Ranked up {steps} after consecutive successes",
+            "rankDown": "Ranked down {steps} after entering cooldown",
             "modeToggleHint": "Click to switch routing mode"
         },
         "detail": {
@@ -408,6 +412,9 @@
             "channelChanged": "Channel switched",
             "channelCleared": "Channel selection cleared",
             "channelChangeFailed": "Failed to switch channel",
+            "channelPinned": "Channel forced to take priority",
+            "pinCleared": "Forced priority cleared",
+            "pinChangeFailed": "Failed to set forced priority",
             "responseContent": "Response Content",
             "noRequestContent": "(No request content)",
             "noResponseContent": "(No response content)",
@@ -417,6 +424,8 @@
             "stopRound": "Stop Current Round",
             "stopFailed": "Failed to stop current round",
             "waitingChannelSelection": "Waiting for channel selection",
+            "firstToken": "Time to first token",
+            "cacheRate": "Cache Hit Rate",
             "waitingResponse": "Waiting for upstream response",
             "responseStreaming": "Upstream responded; streaming is in progress"
         }

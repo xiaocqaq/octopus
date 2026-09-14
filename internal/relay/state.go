@@ -31,6 +31,9 @@ type RequestState struct {
 	Status     Status         `json:"status"`       // 请求当前状态。
 	StartedAt  time.Time      `json:"started_at"`   // 请求到达时间。
 	Duration   time.Duration  `json:"duration"`     // 请求总耗时, 未结束时为零。
+	// FirstTokenDuration 是首字耗时: 从请求到达到第一个字节写出客户端的时间, 含此前的选路与失败重试。
+	// 流式请求即首个事件写出的时刻, 非流式请求与总耗时相同; 未提交前为零。
+	FirstTokenDuration time.Duration `json:"first_token_duration"`
 	Model      string         `json:"model"`        // 客户端请求的模型名称, 即分组名称。
 	Protocol   model.Protocol `json:"protocol"`     // 客户端请求使用的协议, 由入站格式定出, 单个协议位而非掩码组合。
 	GroupID    int            `json:"group_id"`     // 承载本请求的分组 ID, 供界面按主键直接定位分组而不必按名称回查。
@@ -146,11 +149,15 @@ func (r *RequestState) wait(ctx context.Context, seconds int) bool {
 }
 
 // markCommitted 标记响应已提交; 流式响应在此之后仍会持续转发, 故必须先于提交动作调用。
+// 首字耗时在此定稿: 这是第一个字节写出客户端的时刻, 此前的重试与等待都算在客户端感受到的首字里。
 func (r *RequestState) markCommitted() {
 	mu.Lock()
 	defer mu.Unlock()
 
 	r.Status = StatusCommitted
+	if r.FirstTokenDuration == 0 {
+		r.FirstTokenDuration = time.Since(r.StartedAt)
+	}
 	publishRequestLocked(r)
 }
 
@@ -281,6 +288,9 @@ func usageMetrics(modelName string, usage *llm.Usage) model.StatsMetrics {
 		cachedTokens = usage.PromptTokensDetails.CachedTokens
 		writeCachedTokens = usage.PromptTokensDetails.WriteCachedTokens
 	}
+	// 缓存命中的部分是输入的子集, 一并计入统计, 界面据此算命中率。
+	metrics.CachedToken = cachedTokens
+	metrics.CacheWriteToken = writeCachedTokens
 	inputTokens := max(int64(0), usage.PromptTokens-cachedTokens-writeCachedTokens)
 	metrics.InputCost = (float64(inputTokens)*price.Input + float64(cachedTokens)*price.CacheRead + float64(writeCachedTokens)*price.CacheWrite) / 1_000_000
 	metrics.OutputCost = float64(usage.CompletionTokens) * price.Output / 1_000_000

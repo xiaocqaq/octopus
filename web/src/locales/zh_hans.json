@@ -101,6 +101,7 @@
             "requestStats": "请求统计",
             "totalStats": "全部统计",
             "inputStats": "输入统计",
+            "cacheRate": "缓存命中率",
             "outputStats": "输出统计",
             "requestCount": "请求次数",
             "timeConsumed": "消耗时间",
@@ -128,6 +129,7 @@
             "channel": "渠道",
             "model": "模型",
             "noData": "暂无排行数据",
+            "cacheRate": "缓存命中率",
             "successRate": "成功率"
         }
     },
@@ -320,6 +322,8 @@
             "cooling": "冷却 {seconds}s",
             "affinity": "亲和 {seconds}s",
             "pinned": "强制优先",
+            "rankUp": "连续成功，排名上升 {steps} 档",
+            "rankDown": "进入冷却，排名下降 {steps} 档",
             "modeToggleHint": "点击切换路由模式"
         },
         "detail": {
@@ -408,6 +412,9 @@
             "channelChanged": "渠道已切换",
             "channelCleared": "已取消渠道选择",
             "channelChangeFailed": "渠道切换失败",
+            "channelPinned": "已强制优先使用该渠道",
+            "pinCleared": "已取消强制优先",
+            "pinChangeFailed": "强制优先设置失败",
             "responseContent": "响应内容",
             "noRequestContent": "(无请求内容)",
             "noResponseContent": "(无响应内容)",
@@ -417,6 +424,8 @@
             "stopRound": "停止当前轮次",
             "stopFailed": "停止当前轮次失败",
             "waitingChannelSelection": "正在等待选择渠道",
+            "firstToken": "首字耗时",
+            "cacheRate": "缓存命中率",
             "waitingResponse": "正在等待上游响应",
             "responseStreaming": "上游已响应，流式传输正在进行"
         }

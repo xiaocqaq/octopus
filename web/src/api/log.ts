@@ -22,6 +22,9 @@ export interface RelayLogOverview {
     status: RequestState;
     started_at: string;
     duration: number;
+    // first_token_duration 是首字耗时（纳秒）：从请求到达到第一个字节写出客户端，含此前的选路与重试。
+    // 未提交前为零；非流式请求与 duration 相同。
+    first_token_duration: number;
     model: string;
     protocol: number;
     group_id: number;

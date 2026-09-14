@@ -213,6 +213,10 @@ func updateGroup(c *gin.Context) {
 	if oldGroup.Mode != group.Mode {
 		relay.ResetRouteState(id)
 	}
+	// 人工新指定强制成员时解除它的冷却: 指定即"现在就用它", 不该被残留的冷却挡住。
+	if req.PinnedItemID != nil && *req.PinnedItemID != 0 {
+		relay.ReleaseItemCooldown(id, *req.PinnedItemID)
+	}
 	response := groupResponse{Group: *group, Runtime: relay.RouteStateOf(*group)}
 	publishGroupEvent(groupEvent{Name: "changed", Data: response})
 	resp.Success(c, response)

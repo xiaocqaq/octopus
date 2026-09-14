@@ -1,11 +1,12 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Brain, Clock, Cpu, Database, DollarSign, KeyRound, Loader2, Square } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Brain, Clock, Cpu, Database, DollarSign, KeyRound, Loader2, Percent, Square, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import JsonView from '@uiw/react-json-view';
 import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
 import { githubLightTheme } from '@uiw/react-json-view/githubLight';
 import { useTheme } from '@/provider/theme';
 import { type RelayLogOverview, useLogRequestBody, useLogResponseBody, useStopRound } from '@/api/log';
+import { cacheRate } from '@/api/stats';
 import { useGroup, useUpdateGroup } from '@/api/group';
 import { Protocol } from '@/api/channel';
 import { getModelIcon } from '@/lib/model-icons';
@@ -82,28 +83,41 @@ function ReasoningBadge({ reasoning }: { reasoning?: string }) {
     );
 }
 
-// LogMetrics 渲染时间、API Key、耗时、费用和 Token 指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
+// LogMetrics 渲染时间、API Key、耗时、首字、费用、Token 与缓存率指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
 function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; now: number; brandColor: string; variant: 'card' | 'footer' }) {
+    const t = useTranslations('log.card');
     const cachedTokens = log.usage.prompt_tokens_details?.cached_tokens ?? 0;
     // 进行中的请求按共享时钟推算耗时, 结束后改用后端记录的最终耗时。
     const duration = log.status === 'running' || log.status === 'committed'
         ? formatMilliseconds(now - new Date(log.started_at).getTime())
         : formatMilliseconds(log.duration / 1_000_000);
+    // 首字耗时未提交前为零: 此刻还没有字节写给客户端, 显示占位而不是形似真实的 0ms。
+    const firstToken = log.first_token_duration > 0
+        ? formatMilliseconds(log.first_token_duration / 1_000_000)
+        : '--';
     const metrics = [
         { key: 'time', Icon: Clock, iconClassName: 'size-3.5 shrink-0', iconStyle: { color: brandColor } as CSSProperties, value: formatTime(log.started_at), valueClassName: 'tabular-nums', cellClassName: 'col-span-4 whitespace-nowrap md:col-span-1' },
         { key: 'apiKey', Icon: KeyRound, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: log.api_key_name || '-', valueClassName: 'truncate', cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'duration', Icon: Cpu, iconClassName: 'size-3.5 shrink-0 text-blue-500', value: duration, cellClassName: 'col-span-4 md:col-span-1' },
+        { key: 'firstToken', Icon: Zap, iconClassName: 'size-3.5 shrink-0 text-amber-500', value: firstToken, valueClassName: 'tabular-nums', cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'cost', Icon: DollarSign, iconClassName: 'size-3.5 shrink-0 text-emerald-500', value: log.cost.toFixed(6), valueClassName: 'font-medium text-emerald-600 dark:text-emerald-400', cellClassName: 'col-span-4 md:col-span-1' },
         { key: 'prompt', Icon: ArrowDownToLine, iconClassName: 'size-3.5 shrink-0 text-green-500', value: (log.usage.prompt_tokens - cachedTokens).toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
         { key: 'cached', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-cyan-500', value: cachedTokens.toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
+        { key: 'cacheRate', Icon: Percent, iconClassName: 'size-3.5 shrink-0 text-teal-500', value: `${cacheRate(log.usage.prompt_tokens, cachedTokens).toFixed(1)}%`, valueClassName: 'tabular-nums', cellClassName: 'col-span-3 md:col-span-1' },
         { key: 'completion', Icon: ArrowUpFromLine, iconClassName: 'size-3.5 shrink-0 text-purple-500', value: log.usage.completion_tokens.toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
         { key: 'cacheWrite', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: (log.usage.prompt_tokens_details?.write_cached_tokens ?? 0).toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
     ];
+    // 指标以图标示形, 只有光看图标说不清的三项补一个悬停标题; 其余是通用符号, 再挂标题只是噪音。
+    const titles: Record<string, string | undefined> = {
+        apiKey: log.api_key_name,
+        firstToken: t('firstToken'),
+        cacheRate: t('cacheRate'),
+    };
 
     return metrics.map((metric) => (
         <div
             key={metric.key}
-            title={metric.key === 'apiKey' ? log.api_key_name : undefined}
+            title={titles[metric.key]}
             className={cn('flex min-w-0 items-center gap-1.5', variant === 'card' && metric.cellClassName)}
         >
             <metric.Icon className={metric.iconClassName} style={metric.iconStyle} />
@@ -292,6 +306,12 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                 <div className="divide-y divide-border">
                                     {activeGroup.items.map((item) => {
                                         const { Icon: ItemIcon, className: itemIconClassName } = getModelIcon(item.model_name);
+                                        // 手动模式用 active_item_id 记住人工指定的成员, 故障转移模式用 pinned_item_id 强制优先。
+                                        // 两者都优先于配置优先级被选中, 因而"点一个成员"在两种模式下都能让它在下一轮上位。
+                                        const manual = activeGroup.mode === 'manual';
+                                        const isSelected = manual
+                                            ? activeGroup.runtime.current_item_id === item.id
+                                            : activeGroup.pinned_item_id === item.id;
                                         const itemCurrent = switchingItemId !== null
                                             ? item.id === switchingItemId
                                             : activeGroup.runtime.current_item_id === item.id;
@@ -300,19 +320,22 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                                 key={item.id}
                                                 type="button"
                                                 aria-pressed={itemCurrent}
-                                                disabled={activeGroup.mode === 'failover' || switchingItemId !== null || stopRound.isPending}
+                                                disabled={switchingItemId !== null || stopRound.isPending}
                                                 onClick={async () => {
-                                                    if (activeGroup.mode === 'failover') return;
                                                     setSwitchingItemId(item.id);
-                                                    const isCurrent = activeGroup.runtime.current_item_id === item.id;
                                                     try {
-                                                        await updateActiveItem.mutateAsync({ id: activeGroup.id, active_item_id: isCurrent ? 0 : item.id });
+                                                        await updateActiveItem.mutateAsync(manual
+                                                            ? { id: activeGroup.id, active_item_id: isSelected ? 0 : item.id }
+                                                            : { id: activeGroup.id, pinned_item_id: isSelected ? 0 : item.id });
+                                                        // 指定只在新一轮选路时才被读到, 请求正等在上游就先中止本轮让它立刻重选。
                                                         if (log.sending) {
                                                             await stopRound.mutateAsync({ requestId: log.id, round: log.round });
                                                         }
-                                                        toast.success(isCurrent ? t('channelCleared') : t('channelChanged'));
+                                                        toast.success(isSelected
+                                                            ? t(manual ? 'channelCleared' : 'pinCleared')
+                                                            : t(manual ? 'channelChanged' : 'channelPinned'));
                                                     } catch (cause) {
-                                                        toast.error(t('channelChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
+                                                        toast.error(t(manual ? 'channelChangeFailed' : 'pinChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
                                                     } finally {
                                                         setSwitchingItemId(null);
                                                     }
@@ -491,7 +514,7 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                                 {actualModel}
                             </span>
                         </div>
-                        <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-8">
+                        <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-10">
                             <LogMetrics log={log} now={now} brandColor={brandColor} variant="card" />
                         </div>
                         {requestFailed && errorText && (
