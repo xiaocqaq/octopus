@@ -169,6 +169,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 请求上游并等待首个有效响应: 非流式等待完整响应, 流式等待首个事件。
 			// 同协议渠道原样直通, 跨协议渠道经转换后请求; 此时尚未写给客户端, 失败仍可换目标重试。
 			var result *upstreamResponse
+			// 只有真正发起上游调用后返回的快速错误才可能是思维凭据问题。
+			// buildOutbound 失败属于本地配置/协议错误, 不应触发剥离重试。
+			upstreamAttempted := err == nil
 			if err == nil {
 				timeoutSeconds := group.RelayConfig.MemberNonStreamResponseTimeoutSeconds // 非流式等待完整响应, 流式分支改为首事件超时。
 				timeoutErr := errors.New("upstream non-stream response timeout")          // 具体错误用于区分超时与人工中止。
@@ -220,7 +223,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 凭据只有签发它的账号认, 换账号或换密钥都会被拒, 这是转发的锅不该记在成员头上。
 				// 不计失败也不等待, 也就不会把它推进冷却; 少了这一步, 坏凭据会让成员接连冷却, 整个分组停摆。
 				// 超时不在此列: 那说明账号本身没响应, 剥掉凭据也救不回来, 再试只是让客户端多等一个超时。
-				if !reasoningStripped && context.Cause(roundCtx) == nil {
+				if upstreamAttempted && !reasoningStripped && context.Cause(roundCtx) == nil {
 					if stripped, ok := stripSignedReasoning(raw.Body, requestProtocol); ok {
 						raw.Body = stripped
 						reasoningStripped = true
