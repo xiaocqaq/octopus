@@ -76,8 +76,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// 登记进程内请求状态, 返回的记录是后续全部状态写入和前端可视化推送的入口。
 		request := newRequestState(c.Request.Context(), metadata.Model, group.ID, requestProtocol, string(raw.Body), c.GetInt("api_key_id"))
 		ctx := c.Request.Context()
-		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
-		failures := 0     // 该成员包含首次请求的连续失败次数。
+		failedItemID := 0   // 当前累计连续失败次数的成员 ID。
+		failures := 0       // 该成员包含首次请求的连续失败次数。
+		previousItemID := 0 // 上一轮选中的成员 ID, 用于发现跨账号重发。
+		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
+		reasoningStripped := false
 
 		for {
 			if ctx.Err() != nil {
@@ -103,6 +106,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				continue
 			}
+
+			// 换成员即换上游账号: 上一轮带着的思维凭据对新账号无效, 留着只会换来一次必然的拒绝。
+			// 首次选中的成员不在此列——请求体里的凭据很可能正是它签发的, 一上来就剥掉会白丢思维连续性。
+			if previousItemID != 0 && previousItemID != item.ID {
+				raw.Body, _ = stripSignedReasoning(raw.Body, requestProtocol)
+			}
+			previousItemID = item.ID
 
 			// 成员指向的授权缺失, 凭据被停用或两侧已被删除时等待, 该成员可能很快被改回可用配置。
 			// ChannelGrantGet 一次校验齐这几种情况, 取到的授权必然可直接转发, 无需再逐项检查。
@@ -205,6 +215,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if context.Cause(roundCtx) == context.Canceled {
 					releaseRouteProbe(group, item.ID)
 					continue
+				}
+				// 上游快速报错(不是超时, 故上下文没有取消原因)时才值得剥掉思维凭据再试:
+				// 凭据只有签发它的账号认, 换账号或换密钥都会被拒, 这是转发的锅不该记在成员头上。
+				// 不计失败也不等待, 也就不会把它推进冷却; 少了这一步, 坏凭据会让成员接连冷却, 整个分组停摆。
+				// 超时不在此列: 那说明账号本身没响应, 剥掉凭据也救不回来, 再试只是让客户端多等一个超时。
+				if !reasoningStripped && context.Cause(roundCtx) == nil {
+					if stripped, ok := stripSignedReasoning(raw.Body, requestProtocol); ok {
+						raw.Body = stripped
+						reasoningStripped = true
+						continue
+					}
 				}
 				cancelRound()
 				// 本轮真实失败只计入当前渠道和成员, 客户端取消与人工中止不计为渠道故障。
