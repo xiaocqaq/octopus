@@ -68,31 +68,29 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const setActiveGroup = useGroupHoverStore((state) => state.setActiveGroup);
     const expanded = activeGroupID === group.id;
     const isDragging = useRef(false);
-    const collapseTimer = useRef(0); // 离开后的延迟收起计时器, 让鼠标短暂擦过卡片时不至于闪开闪关。
     const cardRef = useRef<HTMLElement>(null); // 浮层的定位基准: 与卡片外框严丝合缝地拼成同一张卡。
+    const overlayRef = useRef<HTMLElement>(null); // 浮层自身, 量真实高度用于上下方空间判断。
     // 指针是否分别停在卡片与浮层上。用两个标志而非计数: 浮层不在卡片的 DOM 子树里, 两者各自的
     // enter/leave 由 React 分别派发, 先后顺序不定, 靠"取消计时器"去对抗顺序会出现鼠标还在浮层上却折了。
     // 每次事件只改自己那个标志再从真实状态重算, 与顺序无关。
     const overCardRef = useRef(false);
     const overOverlayRef = useRef(false);
     // 浮层用 fixed 定位挂在屏外一份, 故需自己算出位置; null 表示尚未测量, 此时不渲染。
-    const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number } | null>(null);
+    const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number; side: 'below' | 'above' } | null>(null);
 
 
-    // syncHover 依据两个标志重算展开状态: 仍在任一热区内就展开自己, 都已离开才延迟收起。
-    // 展开写共享状态, 故指针移到另一张卡片时那边一置位, 这张就不再是 active, 立刻收起。
+    // syncHover 依据两个标志重算展开状态: 仍在任一热区就展开自己, 都已离开立刻收起。
+    // 鼠标从卡片挪到相切的浮层时, 两边的 leave/enter 在同一次鼠标移动里同步派发、同批更新,
+    // 落定前 enter 的置位会覆盖 leave 的清除, 不会闪断; 挪出整组则只等到收起。
+    // 展开写共享状态, 故指针移到另一张卡片时那边一置位, 这张就不再是 active, 同样立刻收起。
     const syncHover = useCallback(() => {
-        window.clearTimeout(collapseTimer.current);
         if (overCardRef.current || overOverlayRef.current) {
             setActiveGroup(group.id);
             return;
         }
-        collapseTimer.current = window.setTimeout(() => {
-            // 计时期间指针又回到任一热区, 或正在拖拽成员, 都不收起: 拖出列表范围时 mouseleave 会先触发, 收了拖拽就断了。
-            if (overCardRef.current || overOverlayRef.current || isDragging.current) return;
-            // 只清自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
-            if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
-        }, 1000);
+        // 拖出列表范围时 mouseleave 会先触发, 收了拖拽就断了, 故拖拽期间不收起。
+        // 只清自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
+        if (!isDragging.current && useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
     }, [group.id, setActiveGroup]);
 
     const handleCardEnter = useCallback(() => { overCardRef.current = true; syncHover(); }, [syncHover]);
@@ -100,18 +98,38 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const handleOverlayEnter = useCallback(() => { overOverlayRef.current = true; syncHover(); }, [syncHover]);
     const handleOverlayLeave = useCallback(() => { overOverlayRef.current = false; syncHover(); }, [syncHover]);
 
-    // 浮层收起后清掉它的悬停标志: 卸载不会补发 leave, 留着会让下一次悬停永远等不到"两个都离开"。
+    // 浮层收起后清掉它的悬停标志并复位生长方向: 卸载不会补发 leave, 留着会让下一次悬停永远等不到"两个都离开";
+    // 方向不复位的话, 上一张在底部翻过向上的卡片会带着 above 直接盖住自己的头部。
+    // 位置一并清空: 收起期间卡片可能被滚走, 下次展开要重新量过再出现, 不吃上一次的旧坐标。
     useLayoutEffect(() => {
-        if (!expanded) overOverlayRef.current = false;
+        if (!expanded) {
+            overOverlayRef.current = false;
+            overlaySideRef.current = 'below';
+            setOverlayRect(null);
+        }
     }, [expanded]);
 
-    // 浮层贴在卡片外框正下方, 左右与宽度照抄卡片外框: 两侧边框与圆角由此接得上, 视觉上是同一张卡在向下生长。
-    // 不做贴底钳制: 浮层随滚动重新贴合, 靠近视口底部时滚动即可看到, 强行上移反而会与卡片错位露出接缝。
+    // 浮层默认贴在卡片外框正下方, 左右与宽度照抄卡片外框: 两侧边框与圆角由此接得上, 视觉上是同一张卡在向下生长。
+    // 下方空间放不下整份成员列表时翻到卡片上方生长: 贴底的卡片被裁是看不见的, 宁可向上也不能遮住成员。
+    // 翻转判断带滞回: 两个方向都装得下时维持现状, 否则"上方放不下"的浮层翻上去后量自身又触发翻回, 两态来回抖动。
+    const overlaySideRef = useRef<'below' | 'above'>('below');
     const updateOverlayRect = useCallback(() => {
         const card = cardRef.current;
         if (!card) return;
         const rect = card.getBoundingClientRect();
-        setOverlayRect({ top: rect.bottom, left: rect.left, width: rect.width });
+        const height = overlayRef.current?.offsetHeight ?? 0;
+        const gap = 16; // 视口上下边缘各留的呼吸位, 与弹窗的 2rem 习惯一致取半。
+        if (height > 0) {
+            const fitsBelow = rect.bottom + height + gap <= window.innerHeight;
+            const fitsAbove = rect.top - height - gap >= 0;
+            if (overlaySideRef.current === 'below' ? !fitsBelow && fitsAbove : !fitsAbove && fitsBelow) {
+                overlaySideRef.current = overlaySideRef.current === 'below' ? 'above' : 'below';
+            }
+        }
+        const measured = overlayRef.current?.offsetHeight || 0;
+        setOverlayRect(overlaySideRef.current === 'below'
+            ? { top: rect.bottom, left: rect.left, width: rect.width, side: 'below' }
+            : { top: rect.top - measured, left: rect.left, width: rect.width, side: 'above' });
     }, []);
 
     // 浮层随卡片滚动/窗口缩放重新贴合; scroll 不冒泡, 故用捕获阶段接住内层滚动容器的滚动。
@@ -136,11 +154,6 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         };
     }, [expanded, updateOverlayRect]);
 
-    useEffect(() => () => window.clearTimeout(collapseTimer.current), []);
-
-    // 卡片卸载时归还共享的展开态。展开态是模块级的, 不随组件卸载复位, 而卸载时也补不上 mouseleave:
-    // 切走页面再切回, 或卡片被虚拟列表移出渲染范围, 残留的 id 会让卡片凭空呈展开态且再也收不起来。
-    // 只清自己这一次, 免得误清别的卡片刚设上的展开。
     useEffect(() => () => {
         if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
     }, [group.id, setActiveGroup]);
@@ -247,11 +260,13 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             ref={cardRef}
             onMouseEnter={handleCardEnter}
             onMouseLeave={handleCardLeave}
-            // 展开时去掉底边框与下方圆角: 浮层接着这一处往下长, 两段拼起来才是原版那张完整的卡。
+            // 展开时按浮层生长方向去掉相切一侧的边框与圆角: 浮层接着那一处生长, 两段拼起来才是原版那张完整的卡。
             className={cn(
                 'flex flex-col border-border bg-card text-card-foreground',
                 expanded
-                    ? 'rounded-t-3xl border-x border-t px-4 pt-4'
+                    ? overlayRect?.side === 'above'
+                        ? 'rounded-b-3xl border-x border-b px-4 pb-4'
+                        : 'rounded-t-3xl border-x border-t px-4 pt-4'
                     : 'rounded-3xl border p-4',
             )}
         >
@@ -344,17 +359,24 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
 
         {/* 成员浮层挂在 body 上, 而不是留在卡片内: VirtualizedGrid 的行带 transform, 会为每行建立层叠上下文,
             卡片内的任何 z-index 都被困在自己那一行里, 压不住后面渲染的行。挂到 body 才真正盖得住下方卡片。
-            浮层与卡片无缝拼成同一张卡: 顶部方角无上边框, 接着卡片的去底边版本往下长, 左右边框与宽度照抄卡片外框,
-            底部收成与卡片相同的圆角。高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。
+            浮层与卡片无缝拼成同一张卡: 默认向下生长时顶部方角无上边框, 接着卡片的去底边版本往下长;
+            翻到上方生长时镜像处理, 底部方角无下边框, 卡片改为去顶边。左右边框与宽度照抄卡片外框。
+            高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。
             层级取 z-40: 高于网格行, 低于拖拽克隆体(5000)与弹窗(z-50), 拖拽和弹窗都不会被它挡住。 */}
         {expanded && overlayRect && createPortal(
             <section
+                ref={overlayRef}
                 // 浮层不在卡片的 DOM 子树里, 故需自己维系悬停: 两条热区各记各的标志, 指针停在任一处都保持展开。
                 onMouseEnter={handleOverlayEnter}
                 onMouseLeave={handleOverlayLeave}
                 // 外层给不透明实底: bg-muted/30 只有 30% 不透明度, 直接当最外层背景会让下方卡片整个透出来,
                 // 它必须像原版那样铺在卡片实底之上, 故退到内层面板。
-                className="fixed z-40 rounded-b-3xl border-x border-b border-border bg-card text-card-foreground px-4 pb-4 pt-3"
+                className={cn(
+                    'fixed z-40 border-border bg-card text-card-foreground',
+                    overlayRect.side === 'below'
+                        ? 'rounded-b-3xl border-x border-b px-4 pb-4 pt-3'
+                        : 'rounded-t-3xl border-x border-t px-4 pb-3 pt-4',
+                )}
                 style={{ top: overlayRect.top, left: overlayRect.left, width: overlayRect.width }}
             >
                 <div className="h-101 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
