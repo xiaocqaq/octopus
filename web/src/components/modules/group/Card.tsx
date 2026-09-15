@@ -62,8 +62,9 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [members, setMembers] = useState<SelectedMember[]>([]);
-    // 成员区默认收起, 悬停即展开: 展开态由全页面共享, 同一时间只有一张卡片展开,
-    // 指针移到另一张分组上时上一张立刻收起, 不靠各自计时。
+    // 成员区默认收起, 悬停展开: 展开态由全页面共享, 同一时间只有一张卡片展开。
+    // 展开/收起各有 100ms 延迟(见 syncHover), 划过一排分组时不连环闪;
+    // 而"移到另一张分组"这条路径由共享状态直接接管(那边一置位, 这张就不再是 active), 切换依旧利落。
     const activeGroupID = useGroupHoverStore((state) => state.activeGroupID);
     const setActiveGroup = useGroupHoverStore((state) => state.setActiveGroup);
     const expanded = activeGroupID === group.id;
@@ -79,18 +80,35 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number; side: 'below' | 'above' } | null>(null);
 
 
-    // syncHover 依据两个标志重算展开状态: 仍在任一热区就展开自己, 都已离开立刻收起。
-    // 鼠标从卡片挪到相切的浮层时, 两边的 leave/enter 在同一次鼠标移动里同步派发、同批更新,
-    // 落定前 enter 的置位会覆盖 leave 的清除, 不会闪断; 挪出整组则只等到收起。
-    // 展开写共享状态, 故指针移到另一张卡片时那边一置位, 这张就不再是 active, 同样立刻收起。
+    // syncHover 依据两个标志调度展开/收起, 两个方向各有 100ms 防抖: 快速划过一排分组时不连环闪层。
+    // 唯一的例外: 已有分组正展开时"换一张"立即生效——共享状态一置位, 旧的自动收起, 卡片间切换不吃延迟。
+    // 鼠标从卡片挪到相切的浮层时, 两边的 leave/enter 在同一次鼠标移动里同步派发, 后到的 enter 会取消
+    // 前脚刚挂上的收起计时, 不会闪断; 拖拽成员期间不收起(拖出列表范围时 mouseleave 会先触发)。
+    // 定时器只有一份且先到先得地互相取消: 同一张卡片上"进-出-进"永远以最后的事件为准。
+    const hoverTimer = useRef<number | null>(null);
     const syncHover = useCallback(() => {
-        if (overCardRef.current || overOverlayRef.current) {
-            setActiveGroup(group.id);
+        const hovered = overCardRef.current || overOverlayRef.current;
+        if (hoverTimer.current !== null) {
+            window.clearTimeout(hoverTimer.current);
+            hoverTimer.current = null;
+        }
+        if (hovered) {
+            if (useGroupHoverStore.getState().activeGroupID !== null) {
+                setActiveGroup(group.id);
+                return;
+            }
+            hoverTimer.current = window.setTimeout(() => {
+                hoverTimer.current = null;
+                setActiveGroup(group.id);
+            }, 100);
             return;
         }
-        // 拖出列表范围时 mouseleave 会先触发, 收了拖拽就断了, 故拖拽期间不收起。
-        // 只清自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
-        if (!isDragging.current && useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
+        if (isDragging.current) return;
+        hoverTimer.current = window.setTimeout(() => {
+            hoverTimer.current = null;
+            // 只收自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
+            if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
+        }, 100);
     }, [group.id, setActiveGroup]);
 
     const handleCardEnter = useCallback(() => { overCardRef.current = true; syncHover(); }, [syncHover]);
