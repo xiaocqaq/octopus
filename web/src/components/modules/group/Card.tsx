@@ -291,12 +291,12 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             onMouseLeave={handleCardLeave}
             // 展开时把相切一侧边框设为透明并调整圆角: 浮层接着那一处生长, 同时保留卡片原有尺寸避免网格重排。
             className={cn(
-                'flex flex-col rounded-3xl border border-border bg-card p-4 text-card-foreground',
+                'flex flex-col border border-border bg-card p-4 text-card-foreground',
                 expanded
                     ? overlayRect?.side === 'above'
                         ? 'rounded-b-3xl border-t-transparent'
                         : 'rounded-t-3xl border-b-transparent'
-                    : undefined,
+                    : 'rounded-3xl',
             )}
         >
             <header className={cn(
