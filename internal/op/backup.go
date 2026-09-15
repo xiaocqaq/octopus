@@ -106,7 +106,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		for _, channel := range dump.Channels {
 			if err := tx.Model(&model.Channel{}).
 				Where("id = ?", channel.ID).
-				Select("input_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
+				Select("input_token", "cached_token", "cache_write_token", "output_token", "input_cost", "output_cost", "wait_time", "request_success", "request_failed").
 				Updates(&channel).Error; err != nil {
 				return fmt.Errorf("import channel stats: %w", err)
 			}
