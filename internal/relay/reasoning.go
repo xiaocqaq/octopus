@@ -3,9 +3,36 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
+
+// shouldStripReasoning 只在上游错误明确指向思维凭据时重试清洗。
+// 任意快速错误都清洗会把限流、参数错误等无关故障误当成凭据问题，导致下一轮请求丢上下文。
+func shouldStripReasoning(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if containsAny(message, "encrypted_content", "previous_response_id", "signature") {
+		return true
+	}
+	rejected := containsAny(message, "invalid", "not found", "unknown", "expired", "verify", "decrypt", "mismatch", "does not exist", "not accessible", "does not belong")
+	if strings.Contains(message, "conversation") {
+		return rejected
+	}
+	return strings.Contains(message, "reasoning") && !strings.Contains(message, "reasoning effort") && rejected
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
 
 // stripSignedReasoning 去掉请求体里绑定到上游账号的思维内容, 返回改写后的请求体与是否真的改过。
 //

@@ -222,6 +222,8 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	if route == nil {
 		return false
 	}
+	// 任意真实失败都会打断连续成功; 是否进入冷却仍由本请求内的失败次数决定。
+	route.successes[itemID] = 0
 	// 探测请求只有一次机会, 常规成员达到配置的总尝试次数后进入冷却。
 	if route.ProbeItemID != itemID && failures < group.RelayConfig.MemberMaxAttempts {
 		return false
@@ -231,7 +233,6 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	route.Cooldowns[itemID] = now + int64(group.RelayConfig.MemberCooldownSeconds)*1000
 	// 需要冷却说明该成员已经连续失败到不值得再用, 顺手降一档: 冷却到期后它会带着这一档偏移重新排队,
 	// 排到原本不如它的成员之后; 探针成功与后续的连续成功再把它抬回来。
-	route.successes[itemID] = 0
 	if route.Scores[itemID] > -routeScoreMax {
 		route.Scores[itemID]--
 	}

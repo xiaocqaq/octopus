@@ -76,8 +76,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// 登记进程内请求状态, 返回的记录是后续全部状态写入和前端可视化推送的入口。
 		request := newRequestState(c.Request.Context(), metadata.Model, group.ID, requestProtocol, string(raw.Body), c.GetInt("api_key_id"))
 		ctx := c.Request.Context()
-		failedItemID := 0   // 当前累计连续失败次数的成员 ID。
-		failures := 0       // 该成员包含首次请求的连续失败次数。
+		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
+		failures := 0     // 该成员包含首次请求的连续失败次数。
 		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
 		reasoningStripped := false
 
@@ -226,7 +226,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 超时不在此列: 那说明账号本身没响应, 剥掉凭据也救不回来, 再试只是让客户端多等一个超时。
 				// 开启思维凭据过滤的渠道按可移植标准一次清净(记录 id, 服务端引用, store):
 				// 它的账号随时在换, 只剥凭据救不回这些字段引来的后续报错。
-				if upstreamAttempted && !reasoningStripped && context.Cause(roundCtx) == nil {
+				if upstreamAttempted && !reasoningStripped && context.Cause(roundCtx) == nil && shouldStripReasoning(err) {
 					scrub := stripSignedReasoning
 					if channel.ReasoningFilter {
 						scrub = scrubSignedReasoning
@@ -266,8 +266,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 记录本轮已经取得可提交的上游响应。
 			request.finishRound("")
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
-			// 上游成功后解除该成员的冷却与探测占用, 并按路由配置开始亲和。
-			recordRouteSuccess(group, item.ID)
 			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
 			for key, values := range result.header {
 				c.Writer.Header()[key] = values
@@ -286,6 +284,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				_ = op.ChannelStatsUpdate(channel.ID, metrics)
 				_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
 				_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
+				recordRouteSuccess(group, item.ID)
 				request.markCommitted()
 				n, err := c.Writer.Write(result.body)
 				if err == nil && n != len(result.body) {
@@ -302,7 +301,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.markSucceeded(string(result.body), result.usage)
 				return
 			}
-
 			// 首帧提交后仍需逐个事件判断协议终态: 上游发出结束事件后未必立即关闭响应体, 继续读取会一直阻塞到
 			// 客户端断开, 从而把已完整交付的响应误判为 context canceled。
 			if c.Writer.Header().Get("Content-Type") == "" {
@@ -313,6 +311,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			event := result.first
 			last := result.last // 已转发的最后一个事件是否已按客户端协议结束整个响应流。
 			committed := false
+			streamFailure := false
 			for {
 				if event != nil {
 					chunks = append(chunks, event)
@@ -340,11 +339,18 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				if !result.events.Next() {
 					err = result.events.Err()
+					if err == nil {
+						err = errors.New("upstream stream ended before terminal event")
+					}
+					streamFailure = true
 					break
 				}
 				event = result.events.Current()
 				// 已提交的响应不能再换目标重试, 结束事件自身携带的失败原样转发给客户端, 并在转发后作为本请求终态。
 				last, err = inspectStreamEvent(format, event)
+				if err != nil {
+					streamFailure = true
+				}
 			}
 			result.events.Close()
 			// 事件流已读完, 渠道专用代理的独占连接池到此归还。
@@ -369,6 +375,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
 			_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
 			if err != nil {
+				if streamFailure && ctx.Err() == nil {
+					// 流已提交后不能在本请求内重试, 异常终态直接让该成员进入冷却, 供下一请求切换。
+					recordRouteFailure(group, item.ID, group.RelayConfig.MemberMaxAttempts)
+				}
 				if ctx.Err() != nil {
 					request.markCanceled(ctx.Err(), string(responseBody), result.usage)
 				} else {
@@ -376,6 +386,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				return
 			}
+			// 流式响应只有完整收到正常终态后才算成员成功; 首帧成功不代表本轮成功。
+			recordRouteSuccess(group, item.ID)
 			request.markSucceeded(string(responseBody), result.usage)
 			return
 		}

@@ -48,6 +48,27 @@ func TestSuccessStreakPromotesItem(t *testing.T) {
 	}
 }
 
+// TestFailureBreaksSuccessStreak 一次真实失败即使尚未触发冷却, 也必须打断连续成功。
+func TestFailureBreaksSuccessStreak(t *testing.T) {
+	resetRoutes()
+	group := failoverGroup(0)
+	pickGroupItem(group)
+
+	for range routeSuccessStreak - 1 {
+		recordRouteSuccess(group, 3)
+	}
+	recordRouteFailure(group, 3, 1)
+	recordRouteSuccess(group, 3)
+
+	routeMu.Lock()
+	score := routes[900].Scores[3]
+	successes := routes[900].successes[3]
+	routeMu.Unlock()
+	if score != 0 || successes != 1 {
+		t.Fatalf("失败后成功应重新从 1 累计, 却得到健康分 %d、连续成功 %d", score, successes)
+	}
+}
+
 // TestFailuresKeepScoreInRange 反复进入冷却不应让健康分越过下限。
 func TestFailuresKeepScoreInRange(t *testing.T) {
 	resetRoutes()

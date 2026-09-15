@@ -76,7 +76,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 每次事件只改自己那个标志再从真实状态重算, 与顺序无关。
     const overCardRef = useRef(false);
     const overOverlayRef = useRef(false);
-    // 浮层用 fixed 定位挂在屏外一份, 故需自己算出位置; null 表示尚未测量, 此时不渲染。
+    // 浮层用 fixed 定位挂在屏外一份, 故需自己算出位置; null 表示尚未测量, 此时隐藏且不接收指针。
     const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number; side: 'below' | 'above' } | null>(null);
 
 
@@ -147,10 +147,15 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 overlaySideRef.current = overlaySideRef.current === 'below' ? 'above' : 'below';
             }
         }
-        const measured = overlayRef.current?.offsetHeight || 0;
-        setOverlayRect(overlaySideRef.current === 'below'
+        const nextRect: { top: number; left: number; width: number; side: 'below' | 'above' } = overlaySideRef.current === 'below'
             ? { top: rect.bottom, left: rect.left, width: rect.width, side: 'below' }
-            : { top: rect.top - measured, left: rect.left, width: rect.width, side: 'above' });
+            : { top: rect.top - height, left: rect.left, width: rect.width, side: 'above' };
+        setOverlayRect((previous) => (
+            previous && previous.top === nextRect.top && previous.left === nextRect.left
+                && previous.width === nextRect.width && previous.side === nextRect.side
+                ? previous
+                : nextRect
+        ));
     }, []);
 
     // 浮层随卡片滚动/窗口缩放重新贴合; scroll 不冒泡, 故用捕获阶段接住内层滚动容器的滚动。
@@ -284,19 +289,19 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             ref={cardRef}
             onMouseEnter={handleCardEnter}
             onMouseLeave={handleCardLeave}
-            // 展开时按浮层生长方向去掉相切一侧的边框与圆角: 浮层接着那一处生长, 两段拼起来才是原版那张完整的卡。
+            // 展开时把相切一侧边框设为透明并调整圆角: 浮层接着那一处生长, 同时保留卡片原有尺寸避免网格重排。
             className={cn(
-                'flex flex-col border-border bg-card text-card-foreground',
+                'flex flex-col rounded-3xl border border-border bg-card p-4 text-card-foreground',
                 expanded
                     ? overlayRect?.side === 'above'
-                        ? 'rounded-b-3xl border-x border-b px-4 pb-4'
-                        : 'rounded-t-3xl border-x border-t px-4 pt-4'
-                    : 'rounded-3xl border p-4',
+                        ? 'rounded-b-3xl border-t-transparent'
+                        : 'rounded-t-3xl border-b-transparent'
+                    : undefined,
             )}
         >
             <header className={cn(
                 'flex items-start justify-between relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1',
-                !expanded && 'mb-3',
+                'mb-3',
             )}>
                 <div className="relative flex-1 mr-2 min-w-0 group/title">
                     <Tooltip>
@@ -387,7 +392,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             翻到上方生长时镜像处理, 底部方角无下边框, 卡片改为去顶边。左右边框与宽度照抄卡片外框。
             高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。
             层级取 z-40: 高于网格行, 低于拖拽克隆体(5000)与弹窗(z-50), 拖拽和弹窗都不会被它挡住。 */}
-        {expanded && overlayRect && createPortal(
+        {expanded && createPortal(
             <section
                 ref={overlayRef}
                 // 浮层不在卡片的 DOM 子树里, 故需自己维系悬停: 两条热区各记各的标志, 指针停在任一处都保持展开。
@@ -397,11 +402,17 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 // 它必须像原版那样铺在卡片实底之上, 故退到内层面板。
                 className={cn(
                     'fixed z-40 border-border bg-card text-card-foreground',
-                    overlayRect.side === 'below'
+                    (overlayRect?.side ?? 'below') === 'below'
                         ? 'rounded-b-3xl border-x border-b px-4 pb-4 pt-3'
                         : 'rounded-t-3xl border-x border-t px-4 pb-3 pt-4',
                 )}
-                style={{ top: overlayRect.top, left: overlayRect.left, width: overlayRect.width }}
+                style={{
+                    top: overlayRect?.top ?? 0,
+                    left: overlayRect?.left ?? 0,
+                    width: overlayRect?.width ?? 0,
+                    visibility: overlayRect ? 'visible' : 'hidden',
+                    pointerEvents: overlayRect ? 'auto' : 'none',
+                }}
             >
                 <div className="h-101 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
                     <MemberList

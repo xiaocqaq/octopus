@@ -3,10 +3,36 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
+
+func TestShouldStripReasoningOnlyForCredentialErrors(t *testing.T) {
+	for _, err := range []error{
+		errors.New("responses stream error"),
+		errors.New("rate limit exceeded"),
+		errors.New("invalid parameter: temperature"),
+		errors.New("conversation is too long"),
+		errors.New("reasoning effort is not supported"),
+	} {
+		if shouldStripReasoning(err) {
+			t.Errorf("普通上游错误不应触发思维链剥离: %v", err)
+		}
+	}
+	for _, err := range []error{
+		errors.New("invalid reasoning encrypted_content"),
+		errors.New("previous_response_id is invalid"),
+		errors.New("signature verification failed"),
+		errors.New("conversation not found"),
+		errors.New("reasoning item does not belong to this account"),
+	} {
+		if !shouldStripReasoning(err) {
+			t.Errorf("思维凭据错误应触发一次清洗: %v", err)
+		}
+	}
+}
 
 // responsesBody 构造一个带 reasoning 项的 Responses 请求体。
 func responsesBody() []byte {
