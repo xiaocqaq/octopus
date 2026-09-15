@@ -24,8 +24,12 @@ func migrateChannelToSingleURLAndKey(db *gorm.DB) error {
 	if !db.Migrator().HasTable("channels") {
 		return nil
 	}
+	// 本迁移针对旧架构(渠道行自带 base_url 与 key 两列)。新库的 channels 表没有 key 列
+	// (凭据在 channel_keys 表), 旧架构要么早已收敛完毕, 要么根本不存在, 两种情况都无事可做。
+	// 此前这里把缺列当作错误抛出, 全新 MySQL/Postgres 安装会在 AutoMigrate 建出无 key 列的表后直接卡死;
+	// SQLite 只是侥幸: 驱动按建表语句模糊匹配, PRIMARY KEY 里的 key 让它误判为存在。
 	if !db.Migrator().HasColumn("channels", "base_url") || !db.Migrator().HasColumn("channels", "key") {
-		return fmt.Errorf("channels.base_url or channels.key not found")
+		return nil
 	}
 
 	if db.Migrator().HasColumn("channels", "base_urls") {
