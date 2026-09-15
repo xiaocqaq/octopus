@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,6 +18,11 @@ import (
 
 var statsDailyCache model.StatsDaily
 var statsDailyCacheLock sync.RWMutex
+
+// statsDailyPending 暂存跨日时未能落库的旧一天统计, 键为日期。
+// 跨日不该在请求路径上同步写库: 调用方可能正持有其他锁, 慢库会把整条链路堵住。
+// 因此翻转只把旧一天挪进这张表, 由周期落库统一写出; 任一行失败都放回原表, 下个周期重试, 直到成功才不丢。
+var statsDailyPending = make(map[string]model.StatsDaily)
 
 var statsTotalCache model.StatsTotal
 var statsTotalCacheLock sync.RWMutex
@@ -68,6 +74,11 @@ func StatsSaveDBTask() {
 }
 
 func StatsSaveDB(ctx context.Context) error {
+	// 跨日遗留的旧一天先写。失败则本轮整体留待下个周期: 待写表在失败时已自行放回, 不会丢。
+	if err := persistStatsDailyPending(ctx, drainStatsDailyPending()); err != nil {
+		return err
+	}
+
 	statsTotalCacheLock.RLock()
 	totalSnap := statsTotalCache
 	statsTotalCacheLock.RUnlock()
@@ -296,34 +307,6 @@ func persistStatsSnapshots(
 	return nil
 }
 
-func statsSaveDBWithDailyOverride(ctx context.Context, dailyOverride model.StatsDaily) error {
-	statsTotalCacheLock.RLock()
-	totalSnap := statsTotalCache
-	statsTotalCacheLock.RUnlock()
-	if totalSnap.ID == 0 {
-		totalSnap.ID = 1
-	}
-
-	statsHourlyCacheLock.RLock()
-	hourlyAll := statsHourlyCache
-	statsHourlyCacheLock.RUnlock()
-
-	channelIDs := drainDirtySet(&channelStatsNeedUpdateLock, channelStatsNeedUpdate)
-	modelIDs := drainDirtySet(&channelModelStatsNeedUpdateLock, channelModelStatsNeedUpdate)
-	keyIDs := drainDirtySet(&channelKeyStatsNeedUpdateLock, channelKeyStatsNeedUpdate)
-	apiKeyIDs := drainDirtySet(&statsAPIKeyCacheNeedUpdateLock, statsAPIKeyCacheNeedUpdate)
-
-	if err := persistStatsSnapshots(ctx, totalSnap, dailyOverride, hourlyAll, channelIDs, modelIDs, keyIDs, apiKeyIDs); err != nil {
-		restoreStatsDirty(channelIDs, modelIDs, keyIDs, apiKeyIDs)
-		return err
-	}
-	// 跨日时一并落库按日明细: 昨日的条目此后不再累加, 不落库就会在下次 drain 时被当作过期条目丢掉。
-	if err := persistDailyDetails(ctx); err != nil {
-		return err
-	}
-	return nil
-}
-
 // StatsChannelDailyRange 返回 since 当天及其之后各渠道与渠道模型的按日统计合计, since 为 20060102 格式。
 // 两个返回值分别按渠道主键与渠道模型主键索引。
 // 缓存与库内数据合并给出: 缓存里存的是该天的累计值而非增量, 同一 (主体, 日期) 在两侧都有时以缓存为准,
@@ -391,7 +374,8 @@ func snapshotDailyCache(lock *sync.Mutex, values map[dailyKey]model.StatsMetrics
 	return snapshot
 }
 
-func StatsDailyUpdate(ctx context.Context, metrics model.StatsMetrics) error {
+// StatsDailyUpdate 把一次用量累加到当日统计缓存。纯内存操作: 跨日只翻转缓存, 旧一天留给周期落库。
+func StatsDailyUpdate(metrics model.StatsMetrics) error {
 	today := time.Now().Format("20060102")
 
 	statsDailyCacheLock.Lock()
@@ -401,12 +385,58 @@ func StatsDailyUpdate(ctx context.Context, metrics model.StatsMetrics) error {
 		return nil
 	}
 
+	// 跨日翻转只做内存交接: 旧一天放进待写表, 新一天就地开账, 全程不碰数据库。
+	// 此前这里会同步落库, 而调用方(请求定稿)可能正持有全局锁, 慢库或无超时的写入会把全部转发堵住。
 	prevDaily := statsDailyCache
 	statsDailyCache = model.StatsDaily{Date: today}
 	statsDailyCache.StatsMetrics.Add(metrics)
+	if prevDaily.Date != "" {
+		statsDailyPending[prevDaily.Date] = prevDaily
+	}
 	statsDailyCacheLock.Unlock()
+	return nil
+}
 
-	return statsSaveDBWithDailyOverride(ctx, prevDaily)
+// drainStatsDailyPending 取出全部跨日待写的旧一天统计并按日期定序, 供本轮落库统一写出。
+func drainStatsDailyPending() []model.StatsDaily {
+	statsDailyCacheLock.Lock()
+	defer statsDailyCacheLock.Unlock()
+
+	if len(statsDailyPending) == 0 {
+		return nil
+	}
+	rows := make([]model.StatsDaily, 0, len(statsDailyPending))
+	for _, row := range statsDailyPending {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Date < rows[j].Date })
+	clear(statsDailyPending)
+	return rows
+}
+
+// restoreStatsDailyPending 把未能落库的旧一天放回待写表, 下个周期重试。
+// 已不存在的日期才会补回: 若期间同一天被重新放入(理论上的时钟回拨), 以更新的值为准。
+func restoreStatsDailyPending(rows []model.StatsDaily) {
+	statsDailyCacheLock.Lock()
+	defer statsDailyCacheLock.Unlock()
+	for _, row := range rows {
+		if _, exists := statsDailyPending[row.Date]; !exists {
+			statsDailyPending[row.Date] = row
+		}
+	}
+}
+
+// persistStatsDailyPending 落库跨日待写的旧一天统计。
+// 按日期整行覆盖, 重复写出不会重复计数; 失败时把剩余的行放回待写表再上报, 由此一个都没丢。
+func persistStatsDailyPending(ctx context.Context, rows []model.StatsDaily) error {
+	dbConn := db.GetDB().WithContext(ctx)
+	for i := range rows {
+		if err := dbConn.Save(&rows[i]).Error; err != nil {
+			restoreStatsDailyPending(rows[i:])
+			return err
+		}
+	}
+	return nil
 }
 
 func StatsTotalUpdate(metrics model.StatsMetrics) error {

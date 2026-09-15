@@ -216,7 +216,7 @@ func (r *RequestState) finishLocked(usage *llm.Usage) {
 	}
 	_ = op.StatsTotalUpdate(metrics)
 	_ = op.StatsHourlyUpdate(metrics)
-	_ = op.StatsDailyUpdate(context.Background(), metrics)
+	_ = op.StatsDailyUpdate(metrics)
 	if r.apiKeyID > 0 {
 		_ = op.StatsAPIKeyUpdate(r.apiKeyID, metrics)
 	}
