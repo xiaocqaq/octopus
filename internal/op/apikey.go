@@ -68,22 +68,30 @@ func APIKeyGetByAPIKey(apiKey string, ctx context.Context) (model.APIKey, error)
 	return APIKeyGet(id, ctx)
 }
 
+// APIKeyDelete 删除指定 API Key。先从缓存取回密钥字符串: 删除要连"字符串→ID"的索引一起清掉,
+// 漏了它, 已撤销的旧密钥在导入按原 ID 插回新 Key 后会以新 Key 的身份继续通过鉴权。
+// 统计在库内删除成功后才动: 数据库出错时整个操作视为未发生, 不会出现 Key 还在、统计先没的半删状态。
 func APIKeyDelete(id int, ctx context.Context) error {
+	existing, ok := apiKeyCache.Get(id)
+	if !ok {
+		return fmt.Errorf("API key not found")
+	}
 	k := model.APIKey{
 		ID: id,
+	}
+	result := db.GetDB().WithContext(ctx).Delete(&k)
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete API key: %w", result.Error)
+	}
+	// GORM 出错时 RowsAffected 也为 0, 故错误必须先于行数判断, 否则瞬时故障会被误报成不存在。
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("API key not found")
 	}
 	if err := StatsAPIKeyDel(id); err != nil {
 		return fmt.Errorf("failed to delete stats API key: %v", err)
 	}
-	result := db.GetDB().WithContext(ctx).Delete(&k)
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("API key not found")
-	}
-	if result.Error != nil {
-		return fmt.Errorf("failed to delete API key: %w", result.Error)
-	}
-	apiKeyCache.Del(k.ID)
-	apiKeyIDMap.Del(k.APIKey)
+	apiKeyCache.Del(id)
+	apiKeyIDMap.Del(existing.APIKey)
 	return nil
 }
 
@@ -92,6 +100,9 @@ func apiKeyRefreshCache(ctx context.Context) error {
 	if err := db.GetDB().WithContext(ctx).Find(&apiKeys).Error; err != nil {
 		return err
 	}
+	// 先清再灌: 导入后的刷新若不删旧映射, 库里已不存在的密钥字符串会带着旧 ID 留在索引里。
+	apiKeyCache.Clear()
+	apiKeyIDMap.Clear()
 	for _, apiKey := range apiKeys {
 		apiKeyCache.Set(apiKey.ID, apiKey)
 		apiKeyIDMap.Set(apiKey.APIKey, apiKey.ID)
