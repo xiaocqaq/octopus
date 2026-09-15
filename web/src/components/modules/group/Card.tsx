@@ -86,12 +86,15 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 前脚刚挂上的收起计时, 不会闪断; 拖拽成员期间不收起(拖出列表范围时 mouseleave 会先触发)。
     // 定时器只有一份且先到先得地互相取消: 同一张卡片上"进-出-进"永远以最后的事件为准。
     const hoverTimer = useRef<number | null>(null);
-    const syncHover = useCallback(() => {
-        const hovered = overCardRef.current || overOverlayRef.current;
+    const clearHoverTimer = useCallback(() => {
         if (hoverTimer.current !== null) {
             window.clearTimeout(hoverTimer.current);
             hoverTimer.current = null;
         }
+    }, []);
+    const syncHover = useCallback(() => {
+        const hovered = overCardRef.current || overOverlayRef.current;
+        clearHoverTimer();
         if (hovered) {
             if (useGroupHoverStore.getState().activeGroupID !== null) {
                 setActiveGroup(group.id);
@@ -109,7 +112,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             // 只收自己这一次: 期间指针可能已移到别的分组, 那次的展开不能被这里误清。
             if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
         }, 100);
-    }, [group.id, setActiveGroup]);
+    }, [group.id, setActiveGroup, clearHoverTimer]);
 
     const handleCardEnter = useCallback(() => { overCardRef.current = true; syncHover(); }, [syncHover]);
     const handleCardLeave = useCallback(() => { overCardRef.current = false; syncHover(); }, [syncHover]);
@@ -173,8 +176,11 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     }, [expanded, updateOverlayRect]);
 
     useEffect(() => () => {
+        // 卸载时先掐掉待触发的悬停计时器: 卡片被移除(换页/过滤)时计时器还挂着的话,
+        // 100ms 后它仍会回调, 对着一个已经不在屏幕上的卡片置位或清零, 造成莫名的展开/收起。
+        clearHoverTimer();
         if (useGroupHoverStore.getState().activeGroupID === group.id) setActiveGroup(null);
-    }, [group.id, setActiveGroup]);
+    }, [group.id, setActiveGroup, clearHoverTimer]);
 
     // 成员的名称, 所属渠道与可用性由后端随分组给出, 此处只做展示形状的转换。
     // 不可用的成员同样列出: 否则用户看不到它的存在也就无法移除。
