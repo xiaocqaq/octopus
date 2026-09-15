@@ -130,6 +130,21 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         }
     }, [expanded]);
 
+    // 展开的当帧就用卡片外框定出"贴下方生长"的矩形, 且浮层在拿到矩形之前根本不渲染(见下方 portal 的
+    // 条件渲染)。两者缺一不可: 卡片外框此刻同步可量, 浮层高度要挂上去才知道, 所以先按 below 落位,
+    // 由 follow 循环量到真实高度后再决定要不要翻到上方 —— 现有滞回逻辑原样保留。
+    // 若让浮层先以"未测量"的兜底样式(left/top 0, width 0)挂上去, 那份零宽布局会被成员行删除按钮的
+    // layoutId 投影当成起点快照, 拿到真实矩形后 Framer Motion 便把这个 X 从行中间一路补间到右端
+    // (实测 418.66px / 0.25s), 看起来就是"删除 X 在乱跑"。
+    useLayoutEffect(() => {
+        if (!expanded) return;
+        const card = cardRef.current;
+        if (!card) return;
+        const rect = card.getBoundingClientRect();
+        overlaySideRef.current = 'below';
+        setOverlayRect({ top: rect.bottom, left: rect.left, width: rect.width, side: 'below' });
+    }, [expanded]);
+
     // 浮层默认贴在卡片外框正下方, 左右与宽度照抄卡片外框: 两侧边框与圆角由此接得上, 视觉上是同一张卡在向下生长。
     // 下方空间放不下整份成员列表时翻到卡片上方生长: 贴底的卡片被裁是看不见的, 宁可向上也不能遮住成员。
     // 翻转判断带滞回: 两个方向都装得下时维持现状, 否则"上方放不下"的浮层翻上去后量自身又触发翻回, 两态来回抖动。
@@ -392,7 +407,9 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             翻到上方生长时镜像处理, 底部方角无下边框, 卡片改为去顶边。左右边框与宽度照抄卡片外框。
             高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。
             层级取 z-40: 高于网格行, 低于拖拽克隆体(5000)与弹窗(z-50), 拖拽和弹窗都不会被它挡住。 */}
-        {expanded && createPortal(
+        {/* overlayRect 是浮层能被正确落位的唯一凭据: 没量到就不挂载, 不能用兜底坐标挂上去 ——
+            零宽布局会被成员的 layoutId 投影当作起点, 展开时那个 X 会从行中间滑到右端。 */}
+        {expanded && overlayRect && createPortal(
             <section
                 ref={overlayRef}
                 // 浮层不在卡片的 DOM 子树里, 故需自己维系悬停: 两条热区各记各的标志, 指针停在任一处都保持展开。
