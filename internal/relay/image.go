@@ -125,6 +125,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 			grant, err := op.ChannelGrantGet(item.ChannelGrantID)
 			if err != nil {
+				releaseRouteProbe(group, item.ID)
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -133,6 +134,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			channelModel := grant.ChannelModel
 			channelKey := grant.ChannelKey
 			if channelModel == nil || channelKey == nil {
+				releaseRouteProbe(group, item.ID)
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -141,6 +143,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 			channel, err := op.ChannelGet(channelModel.ChannelID)
 			if err != nil {
+				releaseRouteProbe(group, item.ID)
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -158,10 +161,12 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			}
 
 			// JSON 正文按分组成员配置改写真实模型名; multipart 正文原样透传。
+			// 与聊天面同理: 本轮选路占用了探测名额时, 凡未走到成败定局点就结束请求的路径都要先归还。
 			roundBody := body
 			if !isMultipart {
 				roundBody, err = sjson.SetBytes(body, "model", channelModel.Name)
 				if err != nil {
+					releaseRouteProbe(group, item.ID)
 					request.markFailed(err, "", nil)
 					imageReject(c, err)
 					return
@@ -175,6 +180,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			httpClient, closeIdle, err := resolveUpstreamClient(channel)
 			if err != nil {
 				cancelRound()
+				releaseRouteProbe(group, item.ID)
 				request.finishRound(err.Error())
 				request.markFailed(err, "", nil)
 				imageReject(c, err)
@@ -191,6 +197,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				}
 				request.finishRound(err.Error())
 				if ctx.Err() != nil {
+					releaseRouteProbe(group, item.ID)
 					request.markCanceled(ctx.Err(), "", nil)
 					return
 				}

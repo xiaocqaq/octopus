@@ -116,8 +116,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			// 成员指向的授权缺失, 凭据被停用或两侧已被删除时等待, 该成员可能很快被改回可用配置。
 			// ChannelGrantGet 一次校验齐这几种情况, 取到的授权必然可直接转发, 无需再逐项检查。
+			// 本轮选路若占用了探测名额, 凡未走到成败定局点就换成员或结束请求的路径都要先归还,
+			// 否则该成员会被一个已不存在的探测永久占用: 冷却到期也进不去, 界面之外无人能解。
 			grant, err := op.ChannelGrantGet(item.ChannelGrantID)
 			if err != nil {
+				releaseRouteProbe(group, item.ID)
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -129,6 +132,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 成员指向的渠道已被删除时同样等待, 该成员可能很快被改回可用渠道。
 			channel, err := op.ChannelGet(channelModel.ChannelID)
 			if err != nil {
+				releaseRouteProbe(group, item.ID)
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -138,6 +142,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 将分组成员配置的真实模型写入本轮上游请求。
 			raw.Body, err = sjson.SetBytes(raw.Body, "model", channelModel.Name)
 			if err != nil {
+				releaseRouteProbe(group, item.ID)
 				request.markFailed(err, "", nil)
 				rejectRequest(c, inbound, err)
 				return
@@ -146,6 +151,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if metadata.Streaming && format == llm.APIFormatOpenAIChatCompletion {
 				raw.Body, err = sjson.SetBytes(raw.Body, "stream_options.include_usage", true)
 				if err != nil {
+					releaseRouteProbe(group, item.ID)
 					request.markFailed(err, "", nil)
 					rejectRequest(c, inbound, err)
 					return
@@ -227,6 +233,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if stripped, ok := stripSignedReasoning(raw.Body, requestProtocol); ok {
 						raw.Body = stripped
 						reasoningStripped = true
+						// 重选路要能再次选中同一个成员才能重试: 本轮若占着它的探测名额,
+						// 不换成员的单成员分组会因名额未释放而永远选不出目标。
+						releaseRouteProbe(group, item.ID)
 						continue
 					}
 				}
