@@ -20,6 +20,7 @@ export type ChannelFormState = {
     channel_proxy: string;
     param_override: string;
     match_regex: string;
+    reasoning_filter: boolean;
 };
 
 // grantKey 生成授权在状态里的键; 分隔符取 \0, 模型名与凭据名都不会含它。
@@ -45,6 +46,7 @@ export const emptyFormState: ChannelFormState = {
     channel_proxy: '',
     param_override: '',
     match_regex: '',
+    reasoning_filter: false,
 };
 
 // fromChannel 把渠道完整配置还原为表单状态; 授权读写都按名称, 直接建索引即可。
@@ -67,6 +69,7 @@ export function fromChannel(channel: ChannelDetail): ChannelFormState {
         channel_proxy: channel.channel_proxy,
         param_override: channel.param_override,
         match_regex: channel.match_regex,
+        reasoning_filter: channel.reasoning_filter,
     };
 }
 
@@ -88,6 +91,7 @@ export function toChannelConfig(state: ChannelFormState) {
         channel_proxy: state.channel_proxy.trim(),
         param_override: state.param_override.trim(),
         match_regex: state.match_regex.trim(),
+        reasoning_filter: state.reasoning_filter,
     };
 }
 

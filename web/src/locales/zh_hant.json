@@ -468,6 +468,7 @@
             "apiKey": "API Key",
             "enabled": "啟用",
             "proxy": "使用代理",
+            "reasoningFilter": "思維憑據過濾",
             "keys": "憑證",
             "keyAdd": "新增憑證",
             "keyName": "名稱",

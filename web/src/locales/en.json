@@ -468,6 +468,7 @@
             "apiKey": "API Key",
             "enabled": "Enabled",
             "proxy": "Use proxy",
+            "reasoningFilter": "Reasoning filter (relay)",
             "keys": "Credentials",
             "keyAdd": "Add credential",
             "keyName": "Name",

@@ -49,6 +49,142 @@ func stripSignedReasoning(body []byte, protocol model.Protocol) ([]byte, bool) {
 	return bytes.TrimRight(buffer.Bytes(), "\n"), true
 }
 
+// scrubSignedReasoning 在 stripSignedReasoning 的基础上做完整的历史可移植清洗, 供开启思维凭据过滤的渠道使用。
+//
+// 这类渠道(典型是中转站)会在内部把请求打散到多个账号, 于是历史里凡是绑定服务端存储的东西都可能不是
+// 本轮那一个账号签发的: reasoning 凭据只是最先炸的一个, 记录 id, previous_response_id, compaction 密文
+// 同样带着归属。逐次撞一次 400 再剥一样剥不净, 开启过滤后按这份标准一次清完。
+// 与脚本版"拒绝转发"不同, octopus 选择全部静默删除: 客户端(Codex)每轮都带全量历史, 删掉这些字段
+// 只丢服务端引用与思维连续性, 请求本身仍可完成; 而故障转移场景下拒绝也没有意义——引用在客户端手里, 换成员照样带。
+func scrubSignedReasoning(body []byte, protocol model.Protocol) ([]byte, bool) {
+	switch protocol {
+	case model.ProtocolOpenAIResponse:
+	case model.ProtocolAnthropicMessage:
+		return stripSignedReasoning(body, protocol) // Anthropic 没有服务端会话引用, 思维块剥离即全部。
+	default:
+		return body, false
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		return body, false
+	}
+
+	changed := stripResponsesReasoning(payload)
+	if scrubResponsesPortability(payload) {
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(payload); err != nil {
+		return body, false
+	}
+	return bytes.TrimRight(buffer.Bytes(), "\n"), true
+}
+
+// responsesPortableItemTypes 是内容可整体重发的历史条目类型: 它们的顶层 id 只是服务端资源编号,
+// 换账号即失效且无配对作用, 删掉由上游重新编号即可。call_id 不在其列——它配对调用与结果, 必须保留。
+var responsesPortableItemTypes = map[string]bool{
+	"message": true, "function_call": true, "function_call_output": true,
+	"custom_tool_call": true, "custom_tool_call_output": true,
+}
+
+// scrubResponsesPortability 清掉 Responses 请求体里引用上游服务端存储的字段:
+// 服务端会话引用, compaction 与 item_reference 条目, 带 encrypted_content 的条目, 可重发条目的记录 id,
+// include 里的加密思维请求, context_management 里的自动压缩, 并强制 store:false。
+func scrubResponsesPortability(payload map[string]any) bool {
+	changed := false
+
+	// 这两个字段整条指向服务端会话, 值本身没有可重发的内容, 只能删。
+	for _, key := range []string{"previous_response_id", "conversation"} {
+		if _, ok := payload[key]; ok {
+			delete(payload, key)
+			changed = true
+		}
+	}
+
+	// store:true 会让上游把本轮响应存进服务端会话供后续引用; 过滤转发的每一轮账号都可能不同, 存了也没人认。
+	if store, ok := payload["store"]; !ok || store != false {
+		payload["store"] = false
+		changed = true
+	}
+
+	if include, ok := payload["include"].([]any); ok {
+		kept := make([]any, 0, len(include))
+		for _, value := range include {
+			if value == "reasoning.encrypted_content" {
+				changed = true
+				continue
+			}
+			kept = append(kept, value)
+		}
+		if changed {
+			payload["include"] = kept
+		}
+	}
+
+	// 自动压缩会把上下文凝成一坨只有签发账号解得开的密文, 声明它的配置项一并删掉。
+	if managed, ok := payload["context_management"].([]any); ok {
+		kept := make([]any, 0, len(managed))
+		for _, item := range managed {
+			if entry, ok := item.(map[string]any); ok && entry["type"] == "compaction" {
+				changed = true
+				continue
+			}
+			kept = append(kept, item)
+		}
+		if changed {
+			payload["context_management"] = kept
+		}
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok {
+		return changed
+	}
+	kept := make([]any, 0, len(input))
+	for _, item := range input {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			kept = append(kept, item)
+			continue
+		}
+		// compaction 条目与任何带加密上下文的条目: 内容解不开, 留着必被拒, 整条删除。
+		if entry["type"] == "compaction" || entry["type"] == "item_reference" {
+			changed = true
+			continue
+		}
+		if _, ok := entry["encrypted_content"]; ok {
+			changed = true
+			continue
+		}
+		// 顶层 id 只删可整体重发的条目; 其余条目可能本就靠 id 寻址服务器资源, 递归清 id 会删坏配对。
+		// 无 type 但带 role 与 content 的是简写消息, 同属可重发。
+		typeName, _ := entry["type"].(string)
+		_, hasRole := entry["role"]
+		_, hasContent := entry["content"]
+		portable := responsesPortableItemTypes[typeName] || (typeName == "" && hasRole && hasContent)
+		if portable {
+			if _, ok := entry["id"]; ok {
+				delete(entry, "id")
+				changed = true
+			}
+		}
+		kept = append(kept, entry)
+	}
+	if changed {
+		payload["input"] = kept
+	}
+	return changed
+}
+
 // stripResponsesReasoning 去掉 Responses 请求 input 里的 reasoning 项。
 // 整项删除而非只删 encrypted_content: 少了加密内容后它只剩一个别的账号不认识的 id, 留着同样被拒。
 func stripResponsesReasoning(payload map[string]any) bool {
