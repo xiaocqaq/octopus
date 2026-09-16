@@ -9,6 +9,57 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 )
 
+// TestShouldStripReasoningOnResourceOwnership 资源归属类报错要触发清洗。
+// 历史里引用的记录/密文属于另一个上游资源时, 上游文案既没有 reasoning 也没有 conversation,
+// 只能靠"归属词 + 被引用物类别"识别; 实测文案来自中转站换账号后的 Azure 侧 400。
+func TestShouldStripReasoningOnResourceOwnership(t *testing.T) {
+	for _, err := range []error{
+		errors.New("The requested item was created under a different Azure OpenAI resource. Use the same resource that created the item to access it. [trace_id=27717579d94567a53c8211fe472e19dc]"),
+		errors.New("Item with id 'msg_abc' was created under a different resource."),
+		errors.New("this item belongs to another organization"),
+		errors.New("item was created under a different project"),
+	} {
+		if !shouldStripReasoning(err) {
+			t.Errorf("资源归属类错误应触发一次清洗: %v", err)
+		}
+	}
+
+	// 反向: 只出现 resource 而没有归属含义的报错不该清洗, 否则配额/可用性类故障会白丢上下文。
+	for _, err := range []error{
+		errors.New("insufficient resource quota"),
+		errors.New("resource temporarily unavailable"),
+		errors.New("please retry with a different model"),
+	} {
+		if shouldStripReasoning(err) {
+			t.Errorf("非归属类错误不该触发清洗: %v", err)
+		}
+	}
+}
+
+// TestNeedsPortabilityScrub 资源归属类报错要按"可移植"标准深清洗, 与渠道开关无关。
+// 只剥思维凭据对这档错没用: 被拒的是 previous_response_id / 记录 id 这些引用本身。
+func TestNeedsPortabilityScrub(t *testing.T) {
+	depthCases := []struct {
+		message string
+		want    bool
+	}{
+		{"The requested item was created under a different Azure OpenAI resource. [trace_id=x]", true},
+		{"item was created under a different project", true},
+		{"invalid reasoning encrypted_content", false},
+		{"previous_response_id is invalid", false},
+		{"conversation not found", false},
+		{"rate limit exceeded", false},
+	}
+	for _, tc := range depthCases {
+		if got := needsPortabilityScrub(errors.New(tc.message)); got != tc.want {
+			t.Errorf("needsPortabilityScrub(%q)=%v, 期望 %v", tc.message, got, tc.want)
+		}
+	}
+	if needsPortabilityScrub(nil) {
+		t.Error("没有错误时不该要求深清洗")
+	}
+}
+
 func TestShouldStripReasoningOnlyForCredentialErrors(t *testing.T) {
 	for _, err := range []error{
 		errors.New("responses stream error"),

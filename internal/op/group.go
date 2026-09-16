@@ -283,7 +283,11 @@ func sortGroupItems(items []model.GroupItem) {
 // groupSnapshot 为成员补齐授权两侧的名称, 所属渠道与可用性。
 // 可用性在此一次定稿: 渠道与凭据均启用且模型, 凭据均存在时可转发, 否则仍列出该成员但标记不可用,
 // 由此界面无需再按渠道列表回查, 也不会出现前后端各判一套的分歧。
+// Relay 配置的空值也在这里补齐: 这里是一切读取路径(列表/详情/按名称取)的唯一出口,
+// 缺了这一步, 存量分组(配置里没有后加的键)在转发侧会读到 0 —— 0 秒的流式总时长预算
+// 会让闸门在请求发起瞬间到期, 掐断每一轮流式响应(实测过的生产事故就是这个)。
 func groupSnapshot(group model.Group) model.Group {
+	model.NormalizeGroupRelayConfig(&group.RelayConfig)
 	// 成员恒为数组: 读取侧承诺该字段不为 null, 空分组也要给出空数组。
 	group.Items = append(make([]model.GroupItem, 0, len(group.Items)), group.Items...)
 	for i := range group.Items {

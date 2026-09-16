@@ -14,8 +14,12 @@ type GroupRelayConfig struct {
 	MemberRetryIntervalSeconds            int `json:"member_retry_interval_seconds" binding:"omitempty,min=1"`              // 同一成员相邻两次尝试之间的等待秒数。
 	MemberNonStreamResponseTimeoutSeconds int `json:"member_non_stream_response_timeout_seconds" binding:"omitempty,min=1"` // 单个成员返回完整非流式响应的超时秒数。
 	MemberStreamFirstEventTimeoutSeconds  int `json:"member_stream_first_event_timeout_seconds" binding:"omitempty,min=1"`  // 单个成员返回首个有效流事件的超时秒数。
-	MemberCooldownSeconds                 int `json:"member_cooldown_seconds" binding:"omitempty,min=1"`                    // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
-	MemberAffinitySeconds                 int `json:"member_affinity_seconds" binding:"omitempty,min=0"`                    // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
+	// MemberStreamTotalTimeoutSeconds 是单个成员一轮流式响应从发起到收到终止事件的总时长上限。
+	// 首事件超时只管到首帧: 首帧之后上游仍可能长时间不发新事件, 甚至挂着连接不关闭, 客户端只能干等。
+	// 超出该预算即掐断本轮; 首帧已写给客户端时不能换成员重试, 那会让客户端收到两份正文。
+	MemberStreamTotalTimeoutSeconds int `json:"member_stream_total_timeout_seconds" binding:"omitempty,min=1"`
+	MemberCooldownSeconds           int `json:"member_cooldown_seconds" binding:"omitempty,min=1"` // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
+	MemberAffinitySeconds           int `json:"member_affinity_seconds" binding:"omitempty,min=0"` // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
 }
 
 // DefaultGroupRelayConfig 返回新分组使用的 Relay 默认配置。
@@ -25,6 +29,7 @@ func DefaultGroupRelayConfig() GroupRelayConfig {
 		MemberRetryIntervalSeconds:            3,
 		MemberNonStreamResponseTimeoutSeconds: 120,
 		MemberStreamFirstEventTimeoutSeconds:  30,
+		MemberStreamTotalTimeoutSeconds:       180,
 		MemberCooldownSeconds:                 60,
 		MemberAffinitySeconds:                 300,
 	}
@@ -48,6 +53,10 @@ func NormalizeGroupRelayConfig(config *GroupRelayConfig) {
 	}
 	if config.MemberStreamFirstEventTimeoutSeconds < 1 {
 		config.MemberStreamFirstEventTimeoutSeconds = defaults.MemberStreamFirstEventTimeoutSeconds
+	}
+	// 老分组的配置 JSON 里没有这个键, 反序列化后为 0, 在此补成默认值; 由此无需另写一次数据迁移。
+	if config.MemberStreamTotalTimeoutSeconds < 1 {
+		config.MemberStreamTotalTimeoutSeconds = defaults.MemberStreamTotalTimeoutSeconds
 	}
 	if config.MemberCooldownSeconds < 1 {
 		config.MemberCooldownSeconds = defaults.MemberCooldownSeconds

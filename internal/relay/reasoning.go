@@ -18,11 +18,50 @@ func shouldStripReasoning(err error) bool {
 	if containsAny(message, "encrypted_content", "previous_response_id", "signature") {
 		return true
 	}
+	// 资源归属类报错直接命中: 这类文案里既没有 reasoning 也没有 conversation,
+	// 走下面的"主体词 + 否定词"组合会整类漏掉 —— 而它正是历史引用属于另一个上游资源/账号时最先炸的那个。
+	if isResourceOwnershipError(message) {
+		return true
+	}
 	rejected := containsAny(message, "invalid", "not found", "unknown", "expired", "verify", "decrypt", "mismatch", "does not exist", "not accessible", "does not belong")
 	if strings.Contains(message, "conversation") {
 		return rejected
 	}
 	return strings.Contains(message, "reasoning") && !strings.Contains(message, "reasoning effort") && rejected
+}
+
+// ownershipWords 是"归属"这一层意思的措辞, presenceWords 是被引用物的类别。
+// 两者都出现才算资源归属错误: 只用 ownershipWords 会把"请换个账号重试"这类也拉进来,
+// 只用 presenceWords 又会被配额、限流文案里的 resource 命中。
+var (
+	ownershipWords = []string{"different", "another", "other"}
+	presenceWords  = []string{"resource", "account", "organization", "organisation", "project"}
+)
+
+// isResourceOwnershipError 判定"请求里引用的东西属于另一个上游资源/账号"这类报错。
+//
+// 按"两个词都出现"判定而不是整串匹配: 厂商名会夹在中间,
+// 实测报文 "The requested item was created under a different Azure OpenAI resource. ... [trace_id=...]"
+// 里 "different" 与 "resource" 之间隔着 "Azure OpenAI", 整串匹配必然漏掉。
+// 误判的代价很小: 多一次清洗重试(那次请求少了服务端引用与思维连续性), 之后照常记成员失败;
+// 漏判的代价是这条错永远救不回来 —— 所以这一档宁可宽一点。
+func isResourceOwnershipError(message string) bool {
+	if !containsAny(message, presenceWords...) {
+		return false
+	}
+	return containsAny(message, ownershipWords...)
+}
+
+// needsPortabilityScrub 判断这次清洗要不要按"可移植"标准做深一层。
+//
+// 渠道开关只决定常规错误的清洗力度; 资源归属类错误不适用开关: 报错本身说的就是"你引用的东西不属于这个资源",
+// 只剥思维凭据救不回来 —— 带归属的与服务端存储引用(previous_response_id, 记录 id, store)必须一起去掉,
+// 否则重试必然同样失败, 客户端也躲不掉那个错误(实测会一路重试到超时)。
+func needsPortabilityScrub(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isResourceOwnershipError(strings.ToLower(err.Error()))
 }
 
 func containsAny(value string, candidates ...string) bool {

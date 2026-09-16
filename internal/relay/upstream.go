@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,7 +19,11 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/anthropic"
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
+	"github.com/tidwall/sjson"
 )
+
+// promptCacheKeyField 是 OpenAI 的缓存粘性提示字段名: 它自己的 Chat 与 Responses 都有, 别家兼容端点未必认。
+const promptCacheKeyField = "prompt_cache_key"
 
 // upstreamResponse 是已验证但尚未写给客户端的上游成功响应; events 为 nil 表示非流式响应。
 // 透传响应保留上游响应头; 跨协议响应由客户端协议决定响应头。失败一律以 error 返回。
@@ -154,7 +159,37 @@ type conversionMiddleware struct {
 
 // OnOutboundRawRequest 在转换后的上游请求上应用渠道参数和自定义 Header。
 func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *httpclient.Request) (*httpclient.Request, error) {
+	// 先清掉目标协议不认的字段, 再应用渠道参数: 顺序反过来会让渠道显式覆盖的值得不到尊重。
+	dropForeignChatFields(m.format, request)
 	return request, applyChannelConfig(m.channel, request)
+}
+
+// dropForeignChatFields 清掉转换到 Chat Completions 的请求体里 OpenAI 专有、别家 schema 不认的字段。
+//
+// 客户端按自己的协议发请求, 其中一些字段是那家协议专有的; 跨协议转换只做协议间的等价改写,
+// 这类字段会"位置不变地"留在体里, 于是被上游当成未知字段整轮拒绝 —— 实测 Codex 用 Responses 协议发的
+// prompt_cache_key 经转换后仍出现在 Chat 体里, DeepSeek 系端点直接 400 UNKNOWN_FIELD
+// ({"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_key"}), 整条链路每一轮都失败。
+// 它是 OpenAI 的缓存粘性提示, 只对 OpenAI 侧有意义, 对不认它的上游删掉不影响正确性。
+//
+// 只在本路径(跨协议转换)删: 同协议透传仍原样转发客户端请求体, 那时字段属于发它那家自己的语义, 该不该发由客户端决定。
+// 只删有实测证据的字段: 其余 OpenAI 专有字段(store / safety_identifier / verbosity 等)先留着, 等哪家上游真的报了再加。
+func dropForeignChatFields(format llm.APIFormat, request *httpclient.Request) {
+	if request == nil || format != llm.APIFormatOpenAIChatCompletion || len(request.Body) == 0 {
+		return
+	}
+	if !bytes.Contains(request.Body, []byte(promptCacheKeyField)) {
+		return // 绝大多数请求没有这个字段, 不做多余的解析与重编码。
+	}
+	next, err := sjson.DeleteBytes(request.Body, promptCacheKeyField)
+	if err != nil {
+		// 删不掉说明请求体不是预期形状, 宁可原样转发也不要在这里把请求改坏。
+		return
+	}
+	request.Body = next
+	if len(request.JSONBody) > 0 {
+		request.JSONBody = slices.Clone(next)
+	}
 }
 
 // OnOutboundRawError 保留上游错误状态码携带的原始正文。
