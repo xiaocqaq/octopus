@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Layers, GripVertical, X, Trash2 } from 'lucide-react';
+import { HeartPulse, Layers, GripVertical, LoaderCircle, X, Trash2 } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -46,6 +46,8 @@ function MemberItem({
     member,
     onRemove,
     onActivate,
+    onProbe,
+    probing,
     isActive,
     group,
     now,
@@ -57,6 +59,8 @@ function MemberItem({
     member: SelectedMember;
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
+    onProbe?: (itemId: number) => void;
+    probing?: boolean; // probing 表示该成员正在测活中, 按钮转为加载态并禁用重复提交。
     isActive?: boolean;
     group?: Group; // group 提供成员当前的冷却和亲和时间。
     now: number; // now 是成员列表共享的当前 Unix 毫秒时间。
@@ -141,6 +145,32 @@ function MemberItem({
 
                 {group && <MemberStatus group={group} itemId={member.item_id} now={now} active={isActive} activeClassName="p-1" />}
 
+                {/* 测活按钮只在成员已落库(item_id 存在)且调用方愿意接收时出现:
+                    编辑器里还没提交的新成员没有主键, 后端无从探测。 */}
+                {onProbe && member.item_id !== undefined && (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                disabled={probing}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onProbe(member.item_id as number);
+                                }}
+                                className={cn(
+                                    'shrink-0 p-1 rounded transition-colors hover:bg-primary/10 hover:text-primary',
+                                    probing && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-inherit'
+                                )}
+                            >
+                                {probing ? <LoaderCircle className="size-3 animate-spin" /> : <HeartPulse className="size-3" />}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={8} align="center">
+                            {t(probing ? 'card.probing' : 'card.probe')}
+                        </TooltipContent>
+                    </Tooltip>
+                )}
+
                 {(!showConfirmDelete || !confirmDelete) && (
                     <motion.button
                         layoutId={`delete-btn-member-${layoutScope ?? 'default'}-${member.id}`}
@@ -199,6 +229,8 @@ interface MemberListProps {
     onReorder: (members: SelectedMember[]) => void;
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
+    onProbe?: (itemId: number) => void;
+    probingItemIds?: Set<number>;
     activeItemId?: number;
     group?: Group; // group 提供当前模式和成员运行状态。
     now?: number; // now 是页面共享的当前 Unix 毫秒时间，仅展示运行态时需要。
@@ -233,6 +265,8 @@ export function MemberList({
     onReorder,
     onRemove,
     onActivate,
+    onProbe,
+    probingItemIds = new Set(),
     activeItemId,
     group,
     now = 0,
@@ -328,6 +362,8 @@ export function MemberList({
                                 member={members[rubric.source.index]}
                                 onRemove={onRemove}
                                 onActivate={onActivate}
+                                onProbe={onProbe}
+                                probing={members[rubric.source.index].item_id !== undefined && probingItemIds.has(members[rubric.source.index].item_id as number)}
                                 isActive={members[rubric.source.index].item_id === activeItemId}
                                 group={group}
                                 now={now}
@@ -361,6 +397,8 @@ export function MemberList({
                                                 member={member}
                                                 onRemove={onRemove}
                                                 onActivate={onActivate}
+                                                onProbe={onProbe}
+                                                probing={member.item_id !== undefined && probingItemIds.has(member.item_id)}
                                                 isActive={member.item_id === activeItemId}
                                                 group={group}
                                                 now={now}

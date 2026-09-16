@@ -310,7 +310,10 @@
             "createFailed": "创建失败",
             "updated": "更新成功",
             "updateFailed": "更新失败",
-            "deleted": "删除成功"
+            "deleted": "删除成功",
+            "probeFailed": "测活请求失败",
+            "probeAllOk": "{count} 个成员全部通过体检",
+            "probeAllPartial": "{ok} 个通过，{failed} 个不通"
         },
         "create": {
             "submit": "创建",
@@ -324,7 +327,15 @@
             "pinned": "强制优先",
             "rankUp": "连续成功，排名上升 {steps} 档",
             "rankDown": "进入冷却，排名下降 {steps} 档",
-            "modeToggleHint": "点击切换路由模式"
+            "modeToggleHint": "点击切换路由模式",
+            "probe": "测活（发一条最小请求探这个成员此刻通不通）",
+            "probing": "测活中...",
+            "probeAll": "一键测活",
+            "probingAll": "测活中",
+            "probeAllHint": "依次体检本组所有成员；通过的会被抬到更高优先级",
+            "probeOk": "上次测活通过，耗时 {ms}ms",
+            "probeFailed": "上次测活失败：{message}",
+            "probeUnknownError": "未知错误"
         },
         "detail": {
             "actions": {

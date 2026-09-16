@@ -43,6 +43,16 @@ func init() {
 		AddRoute(
 			router.NewRoute("/delete/:id", http.MethodDelete).
 				Handle(deleteGroup),
+		).
+		AddRoute(
+			// 测活单条成员: 路径带成员 ID, 语义是"治这一条", 前端成员行上的按钮用它。
+			router.NewRoute("/probe/:id/:itemId", http.MethodPost).
+				Handle(probeGroupItem),
+		).
+		AddRoute(
+			// 一键测活: 不带成员 ID 时测分组内全部成员, 也可带成员 ID 列表只测其中一部分。
+			router.NewRoute("/probe/:id", http.MethodPost).
+				Handle(probeGroup),
 		)
 }
 
@@ -235,4 +245,70 @@ func deleteGroup(c *gin.Context) {
 	relay.ResetRouteState(id)
 	publishGroupEvent(groupEvent{Name: "deleted", Data: id})
 	resp.Success(c, "group deleted successfully")
+}
+
+// probeRequest 是一次测活请求的提交形状。
+// Streaming 决定按流式还是非流式验: 流式只等到首个有效事件即算通过, 非流式等完整响应,
+// 两者对应的超时也不同; 默认走非流式, 一条请求即可给出完整结论。
+type probeRequest struct {
+	ItemIDs   []int `json:"item_ids"`  // 待测成员; 留空表示测分组内全部成员。
+	Streaming bool  `json:"streaming"` // 是否按流式口径测活。
+}
+
+// probeGroupItem 测活单个成员, 供成员行上的按钮使用; 结论同时落进路由状态并由事件流推给所有界面。
+func probeGroupItem(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	itemID, err := strconv.Atoi(c.Param("itemId"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req probeRequest
+	// 测活允许不带请求体(前端按钮可以直接 POST 空体), 故解析失败不算错误, 走默认的非流式口径。
+	_ = c.ShouldBindJSON(&req)
+
+	result, err := relay.ProbeItem(c.Request.Context(), groupID, itemID, req.Streaming)
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	// 结论已写进路由状态, 推一次状态让所有打开的界面同步看到这次体检结果。
+	publishProbeEvent(groupID)
+	resp.Success(c, result)
+}
+
+// probeGroup 一键测活: 不带 item_ids 时测分组内全部成员, 带了就只测其中一部分。
+func probeGroup(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req probeRequest
+	_ = c.ShouldBindJSON(&req)
+
+	results, err := relay.ProbeGroup(c.Request.Context(), groupID, req.ItemIDs, req.Streaming)
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	publishProbeEvent(groupID)
+	resp.Success(c, results)
+}
+
+// publishProbeEvent 把分组的最新路由状态推给事件流。
+// 测活结论落在 Relay 的进程内状态里, 而状态增量本就由 Relay 自己发布, 这里补一次是为了让
+// 结论立即广播出去 —— 否则只有下一次真实调用发生时界面才会看到它。
+func publishProbeEvent(groupID int) {
+	group, err := op.GroupGet(groupID)
+	if err != nil {
+		return
+	}
+	publishGroupEvent(groupEvent{Name: "changed", Data: groupResponse{Group: group, Runtime: relay.RouteStateOf(group)}})
 }

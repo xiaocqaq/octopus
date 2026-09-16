@@ -42,12 +42,15 @@ func TestNoPinFollowsPriority(t *testing.T) {
 }
 
 // TestPinnedInCooldownFallsOver 钉住的成员处于冷却时应让位, 而不是把请求压在它上面。
+// 强制成员进入冷却的门槛是连续失败超过 routePinnedFailureThreshold 次, 故此处按该阈值推满。
 func TestPinnedInCooldownFallsOver(t *testing.T) {
 	resetRoutes()
 	group := failoverGroup(3)
-	// 让 3 号连续失败到达总尝试次数, 使其进入冷却。
+	// 让 3 号连续失败超过强制阈值, 使其进入冷却。
 	pickGroupItem(group)
-	recordRouteFailure(group, 3, group.RelayConfig.MemberMaxAttempts)
+	for i := 0; i <= routePinnedFailureThreshold; i++ {
+		recordRouteFailure(group, 3, 1)
+	}
 
 	got := pickGroupItem(group)
 	if got.ID == 3 {

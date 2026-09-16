@@ -310,7 +310,10 @@
             "createFailed": "建立失敗",
             "updated": "更新成功",
             "updateFailed": "更新失敗",
-            "deleted": "刪除成功"
+            "deleted": "刪除成功",
+            "probeFailed": "測活請求失敗",
+            "probeAllOk": "{count} 個成員全部通過體檢",
+            "probeAllPartial": "{ok} 個通過，{failed} 個不通"
         },
         "create": {
             "submit": "建立",
@@ -324,7 +327,15 @@
             "pinned": "強制優先",
             "rankUp": "連續成功，排名上升 {steps} 檔",
             "rankDown": "進入冷卻，排名下降 {steps} 檔",
-            "modeToggleHint": "點擊切換路由模式"
+            "modeToggleHint": "點擊切換路由模式",
+            "probe": "測活（發一條最小請求探這個成員此刻通不通）",
+            "probing": "測活中...",
+            "probeAll": "一鍵測活",
+            "probingAll": "測活中",
+            "probeAllHint": "依次體檢本組所有成員；通過的會被抬到更高優先級",
+            "probeOk": "上次測活通過，耗時 {ms}ms",
+            "probeFailed": "上次測活失敗：{message}",
+            "probeUnknownError": "未知錯誤"
         },
         "detail": {
             "actions": {

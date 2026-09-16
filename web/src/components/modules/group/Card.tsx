@@ -1,8 +1,8 @@
 import { memo, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Hand, Shuffle, Trash2, X, Pencil } from 'lucide-react';
+import { Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup } from '@/api/group';
+import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useProbeGroup, useProbeGroupItem } from '@/api/group';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -264,6 +264,46 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         updateMode.mutate({ id: group.id, mode: value as GroupMode }, { onSuccess, onError });
     }, [group.id, group.mode, updateMode, onSuccess, onError]);
 
+    // 测活（体检）：拿最小的一次真实上游调用问一句"这个成员此刻通不通"。
+    // 结论由后端写进路由状态并经事件流广播，前端不落本地副本 —— 单条与一键共用同一份结论展示。
+    const probeOne = useProbeGroupItem();
+    const probeAll = useProbeGroup();
+    // 正在测活的成员集合。只做按钮级反馈，不设全局串行锁：后端一条与一键是各自独立的一次调用，
+    // 用户点第二个成员不应该被第一条挡住。
+    const [probingItemIds, setProbingItemIds] = useState<Set<number>>(() => new Set());
+    const markProbing = useCallback((itemId: number, on: boolean) => {
+        setProbingItemIds((previous) => {
+            const next = new Set(previous);
+            if (on) next.add(itemId);
+            else next.delete(itemId);
+            return next;
+        });
+    }, []);
+
+    const handleProbe = useCallback((itemId: number) => {
+        markProbing(itemId, true);
+        probeOne.mutate(
+            { groupId: group.id, itemId },
+            {
+                onError: (error) => toast.error(t('toast.probeFailed'), { description: error.message }),
+                onSettled: () => markProbing(itemId, false),
+            },
+        );
+    }, [group.id, probeOne, markProbing, t]);
+
+    // 一键测活：不传成员即测全部。结论本身由后端推送，这里只汇报"几条通几条不通"。
+    const handleProbeAll = useCallback(() => {
+        probeAll.mutate({ groupId: group.id }, {
+            onSuccess: (results) => {
+                const failed = results.filter((result) => !result.ok).length;
+                if (results.length === 0) return;
+                if (failed === 0) toast.success(t('toast.probeAllOk', { count: results.length }));
+                else toast.warning(t('toast.probeAllPartial', { ok: results.length - failed, failed }));
+            },
+            onError: (error) => toast.error(t('toast.probeFailed'), { description: error.message }),
+        });
+    }, [group.id, probeAll, t]);
+
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         const payload: GroupUpdateRequest & { id: number } = { id: group.id };
 
@@ -274,6 +314,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             values.relay_config.member_retry_interval_seconds !== group.relay_config.member_retry_interval_seconds ||
             values.relay_config.member_non_stream_response_timeout_seconds !== group.relay_config.member_non_stream_response_timeout_seconds ||
             values.relay_config.member_stream_first_event_timeout_seconds !== group.relay_config.member_stream_first_event_timeout_seconds ||
+            values.relay_config.member_stream_total_timeout_seconds !== group.relay_config.member_stream_total_timeout_seconds ||
             values.relay_config.member_cooldown_seconds !== group.relay_config.member_cooldown_seconds ||
             values.relay_config.member_affinity_seconds !== group.relay_config.member_affinity_seconds
         ) payload.relay_config = values.relay_config;
@@ -431,6 +472,34 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                     pointerEvents: overlayRect ? 'auto' : 'none',
                 }}
             >
+                {/* 一键测活: 把整组挨个体检一遍。放在成员列表上方而不是卡片标题栏 —— 它是"对这组做一件事",
+                    与标题栏那排管理动作(切模式/编辑/复制/删除)不同层。 */}
+                <div className="mb-2 flex items-center justify-between gap-2 px-0.5">
+                    <span className="truncate text-[10px] font-medium text-muted-foreground">{t('form.items')}</span>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                disabled={probeAll.isPending}
+                                onClick={handleProbeAll}
+                                className={cn(
+                                    'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                    'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+                                    probeAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                                )}
+                            >
+                                {probeAll.isPending
+                                    ? <LoaderCircle className="size-3 animate-spin" />
+                                    : <HeartPulse className="size-3" />}
+                                {t(probeAll.isPending ? 'card.probingAll' : 'card.probeAll')}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={8} align="center">
+                            {t('card.probeAllHint')}
+                        </TooltipContent>
+                    </Tooltip>
+                </div>
+
                 <div className="h-101 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
                     <MemberList
                         members={members}
@@ -438,6 +507,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                         onRemove={handleRemoveMember}
                         // 两种模式都可点选: 手动模式指定当前成员, 故障转移模式强制优先使用。
                         onActivate={handleActivate}
+                        onProbe={handleProbe}
+                        probingItemIds={probingItemIds}
                         activeItemId={group.runtime.current_item_id}
                         group={group}
                         now={now}

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, CircleCheck, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleCheck, HeartCrack, HeartPulse, Pin } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Group } from '@/api/group';
+import type { Group, GroupProbeResult } from '@/api/group';
 
 // MemberStatusProps 描述成员的冷却和亲和状态。
 interface MemberStatusProps {
@@ -51,12 +51,14 @@ export function useRuntimeClock(source?: Group | Group[]) {
     return now;
 }
 
-// MemberStatus 展示成员的强制标记、健康分偏移、冷却、亲和倒计时或当前使用圆点。
+// MemberStatus 展示成员的强制标记、体检结论、健康分偏移、冷却、亲和倒计时或当前使用圆点。
 export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
     const t = useTranslations('group.card');
     const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
     // 健康分只在故障转移模式累积; 手动模式没有进程内路由, 后端恒回空表。
     const score = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
+    // 体检结论两种模式都有：手动模式不参与选路，但"这条此刻通不通"仍是用户要看的结论。
+    const probe = itemId !== undefined ? group.runtime.probes?.[itemId] : undefined;
 
     if (group.mode === 'failover' && itemId !== undefined) {
         const cooldownUntil = group.runtime.cooldowns[itemId] ?? 0;
@@ -71,6 +73,7 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
             return (
                 <span className="flex shrink-0 items-center gap-1">
                     {isPinned && <PinnedMark label={t('pinned')} />}
+                    {probe && <ProbeMark probe={probe} />}
                     <RankMark score={score} />
                     <Badge
                         variant="outline"
@@ -88,11 +91,12 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
         }
     }
 
-    if (!isPinned && !active && score === 0) return null;
+    if (!isPinned && !active && score === 0 && !probe) return null;
 
     return (
         <span className="flex shrink-0 items-center gap-1">
             {isPinned && <PinnedMark label={t('pinned')} />}
+            {probe && <ProbeMark probe={probe} />}
             <RankMark score={score} />
             {active && (
                 <span aria-hidden="true" className={cn('inline-flex shrink-0 text-primary', activeClassName)}>
@@ -100,6 +104,31 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
                 </span>
             )}
         </span>
+    );
+}
+
+// ProbeMark 标出该成员最近一次人工测活的结论: 通过显示耗时, 失败显示错误摘要。
+// 与 RankMark 并列而非互斥: 测活通过会顺手把健康分抬到满档, 两者一起看才明白这次排名上升是体检带来的。
+function ProbeMark({ probe }: { probe: GroupProbeResult }) {
+    const t = useTranslations('group.card');
+    const title = probe.ok
+        ? t('probeOk', { ms: probe.latency_ms })
+        : t('probeFailed', { message: probe.message || t('probeUnknownError') });
+
+    return (
+        <Badge
+            variant="outline"
+            className={cn(
+                'shrink-0 gap-0.5 px-1 py-0 text-[10px] font-medium tabular-nums',
+                probe.ok
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
+            )}
+            title={title}
+        >
+            {probe.ok ? <HeartPulse className="size-2.5" /> : <HeartCrack className="size-2.5" />}
+            {probe.ok ? `${probe.latency_ms}ms` : '✕'}
+        </Badge>
     );
 }
 

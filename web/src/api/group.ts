@@ -13,6 +13,9 @@ export interface GroupRelayConfig {
     member_retry_interval_seconds: number;
     member_non_stream_response_timeout_seconds: number;
     member_stream_first_event_timeout_seconds: number;
+    // member_stream_total_timeout_seconds 是一轮流式响应从发起到收到终止事件的总时长上限。
+    // 首事件超时只管到首帧，首帧之后上游长时间不发新事件同样要掐断，故另设这一道闸门。
+    member_stream_total_timeout_seconds: number;
     member_cooldown_seconds: number;
     member_affinity_seconds: number;
 }
@@ -42,6 +45,19 @@ export interface GroupRuntime {
     cooldowns: Record<number, number>;
     // scores 是成员健康分：正分在选路时上浮、负分下沉，0 表示按配置优先级。仅故障转移模式会累积。
     scores: Record<number, number>;
+    // probes 是成员最近一次人工测活（体检）的结论，仅由测活写入。
+    // 与 scores 分开：scores 还会被真实调用结果升降，由此界面能区分“这条结论来自我的体检”还是“来自线上调用”。
+    probes: Record<number, GroupProbeResult>;
+}
+
+// GroupProbeResult 是一次人工测活的结论。
+export interface GroupProbeResult {
+    group_id: number;
+    item_id: number;
+    ok: boolean;
+    latency_ms: number;
+    message: string; // 成功时为空，失败时为上游错误正文或本地配置错误。
+    probed_at: number; // 结论产生时间，Unix 毫秒。
 }
 
 // Group 是客户端模型名称对应的渠道分组。
@@ -196,5 +212,28 @@ export function useDeleteGroup() {
         mutationFn: (id: number) =>
             apiRequest<null>(`/api/v1/group/delete/${id}`, { method: 'DELETE' }),
         onSuccess: (_, id) => removeGroupCache(id),
+    });
+}
+
+// useProbeGroupItem 测活单个成员（体检一条）。
+// 结论由后端写进路由状态并经事件流广播，故此处不写缓存：重复写会让本地的乐观值与随后到达的事件互相覆盖。
+export function useProbeGroupItem() {
+    return useMutation({
+        mutationFn: ({ groupId, itemId, streaming }: { groupId: number; itemId: number; streaming?: boolean }) =>
+            apiRequest<GroupProbeResult>(`/api/v1/group/probe/${groupId}/${itemId}`, {
+                method: 'POST',
+                body: { streaming: streaming ?? false },
+            }),
+    });
+}
+
+// useProbeGroup 一键测活：不传 itemIds 时测分组内全部成员。
+export function useProbeGroup() {
+    return useMutation({
+        mutationFn: ({ groupId, itemIds, streaming }: { groupId: number; itemIds?: number[]; streaming?: boolean }) =>
+            apiRequest<GroupProbeResult[]>(`/api/v1/group/probe/${groupId}`, {
+                method: 'POST',
+                body: { item_ids: itemIds ?? [], streaming: streaming ?? false },
+            }),
     });
 }

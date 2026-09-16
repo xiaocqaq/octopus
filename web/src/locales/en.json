@@ -310,7 +310,10 @@
             "createFailed": "Create failed",
             "updated": "Updated successfully",
             "updateFailed": "Update failed",
-            "deleted": "Deleted successfully"
+            "deleted": "Deleted successfully",
+            "probeFailed": "Health check failed",
+            "probeAllOk": "All {count} members passed",
+            "probeAllPartial": "{ok} passed, {failed} unreachable"
         },
         "create": {
             "submit": "Create",
@@ -324,7 +327,15 @@
             "pinned": "Forced priority",
             "rankUp": "Ranked up {steps} after consecutive successes",
             "rankDown": "Ranked down {steps} after entering cooldown",
-            "modeToggleHint": "Click to switch routing mode"
+            "modeToggleHint": "Click to switch routing mode",
+            "probe": "Health check (send one minimal request to see if this member works right now)",
+            "probing": "Checking...",
+            "probeAll": "Check all",
+            "probingAll": "Checking",
+            "probeAllHint": "Check every member of this group; healthy ones are ranked higher",
+            "probeOk": "Last check passed in {ms}ms",
+            "probeFailed": "Last check failed: {message}",
+            "probeUnknownError": "unknown error"
         },
         "detail": {
             "actions": {

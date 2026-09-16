@@ -23,9 +23,29 @@ type RouteState struct {
 	// Scores 是成员 ID 对应的健康分: 正分在选路时上浮, 负分下沉, 0 表示按配置优先级。
 	// 由调用结果自动升降而来, 与冷却一样只存在于本进程, 不改写人工排定的 Priority。
 	Scores map[int]int `json:"scores"`
+	// Probes 是成员 ID 对应的最近一次人工测活结论, 供界面展示"体检结果"。
+	// 与 Scores 分开保存: Scores 还会被真实调用结果升降, 而 Probes 只由人工测活写入,
+	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。测活通过的成员
+	// 同时会被抬到健康分满档, 于是健康优先体现在选路顺序上而不只是展示。
+	Probes map[int]ProbeResult `json:"probes"`
 
 	affinityArmed bool        // 当前路由下一次成功后是否开始亲和, 仅故障切换后为真。
 	successes     map[int]int // 各成员当前的连续成功轮数, 满升档阈值后清零; 内部计数, 不出 JSON。
+	// pinnedFailures 是强制优先的成员当前的连续失败次数, 跨请求累计。常规成员在一个请求内失败到总尝试次数就让位,
+	// 强制成员改用这份计数: 连续失败超过阈值才冷却降档, 任意一次调通即清零。内部计数, 不出 JSON。
+	pinnedFailures map[int]int
+}
+
+// ProbeResult 是一次人工测活的结论。测活不经过客户端请求, 故不写请求日志也不计入调用统计,
+// 只把结论落在路由状态里, 由选路与界面各自消费。
+// 结论形状与状态同处本包定义: 它是路由算法的一个输入, 分组的持久化配置不含它。
+type ProbeResult struct {
+	GroupID   int    `json:"group_id"`   // 结论所属分组。
+	ItemID    int    `json:"item_id"`    // 被探测的成员 ID。
+	OK        bool   `json:"ok"`         // 本轮是否调通。
+	LatencyMS int64  `json:"latency_ms"` // 从发起到收到有效响应的耗时毫秒数; 失败时为耗时直到报错。
+	Message   string `json:"message"`    // 成功时为空, 失败时为上游错误正文或本地配置错误。
+	ProbedAt  int64  `json:"probed_at"`  // 结论产生时间, Unix 毫秒。
 }
 
 // routeScoreMax 是健康分相对配置优先级的最大偏移, 每一档相当于越过一个成员的位置。
@@ -35,6 +55,11 @@ const routeScoreMax = 3
 // routeSuccessStreak 是升一档所需的连续成功轮数。
 // 降档不需要另一个阈值: 触发降档的进入冷却本就已经是多次失败的结果。
 const routeSuccessStreak = 3
+
+// routePinnedFailureThreshold 是强制优先的成员进入冷却前可容忍的连续失败次数。
+// 常规成员失败到配置的总尝试次数(默认 2)就让位, 强制成员要连续失败超过该次数才冷却降档:
+// 人工钉住就是"宁可多试也用它", 阈值太低等于指定没生效, 太高则会把请求长时间耗在一个确实不可用的成员上。
+const routePinnedFailureThreshold = 5
 
 const routeStreamBuffer = 16 // 单个路由流连接的非阻塞消息缓冲容量。
 
@@ -48,11 +73,21 @@ var (
 // 手动模式没有进程内路由: 当前成员即人工指定的成员, 冷却与亲和均不适用, 故直接由分组配置得出。
 func RouteStateOf(group model.Group) RouteState {
 	if group.Mode == model.GroupModeManual {
+		// 手动模式没有选路队列, 但体检结论照存: "这个成员此刻通不通"与路由模式无关, 界面上两种模式都要看到结论。
+		// 取的是同一份 Probes, 故切模式不会出现两套结论。
+		routeMu.Lock()
+		probes := map[int]ProbeResult{}
+		if route := routes[group.ID]; route != nil {
+			probes = maps.Clone(route.Probes)
+		}
+		routeMu.Unlock()
+
 		return RouteState{
 			GroupID:       group.ID,
 			CurrentItemID: group.ActiveItemID,
 			Cooldowns:     map[int]int64{},
 			Scores:        map[int]int{},
+			Probes:        probes,
 		}
 	}
 
@@ -61,11 +96,12 @@ func RouteStateOf(group model.Group) RouteState {
 
 	route := routes[group.ID]
 	if route == nil {
-		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}}
+		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}, Probes: map[int]ProbeResult{}}
 	}
 	state := *route
 	state.Cooldowns = maps.Clone(route.Cooldowns)
 	state.Scores = maps.Clone(route.Scores)
+	state.Probes = maps.Clone(route.Probes)
 	return state
 }
 
@@ -103,6 +139,7 @@ func pickGroupItem(group model.Group) model.GroupItem {
 	// 强制成员优先于优先级顺序与亲和: 只要它不在冷却中就一直选它。
 	// 冷却中则照常按优先级选路, 使强制不至于把请求一直压在一个已经不可用的成员上;
 	// 冷却到期后它重新胜出, 由此无需额外的切回逻辑。
+	// 它进入冷却的门槛比常规成员高得多: 要连续失败超过 routePinnedFailureThreshold 次(见 recordRouteFailure)。
 	if group.PinnedItemID != 0 {
 		if item := itemOf(group, group.PinnedItemID); item.ID != 0 {
 			deadline, cooling := route.Cooldowns[group.PinnedItemID]
@@ -186,6 +223,18 @@ func recordRouteSuccess(group model.Group, itemID int) {
 		}
 		changed = true
 	}
+	// 强制优先的成员只要调通一轮就算恢复: 连续失败清零, 之前因冷却扣掉的健康分抬回中性。
+	// 只抬负分不动正分: 它此前靠连续成功挣来的位次不该被这一次抹掉, 本功能带来的降档才是要取消的。
+	if group.PinnedItemID != 0 && itemID == group.PinnedItemID {
+		if route.pinnedFailures[itemID] != 0 {
+			delete(route.pinnedFailures, itemID)
+			changed = true
+		}
+		if route.Scores[itemID] < 0 {
+			route.Scores[itemID] = 0
+			changed = true
+		}
+	}
 	// 连续成功累计到阈值即升一档, 让稳定可用的成员逐渐排到配置顺序之前。
 	route.successes[itemID]++
 	if route.successes[itemID] >= routeSuccessStreak {
@@ -224,8 +273,16 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	}
 	// 任意真实失败都会打断连续成功; 是否进入冷却仍由本请求内的失败次数决定。
 	route.successes[itemID] = 0
-	// 探测请求只有一次机会, 常规成员达到配置的总尝试次数后进入冷却。
-	if route.ProbeItemID != itemID && failures < group.RelayConfig.MemberMaxAttempts {
+	// 强制优先的成员不看本请求内的失败次数: 它的连续失败跨请求累计, 超过阈值才冷却降档。
+	// 用累计而非单请求计数, 是因为"连续错误超过 5 次"说的是这个成员的健康状况, 不是某一次请求的重试次数;
+	// 逐请求计数会在每个请求开头归零, 那样它永远攒不够阈值, 冷却与降档也就无从谈起。
+	if group.PinnedItemID != 0 && itemID == group.PinnedItemID {
+		route.pinnedFailures[itemID]++
+		if route.pinnedFailures[itemID] <= routePinnedFailureThreshold {
+			return false
+		}
+	} else if route.ProbeItemID != itemID && failures < group.RelayConfig.MemberMaxAttempts {
+		// 探测请求只有一次机会, 常规成员达到配置的总尝试次数后进入冷却。
 		return false
 	}
 
@@ -251,6 +308,7 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 
 // ReleaseItemCooldown 解除指定成员的冷却, 用于人工把它指定为强制成员。
 // 人工指定是明确的"现在就用它"的意图, 若还被残留的冷却挡在门外, 这次指定就落不了地。
+// 连续失败计数一并清零: 那是它上一轮被强制的旧账, 重新指定后不该让它更快让位。
 // 已经指定但正在冷却的成员不在此列: 那种情况下的让位是刻意的, 见 pickGroupItem。
 func ReleaseItemCooldown(groupID, itemID int) {
 	if itemID == 0 {
@@ -264,11 +322,18 @@ func ReleaseItemCooldown(groupID, itemID int) {
 	if route == nil {
 		return
 	}
-	if _, cooling := route.Cooldowns[itemID]; !cooling {
-		return
+	changed := false
+	if route.pinnedFailures[itemID] != 0 {
+		delete(route.pinnedFailures, itemID)
+		changed = true
 	}
-	delete(route.Cooldowns, itemID)
-	publishRouteLocked(route)
+	if _, cooling := route.Cooldowns[itemID]; cooling {
+		delete(route.Cooldowns, itemID)
+		changed = true
+	}
+	if changed {
+		publishRouteLocked(route)
+	}
 }
 
 // releaseRouteProbe 归还未产生成败结论的探测占用, 用于请求被人工中止或客户端断开。
@@ -304,9 +369,19 @@ func groupRouteLocked(group model.Group) *RouteState {
 			delete(route.Scores, itemID)
 		}
 	}
+	for itemID := range route.Probes {
+		if !items[itemID] {
+			delete(route.Probes, itemID)
+		}
+	}
 	for itemID := range route.successes {
 		if !items[itemID] {
 			delete(route.successes, itemID)
+		}
+	}
+	for itemID := range route.pinnedFailures {
+		if !items[itemID] {
+			delete(route.pinnedFailures, itemID)
 		}
 	}
 	if route.ProbeItemID != 0 && !items[route.ProbeItemID] {
@@ -320,17 +395,22 @@ func groupRouteLocked(group model.Group) *RouteState {
 	return route
 }
 
-// newRouteState 建立分组的进程内路由状态, 三个按成员索引的 map 一并就位, 写入侧无需再判空。
+// newRouteState 建立分组的进程内路由状态, 各按成员索引的 map 一并就位, 写入侧无需再判空。
 func newRouteState(groupID int) *RouteState {
 	return &RouteState{
-		GroupID:   groupID,
-		Cooldowns: make(map[int]int64),
-		Scores:    make(map[int]int),
-		successes: make(map[int]int),
+		GroupID:        groupID,
+		Cooldowns:      make(map[int]int64),
+		Scores:         make(map[int]int),
+		Probes:         make(map[int]ProbeResult),
+		successes:      make(map[int]int),
+		pinnedFailures: make(map[int]int),
 	}
 }
 
 // orderGroupItems 按健康分与配置优先级共同排出选路顺序: 先比健康分降序, 同分再按 Priority 升序。
+// 健康分的升降既来自真实调用结果, 也来自人工测活 —— 这是"健康的优先级更高"的落点:
+// 测活通过的成员被抬到满档, 于是体检合格的成员稳定排在未测活或测活失败的成员之前,
+// 而全员的相对次序仍由 Priority 在同分时兜底, 人工排定的顺序不会被彻底推翻。
 // 全部成员都无偏移时直接返回原序列: group.Items 已按 Priority 定序, 多排一次只会白花一次分配。
 // 用稳定排序而非显式比较 Priority: 原序列本身即是 Priority 顺序, 稳定排序天然把它作为同分时的次序。
 func orderGroupItems(group model.Group, route *RouteState) []model.GroupItem {
@@ -367,6 +447,7 @@ func publishRouteLocked(route *RouteState) {
 	message := *route
 	message.Cooldowns = maps.Clone(route.Cooldowns)
 	message.Scores = maps.Clone(route.Scores)
+	message.Probes = maps.Clone(route.Probes)
 	for stream := range routeStreams {
 		select {
 		case stream <- message:
