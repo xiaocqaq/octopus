@@ -172,7 +172,8 @@
             "export": {
                 "button": "导出",
                 "exporting": "导出中...",
-                "success": "开始导出"
+                "success": "开始导出",
+                "failed": "导出失败"
             },
             "import": {
                 "title": "导入",
@@ -360,6 +361,8 @@
             "nonStreamTimeoutHint": "等待完整非流式响应的最长时间",
             "streamTimeout": "流式首事件超时（秒）",
             "streamTimeoutHint": "等待首个有效流事件的最长时间",
+            "streamTotalTimeout": "流式总超时（秒）",
+            "streamTotalTimeoutHint": "一轮流式响应从发起到收到终止事件的总时长上限",
             "cooldown": "冷却时间（秒）",
             "cooldownHint": "成员重试耗尽后暂停使用的时间",
             "affinity": "故障切换亲和时间（秒）",

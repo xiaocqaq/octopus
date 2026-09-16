@@ -172,7 +172,8 @@
             "export": {
                 "button": "Export",
                 "exporting": "Exporting...",
-                "success": "Export started"
+                "success": "Export started",
+                "failed": "Export failed"
             },
             "import": {
                 "title": "Import",
@@ -360,6 +361,8 @@
             "nonStreamTimeoutHint": "Maximum wait for a complete non-stream response",
             "streamTimeout": "Stream First Event Timeout (s)",
             "streamTimeoutHint": "Maximum wait for the first valid stream event",
+            "streamTotalTimeout": "Stream Total Timeout (s)",
+            "streamTotalTimeoutHint": "Maximum total duration of one streaming response, until the terminal event",
             "cooldown": "Cooldown (s)",
             "cooldownHint": "Time a member is paused after retries are exhausted",
             "affinity": "Failover Affinity (s)",

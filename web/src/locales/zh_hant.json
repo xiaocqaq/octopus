@@ -172,7 +172,8 @@
             "export": {
                 "button": "匯出",
                 "exporting": "匯出中...",
-                "success": "開始匯出"
+                "success": "開始匯出",
+                "failed": "匯出失敗"
             },
             "import": {
                 "title": "匯入",
@@ -360,6 +361,8 @@
             "nonStreamTimeoutHint": "等待完整非串流回應的最長時間",
             "streamTimeout": "串流首事件逾時（秒）",
             "streamTimeoutHint": "等待首個有效串流事件的最長時間",
+            "streamTotalTimeout": "串流總逾時（秒）",
+            "streamTotalTimeoutHint": "一輪串流回應從發起到收到終止事件的總時長上限",
             "cooldown": "冷卻時間（秒）",
             "cooldownHint": "成員重試耗盡後暫停使用的時間",
             "affinity": "故障切換親和時間（秒）",
