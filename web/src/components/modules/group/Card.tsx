@@ -136,13 +136,38 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 若让浮层先以"未测量"的兜底样式(left/top 0, width 0)挂上去, 那份零宽布局会被成员行删除按钮的
     // layoutId 投影当成起点快照, 拿到真实矩形后 Framer Motion 便把这个 X 从行中间一路补间到右端
     // (实测 418.66px / 0.25s), 看起来就是"删除 X 在乱跑"。
+    // 同源的第二个坑(2026-09-16 复现): 页面进场动画还没结束就悬停时, 卡片祖先带着 scale,
+    // getBoundingClientRect 给的是"缩放后的视觉框", 拿它给浮层定宽会把宽度短暂算错 ——
+    // layoutId 投影随即给删除按钮补一个 scale + translate 修正, 那个 X 会在自己行里游移约 24px
+    // (实测 scale 1.06→1.12、相对行右缘 30px→8px, 约 450ms 后自行停下)。
+    // 故: 等"缩放回到 1 且连续三帧不动"再落位, 宽度取不受变换影响的 offsetWidth。
     useLayoutEffect(() => {
         if (!expanded) return;
         const card = cardRef.current;
         if (!card) return;
-        const rect = card.getBoundingClientRect();
         overlaySideRef.current = 'below';
-        setOverlayRect({ top: rect.bottom, left: rect.left, width: rect.width, side: 'below' });
+        const startedAt = performance.now();
+        let last = card.getBoundingClientRect();
+        let steady = 0;
+        let frame = 0;
+        const settle = () => {
+            const rect = card.getBoundingClientRect();
+            const scale = card.offsetWidth > 0 ? rect.width / card.offsetWidth : 1;
+            const still = Math.abs(scale - 1) < 0.01
+                && Math.abs(rect.top - last.top) < 0.5
+                && Math.abs(rect.left - last.left) < 0.5;
+            last = rect;
+            steady = still ? steady + 1 : 0;
+            // 连续三帧不动即认定布局已稳; 超过 600ms 仍未稳(页面正被持续滚动等)也先落位,
+            // 不能让浮层因为"等不到稳定"而不出现。
+            if (steady >= 3 || performance.now() - startedAt > 600) {
+                setOverlayRect({ top: rect.bottom, left: rect.left, width: card.offsetWidth || rect.width, side: 'below' });
+                return;
+            }
+            frame = requestAnimationFrame(settle);
+        };
+        frame = requestAnimationFrame(settle);
+        return () => cancelAnimationFrame(frame);
     }, [expanded]);
 
     // 浮层默认贴在卡片外框正下方, 左右与宽度照抄卡片外框: 两侧边框与圆角由此接得上, 视觉上是同一张卡在向下生长。
@@ -153,6 +178,10 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         const card = cardRef.current;
         if (!card) return;
         const rect = card.getBoundingClientRect();
+        // 祖先还在做缩放动画时这一帧跳过: 缩放中的视觉框与浮层该占的布局框对不上, 拿它定宽会让
+        // layoutId 投影给成员行的删除按钮补一个 scale 修正(症状见上面展开处的注释), 宁可晚一帧再贴。
+        if (card.offsetWidth > 0 && Math.abs(rect.width / card.offsetWidth - 1) >= 0.01) return;
+        const width = card.offsetWidth || rect.width;
         const height = overlayRef.current?.offsetHeight ?? 0;
         const gap = 16; // 视口上下边缘各留的呼吸位, 与弹窗的 2rem 习惯一致取半。
         if (height > 0) {
@@ -163,8 +192,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             }
         }
         const nextRect: { top: number; left: number; width: number; side: 'below' | 'above' } = overlaySideRef.current === 'below'
-            ? { top: rect.bottom, left: rect.left, width: rect.width, side: 'below' }
-            : { top: rect.top - height, left: rect.left, width: rect.width, side: 'above' };
+            ? { top: rect.bottom, left: rect.left, width, side: 'below' }
+            : { top: rect.top - height, left: rect.left, width, side: 'above' };
         setOverlayRect((previous) => (
             previous && previous.top === nextRect.top && previous.left === nextRect.left
                 && previous.width === nextRect.width && previous.side === nextRect.side
