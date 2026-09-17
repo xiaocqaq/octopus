@@ -136,7 +136,9 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
     );
 }
 
-// ProbeMark 标出该成员最近一次人工测活的结论: 通过显示耗时, 失败显示错误摘要。
+// ProbeMark 标出该成员最近一次人工测活的结论: 只用一颗心 —— 通过是绿心, 失败是红心裂。
+// 耗时与错误正文一律放进悬停提示: 徽标里多写几个字符("6792ms")就会把成员行里的
+// "渠道 · 凭据"整段副标题挤没, 而成员名与渠道名才是这一行要传达的主信息(实测截图里那行副标题直接消失)。
 // 与 RankMark 并列而非互斥: 测活通过会在结论有效期内把健康分抬到满档, 两者一起看才明白这次排名上升是体检带来的。
 // 提示里带上有效期: 徽标到点会自己消失, 先说清"能看多久"才不至于让人以为它是丢了。
 function ProbeMark({ probe }: { probe: GroupProbeResult }) {
@@ -150,15 +152,14 @@ function ProbeMark({ probe }: { probe: GroupProbeResult }) {
         <Badge
             variant="outline"
             className={cn(
-                'shrink-0 gap-0.5 px-1 py-0 text-[10px] font-medium tabular-nums',
+                'shrink-0 px-1 py-0',
                 probe.ok
                     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                     : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
             )}
             title={title}
         >
-            {probe.ok ? <HeartPulse className="size-2.5" /> : <HeartCrack className="size-2.5" />}
-            {probe.ok ? `${probe.latency_ms}ms` : '✕'}
+            {probe.ok ? <HeartPulse className="size-3" /> : <HeartCrack className="size-3" />}
         </Badge>
     );
 }
