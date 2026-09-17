@@ -336,7 +336,8 @@
             "probeAllHint": "Check every member of this group; healthy ones are ranked higher",
             "probeOk": "Last check passed in {ms}ms",
             "probeFailed": "Last check failed: {message}",
-            "probeUnknownError": "unknown error"
+            "probeUnknownError": "unknown error",
+            "probeValidFor": "Valid for {minutes} minutes — check again afterwards"
         },
         "detail": {
             "actions": {

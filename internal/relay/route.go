@@ -20,13 +20,17 @@ type RouteState struct {
 	ProbeItemID   int           `json:"probe_item_id"`   // 当前占用恢复探测的成员 ID, 同一分组同时只允许一个成员被探测; 手动模式恒为 0。
 	AffinityUntil int64         `json:"affinity_until"`  // 当前路由的亲和截止 Unix 毫秒时间, 0 表示无亲和; 手动模式恒为 0。
 	Cooldowns     map[int]int64 `json:"cooldowns"`       // 失败成员 ID 对应的冷却截止 Unix 毫秒时间, 已到期的条目由前端按当前时间忽略。
-	// Scores 是成员 ID 对应的健康分: 正分在选路时上浮, 负分下沉, 0 表示按配置优先级。
+	// Scores 是成员 ID 对应的基础健康分: 正分在选路时上浮, 负分下沉, 0 表示按配置优先级。
 	// 由调用结果自动升降而来, 与冷却一样只存在于本进程, 不改写人工排定的 Priority。
+	// 这是"基础分", 不含测活加权: 选路用的是 effectiveScore(基础分 + 有效期内的测活加权),
+	// 而发布出去的 JSON 就是这张基础分表 —— 测活加权由两侧各自按同一条规则(probeVote)现算:
+	// 后端选路时算, 前端展示时算(它手里有结论与有效期, 到点自己就不算了)。
+	// 若把加权直接并进这张表, 结论过期时前端没有任何依据把它减回来, 界面会出现"徽标没了但 +3 还在"。
 	Scores map[int]int `json:"scores"`
 	// Probes 是成员 ID 对应的最近一次人工测活结论, 供界面展示"体检结果"。
 	// 与 Scores 分开保存: Scores 还会被真实调用结果升降, 而 Probes 只由人工测活写入,
-	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。测活通过的成员
-	// 同时会被抬到健康分满档, 于是健康优先体现在选路顺序上而不只是展示。
+	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。结论只有 probeResultTTL 的有效期,
+	// 过期即视为没有结论(既不展示也不参与选路), 要看就重新测活。
 	Probes map[int]ProbeResult `json:"probes"`
 
 	affinityArmed bool        // 当前路由下一次成功后是否开始亲和, 仅故障切换后为真。
@@ -74,11 +78,11 @@ var (
 func RouteStateOf(group model.Group) RouteState {
 	if group.Mode == model.GroupModeManual {
 		// 手动模式没有选路队列, 但体检结论照存: "这个成员此刻通不通"与路由模式无关, 界面上两种模式都要看到结论。
-		// 取的是同一份 Probes, 故切模式不会出现两套结论。
+		// 取的是同一份 Probes, 故切模式不会出现两套结论; 同样只给有效期内的那些。
 		routeMu.Lock()
 		probes := map[int]ProbeResult{}
 		if route := routes[group.ID]; route != nil {
-			probes = maps.Clone(route.Probes)
+			probes = freshProbes(route, time.Now().UnixMilli())
 		}
 		routeMu.Unlock()
 
@@ -99,9 +103,10 @@ func RouteStateOf(group model.Group) RouteState {
 		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}, Probes: map[int]ProbeResult{}}
 	}
 	state := *route
+	now := time.Now().UnixMilli()
 	state.Cooldowns = maps.Clone(route.Cooldowns)
 	state.Scores = maps.Clone(route.Scores)
-	state.Probes = maps.Clone(route.Probes)
+	state.Probes = freshProbes(route, now)
 	return state
 }
 
@@ -407,16 +412,54 @@ func newRouteState(groupID int) *RouteState {
 	}
 }
 
+// 测活加权(probeVote/effectiveScore)在下面几个函数里现算, 不落 route.Scores。
+
+// probeVote 是最近一次仍在有效期内的测活结论给选路的加权:
+// 通过按满档上浮(与连续成功顶格同效), 失败沉一档, 没有结论或结论已过期都是 0。
+//
+// 现算而不写进 Scores 是这套语义的关键: 结论有 probeResultTTL 的有效期, 写进表里到期就得回滚,
+// 而回滚分不清"这一档是测活加的"还是"真实调用加的", 必然误伤; 现算则到期自然归零, 也无需定时清理。
+// 前端(PROBE_SCORE_MAX/PROBE_VOTE_DOWN, web/src/api/group.ts)按同一条规则算展示用的分,
+// 两侧的档位常数必须一起改, 否则界面上的排名标记会与真实选路顺序不一致。
+func probeVote(route *RouteState, itemID int, now int64) int {
+	result, ok := route.Probes[itemID]
+	if !ok || !probeFresh(result, now) {
+		return 0
+	}
+	if result.OK {
+		return routeScoreMax
+	}
+	return probeVoteDown
+}
+
+// effectiveScore 是成员当前真正用于选路与展示的健康分: 调用结果累积的基础分, 加上有效期内的测活加权。
+func effectiveScore(route *RouteState, itemID int, now int64) int {
+	return route.Scores[itemID] + probeVote(route, itemID, now)
+}
+
+// freshProbes 只保留有效期内的测活结论: 过期的结论读出来就等于不存在, 想看就重新测活。
+func freshProbes(route *RouteState, now int64) map[int]ProbeResult {
+	probes := make(map[int]ProbeResult, len(route.Probes))
+	for itemID, result := range route.Probes {
+		if probeFresh(result, now) {
+			probes[itemID] = result
+		}
+	}
+	return probes
+}
+
 // orderGroupItems 按健康分与配置优先级共同排出选路顺序: 先比健康分降序, 同分再按 Priority 升序。
 // 健康分的升降既来自真实调用结果, 也来自人工测活 —— 这是"健康的优先级更高"的落点:
-// 测活通过的成员被抬到满档, 于是体检合格的成员稳定排在未测活或测活失败的成员之前,
+// 测活通过的成员在结论有效期内被抬到满档, 于是体检合格的成员稳定排在未测活或测活失败的成员之前,
 // 而全员的相对次序仍由 Priority 在同分时兜底, 人工排定的顺序不会被彻底推翻。
+// 结论过期后加权自动归零, 顺序随之回到配置与调用结果决定的样子。
 // 全部成员都无偏移时直接返回原序列: group.Items 已按 Priority 定序, 多排一次只会白花一次分配。
 // 用稳定排序而非显式比较 Priority: 原序列本身即是 Priority 顺序, 稳定排序天然把它作为同分时的次序。
 func orderGroupItems(group model.Group, route *RouteState) []model.GroupItem {
+	now := time.Now().UnixMilli()
 	ranked := false
 	for _, item := range group.Items {
-		if route.Scores[item.ID] != 0 {
+		if effectiveScore(route, item.ID, now) != 0 {
 			ranked = true
 			break
 		}
@@ -427,7 +470,7 @@ func orderGroupItems(group model.Group, route *RouteState) []model.GroupItem {
 	ordered := make([]model.GroupItem, len(group.Items))
 	copy(ordered, group.Items)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return route.Scores[ordered[i].ID] > route.Scores[ordered[j].ID]
+		return effectiveScore(route, ordered[i].ID, now) > effectiveScore(route, ordered[j].ID, now)
 	})
 	return ordered
 }
@@ -442,12 +485,14 @@ func itemOf(group model.Group, itemID int) model.GroupItem {
 	return model.GroupItem{}
 }
 
-// publishRouteLocked 非阻塞发布路由状态, 连接拥塞时关闭它并交给客户端重连获取全量快照; 冷却表与健康分按值复制以免前端读到后续变更; 调用方必须持有锁。
+// publishRouteLocked 非阻塞发布路由状态, 连接拥塞时关闭它并交给客户端重连获取全量快照; 冷却表, 健康分与体检结论按值复制以免前端读到后续变更; 调用方必须持有锁。
+// 体检结论只发有效期内的那些; 健康分发表里不含测活加权(前端拿结论与有效期自己算, 见 RouteState.Scores 的注释)。
 func publishRouteLocked(route *RouteState) {
+	now := time.Now().UnixMilli()
 	message := *route
 	message.Cooldowns = maps.Clone(route.Cooldowns)
 	message.Scores = maps.Clone(route.Scores)
-	message.Probes = maps.Clone(route.Probes)
+	message.Probes = freshProbes(route, now)
 	for stream := range routeStreams {
 		select {
 		case stream <- message:

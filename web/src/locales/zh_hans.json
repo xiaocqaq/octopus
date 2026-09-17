@@ -336,7 +336,8 @@
             "probeAllHint": "依次体检本组所有成员；通过的会被抬到更高优先级",
             "probeOk": "上次测活通过，耗时 {ms}ms",
             "probeFailed": "上次测活失败：{message}",
-            "probeUnknownError": "未知错误"
+            "probeUnknownError": "未知错误",
+            "probeValidFor": "结论 {minutes} 分钟内有效，过期后需重新测活"
         },
         "detail": {
             "actions": {

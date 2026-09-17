@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import { GroupCard } from './Card';
 import { CreateDialogContent } from './Create';
 import { useRuntimeClock } from './MemberStatus';
-import { useGroupList } from '@/api/group';
+import { useGroupList, PROBE_RESULT_TTL_MS } from '@/api/group';
 import { PageActions, usePageActionsStore } from '@/components/common/PageActions';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
 
@@ -79,11 +79,19 @@ export function Group() {
             estimateItemHeight={88}
             getItemKey={(group) => group.id}
             renderItem={(group) => {
-                let deadline = group.runtime.affinity_until;
+                // now 是共享时钟的真实时间; 下面的截止时间只在时钟停摆时兜底:
+                // 时钟按 1 秒步进, 停下来时可能停在截止时间之前一点点, 冻在截止值上能让倒计时标记干净消失。
+                // 体检结论的有效期也要算进来 —— 分组里只有体检结论而没有冷却时, 若 deadline 仍是 0,
+                // 传 0 会让"结论是否已过期"的比较恒为真, 徽标就永远不消失(实测踩过这个坑)。
+                let deadline = 0;
+                for (const probe of Object.values(group.runtime.probes ?? {})) {
+                    deadline = Math.max(deadline, probe.probed_at + PROBE_RESULT_TTL_MS);
+                }
+                deadline = Math.max(deadline, group.runtime.affinity_until);
                 for (const cooldownUntil of Object.values(group.runtime.cooldowns)) {
                     deadline = Math.max(deadline, cooldownUntil);
                 }
-                return <GroupCard group={group} now={deadline > runtimeNow ? runtimeNow : deadline} />;
+                return <GroupCard group={group} now={deadline === 0 ? runtimeNow : Math.min(runtimeNow, deadline)} />;
             }}
         />
     );

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, CircleCheck, HeartCrack, HeartPulse, Pin } from 'lu
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Group, GroupProbeResult } from '@/api/group';
+import { PROBE_RESULT_TTL_MS, probeScoreVote, type Group, type GroupProbeResult } from '@/api/group';
 
 // MemberStatusProps 描述成员的冷却和亲和状态。
 interface MemberStatusProps {
@@ -21,6 +21,12 @@ export function useRuntimeClock(source?: Group | Group[]) {
     let enabled = false;
     let lastDeadline = 0;
     for (const group of groups) {
+        // 体检结论的有效期同样要走这个时钟：手动模式没有冷却倒计时，但结论到点也要自己消失。
+        // 少了这一项，页面开着不动时徽标会一直挂着，直到某次重新拉取数据才消失。
+        for (const probe of Object.values(group.runtime.probes ?? {})) {
+            enabled = true;
+            lastDeadline = Math.max(lastDeadline, probe.probed_at + PROBE_RESULT_TTL_MS);
+        }
         if (group.mode !== 'failover') continue;
         enabled = true;
         lastDeadline = Math.max(lastDeadline, group.runtime.affinity_until);
@@ -51,14 +57,26 @@ export function useRuntimeClock(source?: Group | Group[]) {
     return now;
 }
 
+// freshProbe 取该成员仍在有效期内的体检结论：过期的结论一律当没有，要看就重新测活。
+// 后端读出来时已经滤过一遍（刷新、换设备都一致），这里再滤一次是为了页面开着不动时到点自己消失。
+export function freshProbe(group: Group, itemId: number | undefined, now: number): GroupProbeResult | undefined {
+    if (itemId === undefined) return undefined;
+    const probe = group.runtime.probes?.[itemId];
+    if (!probe) return undefined;
+    return now < probe.probed_at + PROBE_RESULT_TTL_MS ? probe : undefined;
+}
+
 // MemberStatus 展示成员的强制标记、体检结论、健康分偏移、冷却、亲和倒计时或当前使用圆点。
 export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
     const t = useTranslations('group.card');
     const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
     // 健康分只在故障转移模式累积; 手动模式没有进程内路由, 后端恒回空表。
-    const score = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
+    const baseScore = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
     // 体检结论两种模式都有：手动模式不参与选路，但"这条此刻通不通"仍是用户要看的结论。
-    const probe = itemId !== undefined ? group.runtime.probes?.[itemId] : undefined;
+    const probe = freshProbe(group, itemId, now);
+    // 展示用的健康分 = 基础分 + 有效期内的测活加权（与后端选路同一条规则）。
+    // 结论过期后 probe 变成 undefined，这一档自动消失，不会出现"徽标没了但 +3 还在"。
+    const score = baseScore + (probe ? probeScoreVote(probe) : 0);
 
     if (group.mode === 'failover' && itemId !== undefined) {
         const cooldownUntil = group.runtime.cooldowns[itemId] ?? 0;
@@ -108,12 +126,14 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
 }
 
 // ProbeMark 标出该成员最近一次人工测活的结论: 通过显示耗时, 失败显示错误摘要。
-// 与 RankMark 并列而非互斥: 测活通过会顺手把健康分抬到满档, 两者一起看才明白这次排名上升是体检带来的。
+// 与 RankMark 并列而非互斥: 测活通过会在结论有效期内把健康分抬到满档, 两者一起看才明白这次排名上升是体检带来的。
+// 提示里带上有效期: 徽标到点会自己消失, 先说清"能看多久"才不至于让人以为它是丢了。
 function ProbeMark({ probe }: { probe: GroupProbeResult }) {
     const t = useTranslations('group.card');
-    const title = probe.ok
+    const conclusion = probe.ok
         ? t('probeOk', { ms: probe.latency_ms })
         : t('probeFailed', { message: probe.message || t('probeUnknownError') });
+    const title = `${conclusion} · ${t('probeValidFor', { minutes: PROBE_RESULT_TTL_MS / 60_000 })}`;
 
     return (
         <Badge

@@ -336,7 +336,8 @@
             "probeAllHint": "依次體檢本組所有成員；通過的會被抬到更高優先級",
             "probeOk": "上次測活通過，耗時 {ms}ms",
             "probeFailed": "上次測活失敗：{message}",
-            "probeUnknownError": "未知錯誤"
+            "probeUnknownError": "未知錯誤",
+            "probeValidFor": "結論 {minutes} 分鐘內有效，逾期後需重新測活"
         },
         "detail": {
             "actions": {

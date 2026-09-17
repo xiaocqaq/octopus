@@ -44,10 +44,31 @@ export interface GroupRuntime {
     affinity_until: number;
     cooldowns: Record<number, number>;
     // scores 是成员健康分：正分在选路时上浮、负分下沉，0 表示按配置优先级。仅故障转移模式会累积。
+    // 它是调用结果累积的基础分，不含测活加权；加权由前端按 PROBE_SCORE_MAX / PROBE_VOTE_DOWN 现算
+    // （见 probeScoreVote），这样结论过期时加权能与排名标记一起消失。
     scores: Record<number, number>;
     // probes 是成员最近一次人工测活（体检）的结论，仅由测活写入。
     // 与 scores 分开：scores 还会被真实调用结果升降，由此界面能区分“这条结论来自我的体检”还是“来自线上调用”。
+    // 结论只有 PROBE_RESULT_TTL_MS 的有效期，过期的结论后端不会再返回，前端也不用展示。
     probes: Record<number, GroupProbeResult>;
+}
+
+// PROBE_RESULT_TTL_MS 是一次人工测活结论的有效期，与后端 probeResultTTL（internal/relay/probe.go）必须一致。
+// 两侧各管一段：后端保证“读出来就已经没有过期的结论”（刷新、换设备、新标签页都一致），
+// 前端保证“页面开着不动时，到点那个徽标自己消失”（不依赖后端再推一条消息）。
+// 有效期一过，排名提升与体检徽标一起消失——想看就重新测活。
+export const PROBE_RESULT_TTL_MS = 5 * 60 * 1000;
+
+// PROBE_SCORE_MAX 与 PROBE_VOTE_DOWN 是测活结论对健康分的加权档位，
+// 必须与后端 routeScoreMax / probeVoteDown（internal/relay/route.go、probe.go）保持一致。
+// 后端发布出去的 scores 只是调用结果累积的基础分，测活加权由两侧按同一条规则现算：
+// 后端选路时算，前端展示时算——结论一过期，两边同时不再把它算进去。
+export const PROBE_SCORE_MAX = 3;
+export const PROBE_VOTE_DOWN = -1;
+
+// probeScoreVote 是一条仍在有效期内的测活结论对健康分的加权（传入前先过 freshProbe）。
+export function probeScoreVote(probe: GroupProbeResult): number {
+    return probe.ok ? PROBE_SCORE_MAX : PROBE_VOTE_DOWN;
 }
 
 // GroupProbeResult 是一次人工测活的结论。

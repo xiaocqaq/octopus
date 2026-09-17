@@ -2,11 +2,13 @@ package relay
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
 
-// routeScore 加锁读取指定成员当前的健康分, 供断言使用。
+// routeScore 加锁读取指定成员当前的有效健康分(基础分 + 有效期内的测活加权), 供断言使用。
+// 断言用有效分而非 route.Scores: 选路与界面消费的都是有效分, 测活加权是现算的, 不落那张表。
 func routeScore(itemID int) int {
 	routeMu.Lock()
 	defer routeMu.Unlock()
@@ -15,7 +17,13 @@ func routeScore(itemID int) int {
 	if route == nil {
 		return 0
 	}
-	return route.Scores[itemID]
+	return effectiveScore(route, itemID, time.Now().UnixMilli())
+}
+
+// expireProbe 把一条结论的产生时间挪到有效期之外, 便于断言过期行为而不必真等 5 分钟。
+func expireProbe(result ProbeResult) ProbeResult {
+	result.ProbedAt = time.Now().Add(-probeResultTTL - time.Second).UnixMilli()
+	return result
 }
 
 // TestRecordProbeSuccessPromotesToTop 测活通过的成员健康分应抬到满档, 从而越过配置优先级排到最前。
@@ -183,5 +191,90 @@ func TestProbeResultClearedWithRemovedItem(t *testing.T) {
 
 	if _, exists := routes[900].Probes[3]; exists {
 		t.Fatalf("3 号已被移除, 其测活结论应被清理")
+	}
+}
+
+// TestProbeResultExpiresAfterTTL 有效期一过, 结论既不展示也不参与选路: 想看就得重新测活。
+// 三处都要一起失效, 否则界面会出现"徽标没了但 +3 还在"这种自相矛盾的样子:
+// 排名标记(状态接口里的 scores), 体检徽标(状态接口里的 probes), 以及真实的选路顺序。
+func TestProbeResultExpiresAfterTTL(t *testing.T) {
+	resetRoutes()
+	group := failoverGroup(0)
+	pickGroupItem(group)
+
+	recordProbe(group, 3, true, "", 42)
+	if got := routeScore(3); got != routeScoreMax {
+		t.Fatalf("前置条件不成立: 有效期内加权应为 %d, 却是 %d", routeScoreMax, got)
+	}
+	// 发布出去的分数表只含基础分: 测活加权由前端按同一条规则现算(它手里有结论与有效期)。
+	if got := RouteStateOf(group).Scores[3]; got != 0 {
+		t.Fatalf("状态接口的健康分不该含测活加权(前端自己算), 却得到 %d", got)
+	}
+	if _, ok := RouteStateOf(group).Probes[3]; !ok {
+		t.Fatalf("有效期内结论应随状态接口返回")
+	}
+	// 把结论时间拨到有效期之外, 不真等 5 分钟: 判定只看 probed_at。
+	routes[900].Probes[3] = expireProbe(routes[900].Probes[3])
+
+	if got := routeScore(3); got != 0 {
+		t.Fatalf("结论过期后加权应归零, 却得到 %d", got)
+	}
+	if _, ok := RouteStateOf(group).Probes[3]; ok {
+		t.Fatalf("过期的结论不该出现在状态接口里: %+v", RouteStateOf(group).Probes)
+	}
+	if got := RouteStateOf(group).Scores[3]; got != 0 {
+		t.Fatalf("健康分表应始终只有基础分, 却得到 %d", got)
+	}
+	if ordered := orderGroupItems(group, routes[900]); ordered[0].ID != 1 {
+		t.Fatalf("结论过期后应回到配置顺序(1 号在最前), 却得到 %v", itemIDs(ordered))
+	}
+	if got := pickGroupItem(group); got.ID != 1 {
+		t.Fatalf("结论过期后应重新选中 1 号, 却选中 %d 号", got.ID)
+	}
+}
+
+// TestProbeFailureVoteExpires 不通过的结论同样只管一个有效期: 过期后成员回到 0 分, 重新有机会被选中。
+// 一次"此刻不通"本来就只代表那一刻, 让它永久压住一个成员等于拿旧快照做长期决策。
+func TestProbeFailureVoteExpires(t *testing.T) {
+	resetRoutes()
+	group := failoverGroup(0)
+	pickGroupItem(group)
+
+	recordProbe(group, 1, false, "boom", 7)
+	if got := routeScore(1); got != -1 {
+		t.Fatalf("前置条件不成立: 失败结论应让 1 号沉一档, 却是 %d", got)
+	}
+	if ordered := orderGroupItems(group, routes[900]); ordered[0].ID == 1 {
+		t.Fatalf("前置条件不成立: 失败结论生效时 1 号不该排在首位")
+	}
+
+	routes[900].Probes[1] = expireProbe(routes[900].Probes[1])
+
+	if got := routeScore(1); got != 0 {
+		t.Fatalf("结论过期后 1 号该回到 0 分, 却得到 %d", got)
+	}
+	if ordered := orderGroupItems(group, routes[900]); ordered[0].ID != 1 {
+		t.Fatalf("结论过期后 1 号该回到配置顺序的首位, 却得到 %v", itemIDs(ordered))
+	}
+}
+
+// TestProbeFreshBoundary 有效期边界: 还差一点算有效, 越过一秒即作废。
+// 判定只看 probed_at 与有效期, 与"什么时候读"无关, 这样刷新页面, 换设备, 新标签页得到的结论一致。
+func TestProbeFreshBoundary(t *testing.T) {
+	now := time.Now().UnixMilli()
+	ttlMS := probeResultTTL.Milliseconds()
+
+	if !probeFresh(ProbeResult{ProbedAt: now - ttlMS + 1000}, now) {
+		t.Fatalf("还差 1 秒到期时结论应仍有效")
+	}
+	if probeFresh(ProbeResult{ProbedAt: now - ttlMS}, now) {
+		t.Fatalf("刚好满 %s 应视为过期", probeResultTTL)
+	}
+	if probeFresh(ProbeResult{ProbedAt: now - ttlMS - 1000}, now) {
+		t.Fatalf("超过有效期应视为过期")
+	}
+	// 时钟被往回调或时间戳偏未来时不该误判成过期。
+	if !probeFresh(ProbeResult{ProbedAt: now + 60_000}, now) {
+		t.Fatalf("未来时间戳的结论不该被判为过期")
 	}
 }
