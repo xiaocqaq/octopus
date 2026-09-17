@@ -22,11 +22,13 @@ type RouteState struct {
 	Cooldowns     map[int]int64 `json:"cooldowns"`       // 失败成员 ID 对应的冷却截止 Unix 毫秒时间, 已到期的条目由前端按当前时间忽略。
 	// Scores 是成员 ID 对应的基础健康分: 正分在选路时上浮, 负分下沉, 0 表示按配置优先级。
 	// 由调用结果自动升降而来, 与冷却一样只存在于本进程, 不改写人工排定的 Priority。
-	// 这是"基础分", 不含测活加权: 选路用的是 effectiveScore(基础分 + 有效期内的测活加权),
-	// 而发布出去的 JSON 就是这张基础分表 —— 测活加权由两侧各自按同一条规则(probeVote)现算:
-	// 后端选路时算, 前端展示时算(它手里有结论与有效期, 到点自己就不算了)。
-	// 若把加权直接并进这张表, 结论过期时前端没有任何依据把它减回来, 界面会出现"徽标没了但 +3 还在"。
+	// 表里存的是"变动当时"的加减值, 每一档都有寿命(routeScoreStepTTL): 展示与选路都用
+	// baseScore 现算衰减后的当前值 —— 上游会恢复, 分数不该被永久钉住。
+	// 发布出去的 JSON 带的是"已经衰减到发布时刻的值"与它的计时起点 ScoreAt(前端据此把剩余档位走完)。
 	Scores map[int]int `json:"scores"`
+	// ScoreAt 是 Scores 里每个成员的计时起点(Unix 毫秒): 从该时刻起每过 routeScoreStepTTL 就再少一档。
+	// 没有条目表示该分数不衰减(手工构造的状态或旧数据), 界面上直接按原值显示。
+	ScoreAt map[int]int64 `json:"score_at"`
 	// Probes 是成员 ID 对应的最近一次人工测活结论, 供界面展示"体检结果"。
 	// 与 Scores 分开保存: Scores 还会被真实调用结果升降, 而 Probes 只由人工测活写入,
 	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。结论只有 probeResultTTL 的有效期,
@@ -60,6 +62,14 @@ const routeScoreMax = 3
 // 降档不需要另一个阈值: 触发降档的进入冷却本就已经是多次失败的结果。
 const routeSuccessStreak = 3
 
+// routeScoreStepTTL 是一档健康分的寿命: 从该成员最近一次分数变动算起, 每过这段时间就有一档向 0 走。
+// 健康分要回答的是"最近这段时间谁可靠", 不是给成员下判决: 上游的限流、余额、网络都会恢复,
+// 而负数一旦被永久钉住, 成员会一直排在后面 —— 排后面就拿不到成功, 也就永远抵消不掉那一档(自锁)。
+// 因此每一档都有寿命: 最重的 -3 最多 3 个周期(默认 15 分钟)回到中性, 之后重新按配置优先级排队。
+// 反过来说, 靠连续成功挣来的正分同样会过期: 一直顺畅的成员会被新的成功不断续期, 闲下来就自然回落到配置顺序。
+// 与前端 SCORE_STEP_TTL_MS(web/src/api/group.ts) 必须一致(前端据此把界面上那一档按同一个节奏走完)。
+const routeScoreStepTTL = 5 * time.Minute
+
 // routePinnedFailureThreshold 是强制优先的成员进入冷却前可容忍的连续失败次数。
 // 常规成员失败到配置的总尝试次数(默认 2)就让位, 强制成员要连续失败超过该次数才冷却降档:
 // 人工钉住就是"宁可多试也用它", 阈值太低等于指定没生效, 太高则会把请求长时间耗在一个确实不可用的成员上。
@@ -91,6 +101,7 @@ func RouteStateOf(group model.Group) RouteState {
 			CurrentItemID: group.ActiveItemID,
 			Cooldowns:     map[int]int64{},
 			Scores:        map[int]int{},
+			ScoreAt:       map[int]int64{},
 			Probes:        probes,
 		}
 	}
@@ -100,12 +111,12 @@ func RouteStateOf(group model.Group) RouteState {
 
 	route := routes[group.ID]
 	if route == nil {
-		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}, Probes: map[int]ProbeResult{}}
+		return RouteState{GroupID: group.ID, Cooldowns: map[int]int64{}, Scores: map[int]int{}, ScoreAt: map[int]int64{}, Probes: map[int]ProbeResult{}}
 	}
 	state := *route
 	now := time.Now().UnixMilli()
 	state.Cooldowns = maps.Clone(route.Cooldowns)
-	state.Scores = maps.Clone(route.Scores)
+	state.Scores, state.ScoreAt = baseScoresAt(route, now)
 	state.Probes = freshProbes(route, now)
 	return state
 }
@@ -235,17 +246,30 @@ func recordRouteSuccess(group model.Group, itemID int) {
 			delete(route.pinnedFailures, itemID)
 			changed = true
 		}
-		if route.Scores[itemID] < 0 {
-			route.Scores[itemID] = 0
+		if base := baseScore(route, itemID, now); base < 0 {
+			markScore(route, itemID, now, -base)
 			changed = true
 		}
+	}
+	// 一次成功先抵掉一档负分: 恢复了就该立刻被认可, 不必再等连续三次。
+	// 负分成员会被排到后面, 排后面就拿不到成功 —— 要求"连续成功三次"来抵消, 等于让它永远抵消不掉。
+	// 判断看的是衰减后的当前值: 靠闲置已经熬回中性的成员, 这一步不该再额外送它一档正分。
+	if baseScore(route, itemID, now) < 0 {
+		markScore(route, itemID, now, 1)
+		changed = true
+	} else if route.Scores[itemID] < 0 {
+		// 调通一轮就该把"惯犯"记录一并清掉: 负分已经衰减到 0 却还在表里留着旧值, 下一次失败会被当作
+		// 重复失败而多压一档(见 recordRouteFailure), 那是拿一次成功之后的失败去惩罚已经作废的旧账。
+		delete(route.Scores, itemID)
+		delete(route.ScoreAt, itemID)
+		changed = true
 	}
 	// 连续成功累计到阈值即升一档, 让稳定可用的成员逐渐排到配置顺序之前。
 	route.successes[itemID]++
 	if route.successes[itemID] >= routeSuccessStreak {
 		route.successes[itemID] = 0
 		if route.Scores[itemID] < routeScoreMax {
-			route.Scores[itemID]++
+			markScore(route, itemID, now, 1)
 			changed = true
 		}
 	}
@@ -294,10 +318,23 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	now := time.Now().UnixMilli()
 	route.Cooldowns[itemID] = now + int64(group.RelayConfig.MemberCooldownSeconds)*1000
 	// 需要冷却说明该成员已经连续失败到不值得再用, 顺手降一档: 冷却到期后它会带着这一档偏移重新排队,
-	// 排到原本不如它的成员之后; 探针成功与后续的连续成功再把它抬回来。
-	if route.Scores[itemID] > -routeScoreMax {
-		route.Scores[itemID]--
+	// 排到原本不如它的成员之后; 测活通过、任意一次真实成功(抵一档)与连续成功(升一档)再把它抬回来。
+	// 这一档同样有寿命(routeScoreStepTTL): 一直失败的成员会被反复续期, 而不再失败的成员会自己走回中性。
+	//
+	// 惯犯加深: 表里的负分若已经过了寿命(此刻衰减到 0), 说明上次挨罚之后它又拿到过机会, 这次仍失败就不是偶发。
+	// 一次只扣一档的话它会每过一个档位周期就回来撞一次, 长期坏掉的成员于是成了固定的空转开销;
+	// 每重复一次多扣一档(-1 → -2 → -3), 再试一次的间隔随之变成 5 → 10 → 15 分钟。
+	// 上限仍由 routeScoreMax 兜住: 无论多坏都要自己走回 0, 不允许变成永久判决。
+	// 作为代价, 一个"挨罚后一直没流量(放够久)又失败"的成员也会被算作惯犯而多压一档 —— 二者在表里无法区分,
+	// 但都确实"罚过又失败", 且任何一次成功或测活通过都会清掉这份记录(见 recordRouteSuccess / recordProbe)。
+	delta := -1
+	if recorded := route.Scores[itemID]; recorded < 0 && baseScore(route, itemID, now) == 0 {
+		delta = recorded - 1
+		if delta < -routeScoreMax {
+			delta = -routeScoreMax
+		}
 	}
+	markScore(route, itemID, now, delta)
 	if route.ProbeItemID == itemID {
 		route.ProbeItemID = 0
 	}
@@ -372,6 +409,7 @@ func groupRouteLocked(group model.Group) *RouteState {
 	for itemID := range route.Scores {
 		if !items[itemID] {
 			delete(route.Scores, itemID)
+			delete(route.ScoreAt, itemID)
 		}
 	}
 	for itemID := range route.Probes {
@@ -406,13 +444,93 @@ func newRouteState(groupID int) *RouteState {
 		GroupID:        groupID,
 		Cooldowns:      make(map[int]int64),
 		Scores:         make(map[int]int),
+		ScoreAt:        make(map[int]int64),
 		Probes:         make(map[int]ProbeResult),
 		successes:      make(map[int]int),
 		pinnedFailures: make(map[int]int),
 	}
 }
 
-// 测活加权(probeVote/effectiveScore)在下面几个函数里现算, 不落 route.Scores。
+// 测活加权与健康分衰减都在下面几个函数里现算, 不在表里预先把结果写死。
+
+// markScore 记录一次基础健康分变动: 先把"已经走过的档位"落定, 再叠上这一档, 并把计时起点重置为现在。
+// 先落定是关键 —— 若直接拿表里的原始值相加, 一个闲置够久、实际已经回到中性的成员, 下一次失败会被
+// 打回最重的那一档(原始的 -3 再减一), 等于它的时效白熬了。
+// 每次变动都重置起点也是有意为之: 还在失败的成员应当继续被压着, 一直顺畅的成员也一直被新成功续期;
+// 而一旦不再有新的结果, 这份分数就按 routeScoreStepTTL 一档一档走向 0, 不会永远钉住谁。
+func markScore(route *RouteState, itemID int, now int64, delta int) {
+	if delta == 0 {
+		return
+	}
+	base, _ := baseScoreAt(route, itemID, now)
+	next := base + delta
+	if next > routeScoreMax {
+		next = routeScoreMax
+	}
+	if next < -routeScoreMax {
+		next = -routeScoreMax
+	}
+	if next == 0 {
+		delete(route.Scores, itemID)
+		delete(route.ScoreAt, itemID)
+		return
+	}
+	route.Scores[itemID] = next
+	route.ScoreAt[itemID] = now
+}
+
+// baseScoreAt 返回该成员基础分"此刻的值"以及这份值的计时起点(Unix 毫秒)。
+// 从计时起点起再走满一个 routeScoreStepTTL 才会掉到下一档, 所以起点是"当前这一档的开始时刻",
+// 而不是最初那次变动的时刻 —— 前端拿这两个数就能接着把剩下的档位按同一个节奏走完。
+// 没有计时起点的条目(手工构造的状态或旧数据)按原值返回, 不衰减。
+func baseScoreAt(route *RouteState, itemID int, now int64) (int, int64) {
+	score := route.Scores[itemID]
+	at := route.ScoreAt[itemID]
+	if score == 0 || at == 0 {
+		return score, 0
+	}
+	steps := int((now - at) / routeScoreStepTTL.Milliseconds())
+	if steps <= 0 {
+		return score, at
+	}
+	// 过期的档位一次走完, 但不越过 0: 分只会回到中性, 不会因为放置太久而反过来变成反向的分。
+	if score > 0 {
+		score -= steps
+		if score < 0 {
+			score = 0
+		}
+	} else {
+		score += steps
+		if score > 0 {
+			score = 0
+		}
+	}
+	return score, at + int64(steps)*routeScoreStepTTL.Milliseconds()
+}
+
+// baseScore 是成员基础健康分此刻的值, 供选路排序使用。
+func baseScore(route *RouteState, itemID int, now int64) int {
+	score, _ := baseScoreAt(route, itemID, now)
+	return score
+}
+
+// baseScoresAt 导出两张表: 已按时间衰减到此刻的分数, 以及各自这一档的计时起点。
+// 两者一起给出去, 前端才能在页面内把剩下的档位走完(只看分数、没有起点就只能等下一次刷新)。
+func baseScoresAt(route *RouteState, now int64) (map[int]int, map[int]int64) {
+	scores := make(map[int]int, len(route.Scores))
+	scoreAt := make(map[int]int64, len(route.ScoreAt))
+	for itemID := range route.Scores {
+		score, at := baseScoreAt(route, itemID, now)
+		if score == 0 {
+			continue
+		}
+		scores[itemID] = score
+		if at != 0 {
+			scoreAt[itemID] = at
+		}
+	}
+	return scores, scoreAt
+}
 
 // probeVote 是最近一次仍在有效期内的测活结论给选路的加权:
 // 通过按满档上浮(与连续成功顶格同效), 失败沉一档, 没有结论或结论已过期都是 0。
@@ -432,9 +550,10 @@ func probeVote(route *RouteState, itemID int, now int64) int {
 	return probeVoteDown
 }
 
-// effectiveScore 是成员当前真正用于选路与展示的健康分: 调用结果累积的基础分, 加上有效期内的测活加权。
+// effectiveScore 是成员当前真正用于选路与展示的健康分:
+// 调用结果累积的基础分(已按时效衰减) 加上有效期内的测活加权。
 func effectiveScore(route *RouteState, itemID int, now int64) int {
-	return route.Scores[itemID] + probeVote(route, itemID, now)
+	return baseScore(route, itemID, now) + probeVote(route, itemID, now)
 }
 
 // freshProbes 只保留有效期内的测活结论: 过期的结论读出来就等于不存在, 想看就重新测活。
@@ -486,12 +605,12 @@ func itemOf(group model.Group, itemID int) model.GroupItem {
 }
 
 // publishRouteLocked 非阻塞发布路由状态, 连接拥塞时关闭它并交给客户端重连获取全量快照; 冷却表, 健康分与体检结论按值复制以免前端读到后续变更; 调用方必须持有锁。
-// 体检结论只发有效期内的那些; 健康分发表里不含测活加权(前端拿结论与有效期自己算, 见 RouteState.Scores 的注释)。
+// 健康分发布"已经衰减到此刻的值 + 该档的计时起点", 体检结论只发有效期内的; 前端据此在页面内把剩余档位走完, 不必等下一次推送。
 func publishRouteLocked(route *RouteState) {
 	now := time.Now().UnixMilli()
 	message := *route
 	message.Cooldowns = maps.Clone(route.Cooldowns)
-	message.Scores = maps.Clone(route.Scores)
+	message.Scores, message.ScoreAt = baseScoresAt(route, now)
 	message.Probes = freshProbes(route, now)
 	for stream := range routeStreams {
 		select {

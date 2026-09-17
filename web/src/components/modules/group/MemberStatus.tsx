@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, CircleCheck, HeartCrack, HeartPulse, Pin } from 'lu
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { PROBE_RESULT_TTL_MS, probeScoreVote, type Group, type GroupProbeResult } from '@/api/group';
+import { PROBE_RESULT_TTL_MS, SCORE_STEP_TTL_MS, activeScore, probeScoreVote, scoreDeadline, type Group, type GroupProbeResult } from '@/api/group';
 
 // MemberStatusProps 描述成员的冷却和亲和状态。
 interface MemberStatusProps {
@@ -32,6 +32,13 @@ export function useRuntimeClock(source?: Group | Group[]) {
         lastDeadline = Math.max(lastDeadline, group.runtime.affinity_until);
         for (const cooldownUntil of Object.values(group.runtime.cooldowns)) {
             lastDeadline = Math.max(lastDeadline, cooldownUntil);
+        }
+        // 健康分同样会随时间走回中性：后端只给"已衰减到此刻"的值与这一档的计时起点，
+        // 剩下的档位要靠这个时钟在页面内走完（见 activeScore / scoreDeadline）。
+        // 少了这一项，页面开着不动时排名标记会一直挂在原来的档位上，直到某次重新拉取数据才对齐。
+        for (const [itemID, score] of Object.entries(group.runtime.scores ?? {})) {
+            const zero = scoreDeadline(score, group.runtime.score_at?.[Number(itemID)] ?? 0);
+            if (zero > 0) lastDeadline = Math.max(lastDeadline, zero);
         }
     }
 
@@ -71,7 +78,11 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
     const t = useTranslations('group.card');
     const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
     // 健康分只在故障转移模式累积; 手动模式没有进程内路由, 后端恒回空表。
-    const baseScore = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
+    // 后端给的是“已衰减到收到数据那一刻”的值与这一档的计时起点, 这里接着把剩下的档位走完 ——
+    // 上游会恢复, 分数不是永久判决, 所以标记也要能在页面开着不动时自己走回 0。
+    const rawScore = group.mode === 'failover' && itemId !== undefined ? (group.runtime.scores?.[itemId] ?? 0) : 0;
+    const scoreAt = itemId !== undefined ? (group.runtime.score_at?.[itemId] ?? 0) : 0;
+    const baseScore = activeScore(rawScore, scoreAt, now);
     // 体检结论两种模式都有：手动模式不参与选路，但"这条此刻通不通"仍是用户要看的结论。
     const probe = freshProbe(group, itemId, now);
     // 展示用的健康分 = 基础分 + 有效期内的测活加权（与后端选路同一条规则）。
@@ -168,7 +179,12 @@ function RankMark({ score }: { score: number }) {
                     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                     : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
             )}
-            title={t(up ? 'rankUp' : 'rankDown', { steps: Math.abs(score) })}
+            title={t(up ? 'rankUp' : 'rankDown', {
+                steps: Math.abs(score),
+                // 一档的寿命要与后端 routeScoreStepTTL 一致(见 SCORE_STEP_TTL_MS)：
+                // 提示里说清"它自己会走回去"，用户才不会以为这个负分是永久判决。
+                minutes: SCORE_STEP_TTL_MS / 60_000,
+            })}
         >
             {up ? <ArrowUp className="size-2.5" /> : <ArrowDown className="size-2.5" />}
             {Math.abs(score)}

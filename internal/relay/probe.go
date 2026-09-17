@@ -274,6 +274,15 @@ func recordProbe(group model.Group, itemID int, ok bool, message string, latency
 		if route.ProbeItemID == itemID {
 			route.ProbeItemID = 0
 		}
+		// 体检通过就抵掉一档负分: 与真实成功同一条规则(见 recordRouteSuccess)。
+		// 少了这一步, 之前因失败沉下去的分会一直压在底下, 而测活给的那点加权只有 5 分钟寿命。
+		if baseScore(route, itemID, result.ProbedAt) < 0 {
+			markScore(route, itemID, result.ProbedAt, 1)
+		} else if route.Scores[itemID] < 0 {
+			// 体检说它好, 就把那份已经衰减到 0 的负分旧账一并销掉: 留着会让它下一次失败被当成惯犯多压一档。
+			delete(route.Scores, itemID)
+			delete(route.ScoreAt, itemID)
+		}
 	} else {
 		// 失败只沉降不分, 也不直接冷却: 测活失败是"此刻不通", 未必是持续故障,
 		// 直接冷却会让一次误判把成员关进小黑屋; 让它在顺序上主动让位给体检合格的成员即可。

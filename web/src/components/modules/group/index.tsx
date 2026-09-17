@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import { GroupCard } from './Card';
 import { CreateDialogContent } from './Create';
 import { useRuntimeClock } from './MemberStatus';
-import { useGroupList, PROBE_RESULT_TTL_MS } from '@/api/group';
+import { useGroupList, PROBE_RESULT_TTL_MS, scoreDeadline } from '@/api/group';
 import { PageActions, usePageActionsStore } from '@/components/common/PageActions';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
 
@@ -90,6 +90,12 @@ export function Group() {
                 deadline = Math.max(deadline, group.runtime.affinity_until);
                 for (const cooldownUntil of Object.values(group.runtime.cooldowns)) {
                     deadline = Math.max(deadline, cooldownUntil);
+                }
+                // 健康分也要算进来：它自己会按 score_at 往 0 走，走到 0 可能比亲和/冷却晚得多
+                // （最重 -3 要 15 分钟）。漏掉这一项，时钟会停在亲和到期那一刻，
+                // 页面上的排名标记就不再往下降档 —— 实测就是这个症状。
+                for (const [itemID, score] of Object.entries(group.runtime.scores ?? {})) {
+                    deadline = Math.max(deadline, scoreDeadline(score, group.runtime.score_at?.[Number(itemID)] ?? 0));
                 }
                 return <GroupCard group={group} now={deadline === 0 ? runtimeNow : Math.min(runtimeNow, deadline)} />;
             }}

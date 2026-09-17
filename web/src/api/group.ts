@@ -44,9 +44,12 @@ export interface GroupRuntime {
     affinity_until: number;
     cooldowns: Record<number, number>;
     // scores 是成员健康分：正分在选路时上浮、负分下沉，0 表示按配置优先级。仅故障转移模式会累积。
-    // 它是调用结果累积的基础分，不含测活加权；加权由前端按 PROBE_SCORE_MAX / PROBE_VOTE_DOWN 现算
-    // （见 probeScoreVote），这样结论过期时加权能与排名标记一起消失。
+    // 它是“已按时间衰减到收到这份数据那一刻”的值（调用结果累积的基础分），不含测活加权；
+    // 加权由前端按 PROBE_SCORE_MAX / PROBE_VOTE_DOWN 现算（见 probeScoreVote）。
     scores: Record<number, number>;
+    // score_at 是每个分数的计时起点（Unix 毫秒）：从该时刻起每过 SCORE_STEP_TTL_MS 就再少一档。
+    // 后端只给当前有效的分数，没有条目的成员即无偏移；前端据此把剩下的档位在页面内自己走完。
+    score_at: Record<number, number>;
     // probes 是成员最近一次人工测活（体检）的结论，仅由测活写入。
     // 与 scores 分开：scores 还会被真实调用结果升降，由此界面能区分“这条结论来自我的体检”还是“来自线上调用”。
     // 结论只有 PROBE_RESULT_TTL_MS 的有效期，过期的结论后端不会再返回，前端也不用展示。
@@ -69,6 +72,27 @@ export const PROBE_VOTE_DOWN = -1;
 // probeScoreVote 是一条仍在有效期内的测活结论对健康分的加权（传入前先过 freshProbe）。
 export function probeScoreVote(probe: GroupProbeResult): number {
     return probe.ok ? PROBE_SCORE_MAX : PROBE_VOTE_DOWN;
+}
+
+// SCORE_STEP_TTL_MS 是一档健康分的寿命，必须与后端 routeScoreStepTTL（internal/relay/route.go）一致。
+// 上游的限流、余额、网络都会恢复，分数不该是永久判决：从计时起点起每过这段时间就有一档向 0 走，
+// 最重的 -3 最多 3 个周期回到中性，成员随即按配置优先级重新排队。
+export const SCORE_STEP_TTL_MS = 5 * 60 * 1000;
+
+// activeScore 把后端给的分数按时间起点继续走完剩下的档位，返回此刻应展示的值。
+// at 为 0 表示这份分数不带时效（旧数据），直接按原值显示。
+export function activeScore(score: number, at: number, now: number): number {
+    if (score === 0 || !at) return score;
+    const steps = Math.floor((now - at) / SCORE_STEP_TTL_MS);
+    if (steps <= 0) return score;
+    // 过期的档位一次走完，但不越过 0：分只会回到中性，不会反过来变成反向的分。
+    return score > 0 ? Math.max(score - steps, 0) : Math.min(score + steps, 0);
+}
+
+// scoreDeadline 是这份分数彻底归零的时刻（Unix 毫秒），供页面的共享时钟决定要走到什么时候。
+export function scoreDeadline(score: number, at: number): number {
+    if (score === 0 || !at) return 0;
+    return at + Math.abs(score) * SCORE_STEP_TTL_MS;
 }
 
 // GroupProbeResult 是一次人工测活的结论。
