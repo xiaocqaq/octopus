@@ -84,7 +84,7 @@ function RankCard({
                 </div>
             ) : (
                 <>
-                    <div className={`${grid} pt-3 pb-1 text-xs text-muted-foreground`}>
+                    <div className={`${grid} pt-4 pb-1 text-sm text-muted-foreground`}>
                         <div />
                         <div />
                         {RANK_COLUMNS.map((key) => (
@@ -105,7 +105,7 @@ function RankCard({
                             const hitRate = cacheRate(item.formatted.input_token.raw, item.formatted.cached_token.raw);
 
                             return (
-                                <div key={item.id} className={grid}>
+                                <div key={item.id} className={`${grid} py-3`}>
                                     <div className="flex items-center justify-center font-bold text-lg">{index + 1}</div>
 
                                     <div className="min-w-0">
@@ -120,8 +120,8 @@ function RankCard({
                                         </div>
                                     </div>
 
-                                    {/* 次数列: 成功/失败并排, 右侧边缘与词元, 金额两列对齐。 */}
-                                    <div className="flex items-center justify-end gap-1 text-sm font-medium tabular-nums">
+                                    {/* 次数列: 成功/失败并排, 字号与词元, 金额两列一致, 三列视觉重量才对等。 */}
+                                    <div className="flex items-center justify-end gap-1 text-base font-semibold tabular-nums">
                                         <span className="text-accent">
                                             {item.formatted.request_success.formatted.value}
                                             <span className="text-xs text-muted-foreground">
