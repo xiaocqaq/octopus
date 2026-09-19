@@ -4,6 +4,10 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 // 首页各处共用的统计维度: 金额, 次数, 词元。
 export type MetricKey = 'cost' | 'count' | 'tokens';
 
+// RankSort 是排行榜当前的排序维度与方向; desc 为真表示由大到小。
+// 两个排行榜各自持有一份: 点表头切换维度, 再点同一列翻转方向。
+export type RankSort = { key: MetricKey; desc: boolean };
+
 // 首页统计可选的时间周期: 数字为天数, all 为全时段。
 // 该周期同时作用于趋势图, 顶部汇总卡片与下方的渠道, 模型榜单, 三处读同一个值。
 export type ChartPeriod = '1' | '7' | '30' | 'all';
@@ -28,13 +32,13 @@ export function periodSinceDate(period: ChartPeriod): string {
 
 // 首页各区块的视图选项, 除渠道名模糊开关外均持久化到 localStorage。
 interface HomeViewState {
-    channelRankSortMode: MetricKey; // 渠道排行榜的排序维度。
-    modelRankSortMode: MetricKey; // 模型排行榜的排序维度。
+    channelRankSort: RankSort; // 渠道排行榜的排序维度与方向。
+    groupRankSort: RankSort; // 分组排行榜的排序维度与方向。
     chartMetricType: MetricKey; // 趋势图展示的指标。
     chartPeriod: ChartPeriod; // 趋势图的时间周期。
     isChannelNameHidden: boolean; // 是否模糊渠道名称, 分享图跟随此状态, 不持久化。
-    setChannelRankSortMode: (value: MetricKey) => void;
-    setModelRankSortMode: (value: MetricKey) => void;
+    setChannelRankSort: (value: RankSort) => void;
+    setGroupRankSort: (value: RankSort) => void;
     setChartMetricType: (value: MetricKey) => void;
     setChartPeriod: (value: ChartPeriod) => void;
     setChannelNameHidden: (value: boolean) => void;
@@ -43,13 +47,13 @@ interface HomeViewState {
 export const useHomeViewStore = create<HomeViewState>()(
     persist(
         (set) => ({
-            channelRankSortMode: 'cost',
-            modelRankSortMode: 'cost',
+            channelRankSort: { key: 'cost', desc: true },
+            groupRankSort: { key: 'cost', desc: true },
             chartMetricType: 'cost',
             chartPeriod: '1',
             isChannelNameHidden: false,
-            setChannelRankSortMode: (value) => set({ channelRankSortMode: value }),
-            setModelRankSortMode: (value) => set({ modelRankSortMode: value }),
+            setChannelRankSort: (value) => set({ channelRankSort: value }),
+            setGroupRankSort: (value) => set({ groupRankSort: value }),
             setChartMetricType: (value) => set({ chartMetricType: value }),
             setChartPeriod: (value) => set({ chartPeriod: value }),
             setChannelNameHidden: (value) => set({ isChannelNameHidden: value }),
@@ -58,8 +62,8 @@ export const useHomeViewStore = create<HomeViewState>()(
             name: 'home-view-options-storage',
             storage: createJSONStorage(() => localStorage),
             partialize: (state) => ({
-                channelRankSortMode: state.channelRankSortMode,
-                modelRankSortMode: state.modelRankSortMode,
+                channelRankSort: state.channelRankSort,
+                groupRankSort: state.groupRankSort,
                 chartMetricType: state.chartMetricType,
                 chartPeriod: state.chartPeriod,
             }),

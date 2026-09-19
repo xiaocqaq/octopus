@@ -127,7 +127,7 @@
         },
         "rank": {
             "channel": "渠道",
-            "model": "模型",
+            "group": "分组",
             "noData": "暂无排行数据",
             "cacheRate": "缓存命中率",
             "successRate": "成功率"

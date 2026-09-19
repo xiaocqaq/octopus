@@ -3,7 +3,8 @@ import { useTranslations } from 'use-intl';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { MetricKey } from './store';
 
-// MetricTabs 渲染以 / 分隔的统计维度切换, 供趋势图和排行榜共用。
+// MetricTabs 渲染以 / 分隔的统计维度切换, 供趋势图使用。
+// 排行榜已改为三指标同时展示, 不再需要维度切换。
 export function MetricTabs({ value, onChange }: { value: MetricKey; onChange: (value: MetricKey) => void }) {
     const t = useTranslations('home.metric');
 
