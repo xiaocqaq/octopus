@@ -56,10 +56,11 @@ export function SettingInfo() {
         updateCore.mutate(undefined, {
             onSuccess: () => {
                 toast.success(t('info.updateSuccess'));
-                // 更新成功后清理缓存并刷新
+                // 后端换完二进制约 1 秒后重启进程, 这里多等一会儿再刷新,
+                // 免得正好撞上服务重启的空窗, 刷新出一个打不开的页面。
                 setTimeout(() => {
                     void clearCacheAndReload();
-                }, 1500);
+                }, 3000);
             },
             onError: () => {
                 toast.error(t('info.updateFailed'));
