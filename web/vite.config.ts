@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
 import babel from '@rolldown/plugin-babel';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
@@ -34,6 +35,17 @@ export default defineConfig({
   plugins: [
     react(),
     babel({ presets: [reactCompilerPreset()] }),
+    // 构建完成后将版本号注入 Service Worker, 确保每次发版缓存自动失效。
+    {
+      name: 'inject-sw-version',
+      closeBundle() {
+        const swPath = path.resolve(import.meta.dirname, '../static/out/sw.js');
+        if (fs.existsSync(swPath)) {
+          const content = fs.readFileSync(swPath, 'utf-8');
+          fs.writeFileSync(swPath, content.replace(/__APP_VERSION__/g, appVersion));
+        }
+      },
+    },
     compression({
       algorithms: [defineAlgorithm('gzip', { level: 9 })],
       include: /\.(html|css|js|mjs|json|svg|txt|xml)$/,

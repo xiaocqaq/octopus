@@ -1,5 +1,6 @@
 // 缓存策略或预缓存结构变化时递增版本，以便激活阶段清理旧缓存。
-const CACHE_VERSION = 'v2';
+// 每次发版时自动从构建产物注入版本号，确保客户端能获取到新资源。
+const CACHE_VERSION = '__APP_VERSION__';
 const CACHE_NAMES = {
     shell: `octopus-shell-${CACHE_VERSION}`,
     static: `octopus-static-${CACHE_VERSION}`,
