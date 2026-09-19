@@ -180,3 +180,31 @@ export function useStatsAPIKey() {
         refetchOnMount: 'always',
     });
 }
+
+export interface StatsGroup extends StatsMetrics {
+    group_id: number;
+    group_name: string;
+}
+
+export interface StatsGroupFormatted {
+    group_id: number;
+    group_name: string;
+    formatted: StatsMetricsFormatted;
+}
+
+// useGroupStatsByPeriod 取分组在指定天数窗口内的统计, days 为 0 表示累计。
+// 按请求所属分组记一次, 不再把渠道模型总量按成员复制。
+export function useGroupStatsByPeriod(days: number, enabled = true) {
+    return useQuery({
+        queryKey: ['stats', 'group', 'period', days],
+        queryFn: () => apiRequest<StatsGroup[]>(`/api/v1/stats/group?days=${days}`),
+        select: (data): StatsGroupFormatted[] => data.map((item) => ({
+            group_id: item.group_id,
+            group_name: item.group_name,
+            formatted: formatStatsMetrics(item),
+        })),
+        enabled,
+        refetchInterval: 30000,
+        refetchOnMount: 'always',
+    });
+}

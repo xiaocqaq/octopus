@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,6 +41,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/apikey", http.MethodGet).
 				Handle(getStatsAPIKey),
+		).
+		AddRoute(
+			router.NewRoute("/group", http.MethodGet).
+				Handle(getStatsGroup),
 		)
 }
 
@@ -83,4 +88,20 @@ func getStatsTotal(c *gin.Context) {
 
 func getStatsAPIKey(c *gin.Context) {
 	resp.Success(c, op.StatsAPIKeyList())
+}
+
+// getStatsGroup 返回当前全部分组在查询窗口内的统计。
+// days 与渠道榜相同: 1/7/30 为日历日窗口, 缺省或非正数给出累计。
+func getStatsGroup(c *gin.Context) {
+	days, err := strconv.Atoi(c.DefaultQuery("days", "0"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, "invalid days")
+		return
+	}
+	rows, err := op.StatsGroupList(c.Request.Context(), days)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, rows)
 }

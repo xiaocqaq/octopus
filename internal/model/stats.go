@@ -51,6 +51,29 @@ type StatsChannelModelDaily struct {
 	StatsMetrics          // 该渠道模型当日的统计。
 }
 
+// StatsGroup 是单个分组的累计统计, 按接收该请求的分组主键归属, 不按成员复制渠道模型总量。
+// 同一上游模型出现在多个分组, 或同一渠道同一模型有多把 Key 加入同一分组, 都只记实际打到该分组的请求。
+type StatsGroup struct {
+	GroupID int `json:"group_id" gorm:"primaryKey"` // 分组主键, 改名不换主键, 统计跟着 ID 走。
+	StatsMetrics
+}
+
+// StatsGroupDaily 是单个分组在某一天的统计, 供首页分组榜按周期切片。
+// 与渠道按日明细同样只留最近若干天; 全时段读 StatsGroup 累计列。
+type StatsGroupDaily struct {
+	GroupID      int    `json:"group_id" gorm:"primaryKey"`        // 分组主键。
+	Date         string `json:"date" gorm:"primaryKey;index"`     // 统计日期, 格式 20060102。
+	StatsMetrics        // 该分组当日的统计。
+}
+
+// StatsGroupRow 是分组榜接口的一行: 当前分组名加上该分组在查询窗口内的统计。
+// 无流量的分组也返回, 各项为零, 由此榜单条目不随周期跳动。
+type StatsGroupRow struct {
+	GroupID   int    `json:"group_id"`
+	GroupName string `json:"group_name"`
+	StatsMetrics
+}
+
 // Add aggregates another StatsMetrics into the current one.
 func (s *StatsMetrics) Add(delta StatsMetrics) {
 	s.InputToken += delta.InputToken

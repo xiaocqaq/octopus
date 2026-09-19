@@ -1,13 +1,8 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, TrendingUp } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { useChannelStatsByPeriod } from '@/api/channel';
-import { groupListQueryOptions } from '@/api/queries';
-import { formatCount, formatMoney } from '@/lib/utils';
 import { PERIOD_DAYS, useHomeViewStore, type MetricKey, type RankSort } from './store';
-import { MetricTabs } from './metric-tabs';
-import { cacheRate, type StatsMetricsFormatted } from '@/api/stats';
+import { cacheRate, useGroupStatsByPeriod, type StatsMetricsFormatted } from '@/api/stats';
 
 // 榜单只展示这几项, 渠道可直接复用 api/channel 已算好的 formatted。
 // 输入与命中词元只取其 raw: 缓存率要按累计 Tokens 重算, 直接平均各条目的百分比会算错。
@@ -15,20 +10,6 @@ type RankMetrics = Pick<
     StatsMetricsFormatted,
     'total_cost' | 'total_token' | 'request_count' | 'request_success' | 'request_failed' | 'input_token' | 'cached_token'
 >;
-
-// sumRankMetrics 把两份榜单统计按 raw 相加并重新格式化。
-// 不能直接相加 formatted: 那是带单位的展示串, 5K + 5K 得重新进位成 10K 才对。
-function sumRankMetrics(a: RankMetrics, b: RankMetrics): RankMetrics {
-    return {
-        total_cost: formatMoney(a.total_cost.raw + b.total_cost.raw),
-        total_token: formatCount(a.total_token.raw + b.total_token.raw),
-        request_count: formatCount(a.request_count.raw + b.request_count.raw),
-        request_success: formatCount(a.request_success.raw + b.request_success.raw),
-        request_failed: formatCount(a.request_failed.raw + b.request_failed.raw),
-        input_token: formatCount(a.input_token.raw + b.input_token.raw),
-        cached_token: formatCount(a.cached_token.raw + b.cached_token.raw),
-    };
-}
 
 // 榜单中的一个条目, 渠道和模型共用。
 // 主标题是否被渠道名模糊开关糊掉由 blurName 决定: 渠道榜的标题本身就是渠道名, 模型榜的模型名不是。
@@ -46,12 +27,14 @@ const RANK_COLUMNS = ['count', 'tokens', 'cost'] as const;
 // RankCard 渲染单个排行榜。三个指标(次数 / 词元 / 金额)一行全展示, 点表头按该列排序, 再点同一列翻转方向。
 function RankCard({
     title,
+    hint,
     items,
     sort,
     onSortChange,
     hideChannelName,
 }: {
     title: string;
+    hint?: string;
     items: RankItem[];
     sort: RankSort;
     onSortChange: (value: RankSort) => void;
@@ -76,6 +59,7 @@ function RankCard({
     return (
         <div className="rounded-3xl bg-card text-card-foreground border-border border pt-2 px-4">
             <h3 className="font-semibold text-base">{title}</h3>
+            {hint ? <p className="text-xs text-muted-foreground mt-1">{hint}</p> : null}
 
             {ranked.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
@@ -162,29 +146,11 @@ function RankCard({
     );
 }
 
-// channelModelKey 以渠道与模型名定位一条渠道模型统计; 模型名大小写不敏感。
-function channelModelKey(channelID: number, modelName: string): string {
-    return `${channelID}\u0000${modelName.toLowerCase()}`;
-}
-
-// emptyRankMetrics 是分组成员在当前周期内无统计时的求和初值。
-function emptyRankMetrics(): RankMetrics {
-    return {
-        total_cost: formatMoney(0),
-        total_token: formatCount(0),
-        request_count: formatCount(0),
-        request_success: formatCount(0),
-        request_failed: formatCount(0),
-        input_token: formatCount(0),
-        cached_token: formatCount(0),
-    };
-}
-
 // Rank 并列渠道榜和分组榜, 两榜各自独立排序, 统计范围跟随首页共用的时间周期。
 export function Rank() {
     const period = useHomeViewStore((state) => state.chartPeriod);
     const { data: channelStats } = useChannelStatsByPeriod(PERIOD_DAYS[period]);
-    const { data: groups } = useQuery(groupListQueryOptions);
+    const { data: groupStats } = useGroupStatsByPeriod(PERIOD_DAYS[period]);
     const t = useTranslations('home.rank');
     const isChannelNameHidden = useHomeViewStore((state) => state.isChannelNameHidden);
     const channelRankSort = useHomeViewStore((state) => state.channelRankSort);
@@ -199,34 +165,13 @@ export function Rank() {
         formatted: channel.formatted,
     }));
 
-    // 分组榜: 客户端请求里的 model 就是分组名, 故一个分组的统计是其全部成员之和 ——
-    // 同一分组内不同渠道, 不同模型上的调用合并成一条, 比按模型名合并更贴近实际用法。
-    const groupItems: RankItem[] = useMemo(() => {
-        // (渠道, 模型名) -> 该渠道模型的统计, 供分组成员查表。
-        const byChannelModel = new Map<string, RankMetrics>();
-        for (const channel of channelStats ?? []) {
-            for (const channelModel of channel.models) {
-                byChannelModel.set(
-                    channelModelKey(channel.channel_id, channelModel.model_name),
-                    channelModel.formatted
-                );
-            }
-        }
-        // 成员在当前周期内没有统计时按 0 计: 分组本身仍要列出, 便于看出它没有被调用。
-        return (groups ?? []).map((group) => {
-            let metrics: RankMetrics | undefined;
-            for (const item of group.items) {
-                const found = byChannelModel.get(channelModelKey(item.channel_id, item.model_name));
-                if (!found) continue;
-                metrics = metrics ? sumRankMetrics(metrics, found) : { ...found };
-            }
-            return {
-                id: `group-${group.id}`,
-                name: group.name,
-                formatted: metrics ?? emptyRankMetrics(),
-            };
-        });
-    }, [channelStats, groups]);
+    // 分组榜直接读按请求归属的分组统计: 同一渠道同一模型多把 Key 只记实际打到该组的请求,
+    // 同一上游模型被多个分组引用时各记各的, 不再按成员复制渠道模型总量。
+    const groupItems: RankItem[] = (groupStats ?? []).map((group) => ({
+        id: `group-${group.group_id}`,
+        name: group.group_name,
+        formatted: group.formatted,
+    }));
 
     return (
         <div className="grid grid-cols-1 @3xl/home:grid-cols-2 gap-4">
@@ -239,6 +184,7 @@ export function Rank() {
             />
             <RankCard
                 title={t('group')}
+                hint={t('sinceEnabled')}
                 items={groupItems}
                 sort={groupRankSort}
                 onSortChange={setGroupRankSort}

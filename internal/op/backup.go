@@ -70,6 +70,12 @@ func DBExportAll(ctx context.Context) (*model.DBDump, error) {
 	if err := conn.Find(&d.StatsChannelModelDaily).Error; err != nil {
 		return nil, fmt.Errorf("export stats_channel_model_daily: %w", err)
 	}
+	if err := conn.Find(&d.StatsGroup).Error; err != nil {
+		return nil, fmt.Errorf("export stats_group: %w", err)
+	}
+	if err := conn.Find(&d.StatsGroupDaily).Error; err != nil {
+		return nil, fmt.Errorf("export stats_group_daily: %w", err)
+	}
 
 	return d, nil
 }
@@ -182,6 +188,16 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			return fmt.Errorf("import stats_channel_model_daily: %w", err)
 		} else {
 			res.RowsAffected["stats_channel_model_daily"] = n
+		}
+		if n, err := createUpsertAll(tx, dump.StatsGroup, []clause.Column{{Name: "group_id"}}); err != nil {
+			return fmt.Errorf("import stats_group: %w", err)
+		} else {
+			res.RowsAffected["stats_group"] = n
+		}
+		if n, err := createUpsertAll(tx, dump.StatsGroupDaily, []clause.Column{{Name: "group_id"}, {Name: "date"}}); err != nil {
+			return fmt.Errorf("import stats_group_daily: %w", err)
+		} else {
+			res.RowsAffected["stats_group_daily"] = n
 		}
 
 		return nil

@@ -106,7 +106,7 @@ func StatsSaveDB(ctx context.Context) error {
 	if err := persistDailyDetails(ctx); err != nil {
 		return err
 	}
-	return nil
+	return persistGroupStats(ctx)
 }
 
 // persistDailyDetails 落库渠道与渠道模型的按日明细并清理过期数据。
@@ -714,5 +714,5 @@ func statsRefreshCache(ctx context.Context) error {
 	}
 	channelModelDailyLock.Unlock()
 
-	return nil
+	return statsGroupRefreshCache(ctx)
 }

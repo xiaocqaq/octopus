@@ -57,6 +57,7 @@ type RequestState struct {
 	responseBody string             // 聚合后的完整最终响应体, 同样按需拉取。
 	apiKeyID     int                // 发起请求的 API Key ID, 用于请求完成后的归属统计。
 	cancel       context.CancelFunc // 中止最新一轮上游请求, 仅在该轮等待响应期间非空。
+	finalized    bool               // 终态统计是否已写入, 防止成功/失败/取消被重复定稿时把分组用量记两遍。
 }
 
 const streamBuffer = 16 // 单个状态流连接的非阻塞消息缓冲容量。
@@ -214,11 +215,16 @@ func (r *RequestState) finishLocked(usage *llm.Usage) {
 	} else {
 		metrics.RequestFailed = 1
 	}
-	_ = op.StatsTotalUpdate(metrics)
-	_ = op.StatsHourlyUpdate(metrics)
-	_ = op.StatsDailyUpdate(metrics)
-	if r.apiKeyID > 0 {
-		_ = op.StatsAPIKeyUpdate(r.apiKeyID, metrics)
+	if !r.finalized {
+		r.finalized = true
+		_ = op.StatsTotalUpdate(metrics)
+		_ = op.StatsHourlyUpdate(metrics)
+		_ = op.StatsDailyUpdate(metrics)
+		if r.apiKeyID > 0 {
+			_ = op.StatsAPIKeyUpdate(r.apiKeyID, metrics)
+		}
+		// 分组榜按接收该请求的分组记一次, 不按成员复制渠道模型总量。
+		op.StatsGroupUpdate(r.GroupID, metrics)
 	}
 	publishRequestLocked(r)
 
@@ -279,18 +285,19 @@ func usageMetrics(modelName string, usage *llm.Usage) model.StatsMetrics {
 		return model.StatsMetrics{}
 	}
 	metrics := model.StatsMetrics{InputToken: usage.PromptTokens, OutputToken: usage.CompletionTokens}
-	price, err := op.LLMGet(modelName)
-	if err != nil {
-		return metrics
-	}
 	cachedTokens, writeCachedTokens := int64(0), int64(0)
 	if usage.PromptTokensDetails != nil {
 		cachedTokens = usage.PromptTokensDetails.CachedTokens
 		writeCachedTokens = usage.PromptTokensDetails.WriteCachedTokens
 	}
 	// 缓存命中的部分是输入的子集, 一并计入统计, 界面据此算命中率。
+	// 未知单价时费用为零, 但命中量仍要留下, 否则分组榜的缓存率会变成 0。
 	metrics.CachedToken = cachedTokens
 	metrics.CacheWriteToken = writeCachedTokens
+	price, err := op.LLMGet(modelName)
+	if err != nil {
+		return metrics
+	}
 	inputTokens := max(int64(0), usage.PromptTokens-cachedTokens-writeCachedTokens)
 	metrics.InputCost = (float64(inputTokens)*price.Input + float64(cachedTokens)*price.CacheRead + float64(writeCachedTokens)*price.CacheWrite) / 1_000_000
 	metrics.OutputCost = float64(usage.CompletionTokens) * price.Output / 1_000_000

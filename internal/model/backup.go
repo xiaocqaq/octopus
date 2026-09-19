@@ -25,6 +25,8 @@ type DBDump struct {
 
 	StatsChannelDaily      []StatsChannelDaily      `json:"stats_channel_daily,omitempty"`       // 渠道按日明细, 供首页榜单按周期统计。
 	StatsChannelModelDaily []StatsChannelModelDaily `json:"stats_channel_model_daily,omitempty"` // 渠道模型按日明细。
+	StatsGroup             []StatsGroup             `json:"stats_group,omitempty"`              // 分组累计统计; 旧备份没有该字段时按空导入。
+	StatsGroupDaily        []StatsGroupDaily        `json:"stats_group_daily,omitempty"`        // 分组按日明细。
 }
 
 type DBImportResult struct {
