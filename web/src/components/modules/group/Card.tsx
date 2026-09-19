@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil } from 'lucide-react';
+import { Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useProbeGroup, useProbeGroupItem } from '@/api/group';
 import { useTranslations } from 'use-intl';
@@ -62,9 +62,28 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [members, setMembers] = useState<SelectedMember[]>([]);
+    // 触摸设备检测: 无 hover 能力的设备改用点击展开成员列表。
+    // 用 coarse pointer 作为主要判据, 同时监听变化以支持设备旋转/外接鼠标切换。
+    const [isTouchDevice, setIsTouchDevice] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        return window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(pointer: fine)').matches;
+    });
+    useEffect(() => {
+        const coarseQuery = window.matchMedia('(pointer: coarse)');
+        const fineQuery = window.matchMedia('(pointer: fine)');
+        const update = () => setIsTouchDevice(coarseQuery.matches && !fineQuery.matches);
+        update();
+        coarseQuery.addEventListener('change', update);
+        fineQuery.addEventListener('change', update);
+        return () => {
+            coarseQuery.removeEventListener('change', update);
+            fineQuery.removeEventListener('change', update);
+        };
+    }, []);
     // 成员区默认收起, 悬停展开: 展开态由全页面共享, 同一时间只有一张卡片展开。
     // 展开/收起各有 100ms 延迟(见 syncHover), 划过一排分组时不连环闪;
     // 而"移到另一张分组"这条路径由共享状态直接接管(那边一置位, 这张就不再是 active), 切换依旧利落。
+    // 触摸设备上改为点击卡片标题栏切换展开, 与 hover 共用同一份 activeGroupID。
     const activeGroupID = useGroupHoverStore((state) => state.activeGroupID);
     const setActiveGroup = useGroupHoverStore((state) => state.setActiveGroup);
     const expanded = activeGroupID === group.id;
@@ -119,6 +138,22 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     const handleOverlayEnter = useCallback(() => { overOverlayRef.current = true; syncHover(); }, [syncHover]);
     const handleOverlayLeave = useCallback(() => { overOverlayRef.current = false; syncHover(); }, [syncHover]);
 
+    // 触摸设备上点击标题栏切换成员列表展开/收起: 代替 hover, 同一时间仍只有一张展开。
+    // 阻止事件冒泡到可能存在的上层链接/按钮, 同时避免与卡片上的其他交互冲突。
+    const handleTitleClick = useCallback((event: React.MouseEvent) => {
+        if (!isTouchDevice) return;
+        // 如果点击发生在按钮上(模式切换/编辑/复制/删除), 不触发展开切换。
+        const target = event.target as HTMLElement;
+        if (target.closest('button, a, [role="button"]')) return;
+        event.stopPropagation();
+        setActiveGroup(expanded ? null : group.id);
+    }, [isTouchDevice, expanded, group.id, setActiveGroup]);
+
+    // 触摸设备上 hover 事件不可靠, 改为禁用 hover 计时器, 完全由点击控制。
+    // 非触摸设备保持原有 hover 行为。
+    const effectiveHandleCardEnter = isTouchDevice ? undefined : handleCardEnter;
+    const effectiveHandleCardLeave = isTouchDevice ? undefined : handleCardLeave;
+
     // 浮层收起后清掉它的悬停标志并复位生长方向: 卸载不会补发 leave, 留着会让下一次悬停永远等不到"两个都离开";
     // 方向不复位的话, 上一张在底部翻过向上的卡片会带着 above 直接盖住自己的头部。
     // 位置一并清空: 收起期间卡片可能被滚走, 下次展开要重新量过再出现, 不吃上一次的旧坐标。
@@ -130,19 +165,10 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         }
     }, [expanded]);
 
-    // 展开的当帧就用卡片外框定出"贴下方生长"的矩形, 且浮层在拿到矩形之前根本不渲染(见下方 portal 的
-    // 条件渲染)。两者缺一不可: 卡片外框此刻同步可量, 浮层高度要挂上去才知道, 所以先按 below 落位,
-    // 由 follow 循环量到真实高度后再决定要不要翻到上方 —— 现有滞回逻辑原样保留。
-    // 若让浮层先以"未测量"的兜底样式(left/top 0, width 0)挂上去, 那份零宽布局会被成员行删除按钮的
-    // layoutId 投影当成起点快照, 拿到真实矩形后 Framer Motion 便把这个 X 从行中间一路补间到右端
-    // (实测 418.66px / 0.25s), 看起来就是"删除 X 在乱跑"。
-    // 同源的第二个坑(2026-09-16 复现): 页面进场动画还没结束就悬停时, 卡片祖先带着 scale,
-    // getBoundingClientRect 给的是"缩放后的视觉框", 拿它给浮层定宽会把宽度短暂算错 ——
-    // layoutId 投影随即给删除按钮补一个 scale + translate 修正, 那个 X 会在自己行里游移约 24px
-    // (实测 scale 1.06→1.12、相对行右缘 30px→8px, 约 450ms 后自行停下)。
-    // 故: 等"缩放回到 1 且连续三帧不动"再落位, 宽度取不受变换影响的 offsetWidth。
+    // 触摸设备上展开时不需要浮层定位: 成员列表直接内联渲染在卡片内部。
+    // 非触摸设备保持 fixed 浮层逻辑不变。
     useLayoutEffect(() => {
-        if (!expanded) return;
+        if (!expanded || isTouchDevice) return;
         const card = cardRef.current;
         if (!card) return;
         overlaySideRef.current = 'below';
@@ -205,8 +231,9 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 浮层随卡片滚动/窗口缩放重新贴合; scroll 不冒泡, 故用捕获阶段接住内层滚动容器的滚动。
     // 另外在展开初期逐帧重算一小段时间: 页面进场等祖先动画带 transform 平移卡片, 动画中量到的外框
     // 是移动途中的位置, 只量一次会把浮层钉在错位处; 动画结束后位置即稳定, 故只跟随前 800ms。
+    // 触摸设备上成员列表内联渲染, 无需此逻辑。
     useLayoutEffect(() => {
-        if (!expanded) return;
+        if (!expanded || isTouchDevice) return;
         let frame = 0;
         const startedAt = performance.now();
         const follow = () => {
@@ -222,7 +249,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             window.removeEventListener('scroll', updateOverlayRect, true);
             window.removeEventListener('resize', updateOverlayRect);
         };
-    }, [expanded, updateOverlayRect]);
+    }, [expanded, updateOverlayRect, isTouchDevice]);
 
     useEffect(() => () => {
         // 卸载时先掐掉待触发的悬停计时器: 卡片被移除(换页/过滤)时计时器还挂着的话,
@@ -372,31 +399,46 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         <>
         <article
             ref={cardRef}
-            onMouseEnter={handleCardEnter}
-            onMouseLeave={handleCardLeave}
+            onMouseEnter={effectiveHandleCardEnter}
+            onMouseLeave={effectiveHandleCardLeave}
             // 展开时把相切一侧边框设为透明并调整圆角: 浮层接着那一处生长, 同时保留卡片原有尺寸避免网格重排。
+            // 触摸设备上成员列表内联渲染, 不需要切边。
             className={cn(
                 'flex flex-col border border-border bg-card p-4 text-card-foreground',
-                expanded
+                !isTouchDevice && expanded
                     ? overlayRect?.side === 'above'
                         ? 'rounded-b-3xl border-t-transparent'
                         : 'rounded-t-3xl border-b-transparent'
                     : 'rounded-3xl',
             )}
         >
-            <header className={cn(
-                'flex items-start justify-between relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1',
-                'mb-3',
-            )}>
+            <header
+                className={cn(
+                    'flex items-start justify-between relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1',
+                    'mb-3',
+                    isTouchDevice && 'cursor-pointer select-none active:bg-muted/50 transition-colors',
+                )}
+                onClick={handleTitleClick}
+                role={isTouchDevice ? 'button' : undefined}
+                aria-expanded={isTouchDevice ? expanded : undefined}
+            >
                 <div className="relative flex-1 mr-2 min-w-0 group/title">
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <h3 className="text-lg font-bold truncate">{group.name}</h3>
-                        </TooltipTrigger>
-                        <TooltipContent key={group.name} side="top" sideOffset={10} align="center">
-                            {group.name}
-                        </TooltipContent>
-                    </Tooltip>
+                    <div className="flex items-center gap-1.5">
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <h3 className="text-lg font-bold truncate">{group.name}</h3>
+                            </TooltipTrigger>
+                            <TooltipContent key={group.name} side="top" sideOffset={10} align="center">
+                                {group.name}
+                            </TooltipContent>
+                        </Tooltip>
+                        {/* 触摸设备上的展开指示器: 箭头方向反映当前展开状态。 */}
+                        {isTouchDevice && (
+                            expanded
+                                ? <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
+                                : <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                        )}
+                    </div>
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
@@ -424,7 +466,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                         <MorphingDialogContainer>
                             <MorphingDialogContent
                                 dismissOnClickOutside={false}
-                                className="relative w-screen max-w-full md:max-w-4xl bg-card text-card-foreground px-6 py-4 rounded-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden"
+                                className="relative w-screen max-w-full md:max-w-4xl bg-card text-card-foreground px-4 py-3 md:px-6 md:py-4 rounded-3xl h-[calc(100dvh-2rem)] md:h-[calc(100vh-2rem)] flex flex-col overflow-hidden"
                             >
                                 <EditDialogContent
                                     group={group}
@@ -469,6 +511,68 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 </AnimatePresence>
             </header>
 
+            {/* 触摸设备: 成员列表直接内联渲染在卡片内部, 展开时卡片自然变高。
+                用 AnimatePresence + height auto 实现平滑展开动画。 */}
+            {isTouchDevice && (
+                <AnimatePresence initial={false}>
+                    {expanded && (
+                        <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.25, ease: 'easeInOut' }}
+                            className="overflow-hidden"
+                        >
+                            <div className="mb-2 flex items-center justify-between gap-2 px-0.5">
+                                <span className="truncate text-[10px] font-medium text-muted-foreground">{t('form.items')}</span>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <button
+                                            type="button"
+                                            disabled={probeAll.isPending}
+                                            onClick={(e) => { e.stopPropagation(); handleProbeAll(); }}
+                                            className={cn(
+                                                'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                                'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+                                                probeAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                                            )}
+                                        >
+                                            {probeAll.isPending
+                                                ? <LoaderCircle className="size-3 animate-spin" />
+                                                : <HeartPulse className="size-3" />}
+                                            {t(probeAll.isPending ? 'card.probingAll' : 'card.probeAll')}
+                                        </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" sideOffset={8} align="center">
+                                        {t('card.probeAllHint')}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </div>
+
+                            {/* 移动端高度自适应: 内容少时不高, 内容多时限高并滚动。 */}
+                            <div className="max-h-[50vh] overflow-y-auto rounded-xl border border-border/50 bg-muted/30">
+                                <MemberList
+                                    members={members}
+                                    onReorder={setMembers}
+                                    onRemove={handleRemoveMember}
+                                    onActivate={handleActivate}
+                                    onProbe={handleProbe}
+                                    probingItemIds={probingItemIds}
+                                    activeItemId={group.runtime.current_item_id}
+                                    group={group}
+                                    now={now}
+                                    onDragStart={handleDragStart}
+                                    onDrop={submitMembers}
+                                    onDragFinish={handleDragFinish}
+                                    autoScrollOnAdd={false}
+                                    layoutScope={`card-${group.id}`}
+                                />
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            )}
+
         </article >
 
         {/* 成员浮层挂在 body 上, 而不是留在卡片内: VirtualizedGrid 的行带 transform, 会为每行建立层叠上下文,
@@ -479,7 +583,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             层级取 z-40: 高于网格行, 低于拖拽克隆体(5000)与弹窗(z-50), 拖拽和弹窗都不会被它挡住。 */}
         {/* overlayRect 是浮层能被正确落位的唯一凭据: 没量到就不挂载, 不能用兜底坐标挂上去 ——
             零宽布局会被成员的 layoutId 投影当作起点, 展开时那个 X 会从行中间滑到右端。 */}
-        {expanded && overlayRect && createPortal(
+        {/* 触摸设备上不使用浮层, 成员列表已内联渲染在卡片内。 */}
+        {!isTouchDevice && expanded && overlayRect && createPortal(
             <section
                 ref={overlayRef}
                 // 浮层不在卡片的 DOM 子树里, 故需自己维系悬停: 两条热区各记各的标志, 指针停在任一处都保持展开。

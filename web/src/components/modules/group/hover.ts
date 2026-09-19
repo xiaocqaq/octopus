@@ -6,9 +6,14 @@ import { create } from 'zustand';
 interface GroupHoverState {
     activeGroupID: number | null; // 正在展开的分组主键, null 表示没有。
     setActiveGroup: (id: number | null) => void;
+    // 触摸设备上改为点击展开: 与 hover 共用同一份 activeGroupID, 同一时间仍只有一张展开。
+    isTouchDevice: boolean;
+    setTouchDevice: (isTouch: boolean) => void;
 }
 
 export const useGroupHoverStore = create<GroupHoverState>((set) => ({
     activeGroupID: null,
     setActiveGroup: (id) => set({ activeGroupID: id }),
+    isTouchDevice: false,
+    setTouchDevice: (isTouch) => set({ isTouchDevice: isTouch }),
 }));
