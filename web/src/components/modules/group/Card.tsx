@@ -372,7 +372,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             values.relay_config.member_stream_first_event_timeout_seconds !== group.relay_config.member_stream_first_event_timeout_seconds ||
             values.relay_config.member_stream_total_timeout_seconds !== group.relay_config.member_stream_total_timeout_seconds ||
             values.relay_config.member_cooldown_seconds !== group.relay_config.member_cooldown_seconds ||
-            values.relay_config.member_affinity_seconds !== group.relay_config.member_affinity_seconds
+            values.relay_config.member_affinity_seconds !== group.relay_config.member_affinity_seconds ||
+            values.relay_config.reasoning_filter !== group.relay_config.reasoning_filter
         ) payload.relay_config = values.relay_config;
         // 成员集合与顺序有任一处不同就整体提交; 后端按授权主键匹配, 已有成员保留其主键与统计。
         const nextGrantIDs = values.members.map((m) => m.channel_grant_id);

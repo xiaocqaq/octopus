@@ -10,6 +10,7 @@ import { Accordion, AccordionContent, AccordionItem } from '@/components/ui/acco
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
 import type { GroupMode, GroupRelayConfig } from '@/api/group';
@@ -33,6 +34,7 @@ const defaultRelayConfig: GroupRelayConfig = {
     member_stream_total_timeout_seconds: 180,
     member_cooldown_seconds: 60,
     member_affinity_seconds: 0,
+    reasoning_filter: false,
 };
 
 // PROTOCOL_TAGS 是凭据行上的协议标识。
@@ -594,6 +596,16 @@ export function GroupEditor({
                                         }}
                                         className="rounded-xl"
                                     />
+                                </Field>
+                                <Field className="md:col-span-2">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <Switch
+                                            checked={relayConfig.reasoning_filter}
+                                            onCheckedChange={(checked) => setRelayConfig((prev) => ({ ...prev, reasoning_filter: checked }))}
+                                        />
+                                        <span className="text-sm">{t('form.reasoningFilter')}</span>
+                                        <FieldHelp text={t('form.reasoningFilterHint')} />
+                                    </label>
                                 </Field>
                             </div>
                         </TabsContent>

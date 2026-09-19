@@ -78,7 +78,6 @@ export type ChannelDetail = {
     param_override: string;
     channel_proxy: string;
     match_regex: string;
-    reasoning_filter: boolean; // 上游内部换号(典型是中转)时开启: 报错重发按可移植标准清洗历史。
 };
 
 // ChannelModelStats 是单个渠道模型的累计统计，自带名称。

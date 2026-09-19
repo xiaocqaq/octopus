@@ -44,10 +44,6 @@ type ChannelConfig struct {
 	CustomHeader              []CustomHeader `json:"custom_header" gorm:"serializer:json"`                                                                   // 追加到上游请求的 Header。
 	ParamOverride             string         `json:"param_override"`                                                                                         // 请求参数覆盖配置; 留空表示不覆盖。
 	MatchRegex                string         `json:"match_regex"`                                                                                            // 拉取模型列表时的过滤表达式; 留空表示不过滤。
-	// ReasoningFilter 开启后, 该渠道的上游会在内部把请求打散到多个账号(典型是中转站)。
-	// 上游报错触发重发时不再只删思维凭据, 而是把整份历史按可移植标准清洗一遍: 删历史记录的服务端 id、
-	// 强制 store:false、清掉引用服务端存储的字段。这类渠道的凭据随时可能不是签发那一个, 清洗要一次做净。
-	ReasoningFilter bool `json:"reasoning_filter" gorm:"default:false"`
 }
 
 // 单个上游渠道的共享配置; 路径按协议分别配置, 凭据由 ChannelKey 提供。

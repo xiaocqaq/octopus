@@ -140,7 +140,7 @@ func ChannelUpdate(detail *model.ChannelDetail, ctx context.Context) (*model.Cha
 			Select("name", "dialect", "enabled", "base_url",
 				"openai_chat_completion_path", "openai_response_path", "anthropic_message_path",
 				"openai_image_generation_path", "openai_image_edit_path",
-				"proxy", "channel_proxy", "custom_header", "param_override", "match_regex", "reasoning_filter").
+				"proxy", "channel_proxy", "custom_header", "param_override", "match_regex").
 			Updates(&model.Channel{ChannelConfig: detail.ChannelConfig}).Error; err != nil {
 			return fmt.Errorf("failed to update channel: %w", err)
 		}

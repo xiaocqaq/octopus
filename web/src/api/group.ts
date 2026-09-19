@@ -18,6 +18,7 @@ export interface GroupRelayConfig {
     member_stream_total_timeout_seconds: number;
     member_cooldown_seconds: number;
     member_affinity_seconds: number;
+    reasoning_filter: boolean; // 报错重发时按可移植标准清洗历史; 加密思维链按分组开, 因同一供应商下并非每个模型都签发。
 }
 
 // GroupItem 是分组内一条可路由的成员，对应一条渠道授权。

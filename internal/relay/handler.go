@@ -267,13 +267,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 凭据只有签发它的账号认, 换账号或换密钥都会被拒, 这是转发的锅不该记在成员头上。
 				// 不计失败也不等待, 也就不会把它推进冷却; 少了这一步, 坏凭据会让成员接连冷却, 整个分组停摆。
 				// 超时不在此列: 那说明账号本身没响应, 剥掉凭据也救不回来, 再试只是让客户端多等一个超时。
-				// 开启思维凭据过滤的渠道按可移植标准一次清净(记录 id, 服务端引用, store):
-				// 它的账号随时在换, 只剥凭据救不回这些字段引来的后续报错。
-				// 资源归属类报错同样按可移植标准清洗, 与渠道开关无关 —— 那句话字面就是"你的引用不属于这个资源",
+				// 开启思维凭据过滤的分组按可移植标准一次清净(记录 id, 服务端引用, store):
+				// 加密思维链绑定签发账号, 同一供应商下并非每个模型都签发, 只剥凭据救不回这些字段引来的后续报错。
+				// 资源归属类报错同样按可移植标准清洗, 与分组开关无关 —— 那句话字面就是"你的引用不属于这个资源",
 				// 只剥凭据重试必然再撞一次(实测会一路重试到客户端超时), 而这些字段本就是被拒的原因。
 				if upstreamAttempted && !reasoningStripped && context.Cause(roundCtx) == nil && shouldStripReasoning(err) {
 					scrub := stripSignedReasoning
-					if channel.ReasoningFilter || needsPortabilityScrub(err) {
+					if group.RelayConfig.ReasoningFilter || needsPortabilityScrub(err) {
 						scrub = scrubSignedReasoning
 					}
 					if stripped, ok := scrub(raw.Body, requestProtocol); ok {

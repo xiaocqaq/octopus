@@ -20,6 +20,10 @@ type GroupRelayConfig struct {
 	MemberStreamTotalTimeoutSeconds int `json:"member_stream_total_timeout_seconds" binding:"omitempty,min=1"`
 	MemberCooldownSeconds           int `json:"member_cooldown_seconds" binding:"omitempty,min=1"` // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
 	MemberAffinitySeconds           int `json:"member_affinity_seconds" binding:"omitempty,min=0"` // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
+	// ReasoningFilter 开启后, 该分组报错重发时不再只删思维凭据, 而是把整份历史按可移植标准清洗一遍:
+	// 删历史记录的服务端 id、强制 store:false、清掉引用服务端存储的字段。
+	// 加密思维链绑定签发账号, 同一供应商下并非每个模型都签发(目前主要是 GPT-6), 故开关挂在分组而非渠道。
+	ReasoningFilter bool `json:"reasoning_filter"`
 }
 
 // DefaultGroupRelayConfig 返回新分组使用的 Relay 默认配置。

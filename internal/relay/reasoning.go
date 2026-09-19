@@ -54,7 +54,7 @@ func isResourceOwnershipError(message string) bool {
 
 // needsPortabilityScrub 判断这次清洗要不要按"可移植"标准做深一层。
 //
-// 渠道开关只决定常规错误的清洗力度; 资源归属类错误不适用开关: 报错本身说的就是"你引用的东西不属于这个资源",
+// 分组开关只决定常规错误的清洗力度; 资源归属类错误不适用开关: 报错本身说的就是"你引用的东西不属于这个资源",
 // 只剥思维凭据救不回来 —— 带归属的与服务端存储引用(previous_response_id, 记录 id, store)必须一起去掉,
 // 否则重试必然同样失败, 客户端也躲不掉那个错误(实测会一路重试到超时)。
 func needsPortabilityScrub(err error) bool {
@@ -115,11 +115,11 @@ func stripSignedReasoning(body []byte, protocol model.Protocol) ([]byte, bool) {
 	return bytes.TrimRight(buffer.Bytes(), "\n"), true
 }
 
-// scrubSignedReasoning 在 stripSignedReasoning 的基础上做完整的历史可移植清洗, 供开启思维凭据过滤的渠道使用。
+// scrubSignedReasoning 在 stripSignedReasoning 的基础上做完整的历史可移植清洗, 供开启思维凭据过滤的分组使用。
 //
-// 这类渠道(典型是中转站)会在内部把请求打散到多个账号, 于是历史里凡是绑定服务端存储的东西都可能不是
-// 本轮那一个账号签发的: reasoning 凭据只是最先炸的一个, 记录 id, previous_response_id, compaction 密文
-// 同样带着归属。逐次撞一次 400 再剥一样剥不净, 开启过滤后按这份标准一次清完。
+// 加密思维链绑定签发账号, 同一供应商下并非每个模型都签发; 开启过滤的分组会把请求打到可能换号的上游,
+// 于是历史里凡是绑定服务端存储的东西都可能不是本轮那一个账号签发的: reasoning 凭据只是最先炸的一个,
+// 记录 id, previous_response_id, compaction 密文同样带着归属。逐次撞一次 400 再剥一样剥不净, 开启过滤后按这份标准一次清完。
 // 与脚本版"拒绝转发"不同, octopus 选择全部静默删除: 客户端(Codex)每轮都带全量历史, 删掉这些字段
 // 只丢服务端引用与思维连续性, 请求本身仍可完成; 而故障转移场景下拒绝也没有意义——引用在客户端手里, 换成员照样带。
 func scrubSignedReasoning(body []byte, protocol model.Protocol) ([]byte, bool) {
