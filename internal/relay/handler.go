@@ -252,6 +252,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					releaseRouteProbe(group, item.ID)
 					continue
 				}
+				// 本地协议能力或请求格式不匹配，重试同一请求不会恢复，且不应惩罚渠道。
+				if !passthrough {
+					if failure := conversionClientError(err); failure != nil {
+						cancelRound()
+						releaseRouteProbe(group, item.ID)
+						request.markFailed(failure, "", nil)
+						response := inbound.TransformError(ctx, failure)
+						c.Data(http.StatusBadRequest, "application/json", response.Body)
+						return
+					}
+				}
 				// 上游快速报错(不是超时, 故上下文没有取消原因)时才值得剥掉思维凭据再试:
 				// 凭据只有签发它的账号认, 换账号或换密钥都会被拒, 这是转发的锅不该记在成员头上。
 				// 不计失败也不等待, 也就不会把它推进冷却; 少了这一步, 坏凭据会让成员接连冷却, 整个分组停摆。
@@ -276,7 +287,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				cancelRound()
 				// 本轮真实失败只计入当前渠道和成员, 客户端取消与人工中止不计为渠道故障。
-				metrics := model.StatsMetrics{WaitTime: time.Since(roundStartedAt).Milliseconds(), RequestFailed: 1}
+				var failedUsage *llm.Usage
+				if result != nil {
+					failedUsage = result.usage
+				}
+				metrics := usageMetrics(channelModel.Name, failedUsage)
+				metrics.WaitTime = time.Since(roundStartedAt).Milliseconds()
+				metrics.RequestFailed = 1
 				_ = op.ChannelStatsUpdate(channel.ID, metrics)
 				_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
 				_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
@@ -426,7 +443,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			cancelRound()
 			// 使用客户端协议转换器聚合已转发事件, 统一取得最终响应正文和用量。
 			responseBody, meta, aggregateErr := inbound.AggregateStreamChunks(context.WithoutCancel(ctx), chunks)
-			if aggregateErr == nil {
+			if result.streamUsage != nil {
+				// 不使用转换器为缺失 usage 合成的占位值；未知用量保持未知。
+				result.usage = result.streamUsage()
+			} else if aggregateErr == nil {
 				result.usage = meta.Usage
 			}
 			// 流式响应结束并聚合出用量后, 按最终结果完成本轮渠道和成员统计。

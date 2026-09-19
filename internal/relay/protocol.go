@@ -86,25 +86,15 @@ func inspectStreamEvent(format llm.APIFormat, event *httpclient.StreamEvent) (bo
 		}
 		switch parsed.Type {
 		case responses.StreamEventTypeResponseCompleted:
-			// 已完成事件仍可能携带非 completed 的终态, 需按 status 与 error 区分成败。
-			if parsed.Response == nil || parsed.Response.Status == nil || *parsed.Response.Status == "" || *parsed.Response.Status == "completed" {
-				return true, nil
-			}
-			if parsed.Response.Error != nil {
-				return true, &llm.ResponseError{Detail: llm.ErrorDetail{Code: parsed.Response.Error.Code, Message: parsed.Response.Error.Message, Type: parsed.Response.Error.Type}}
-			}
-			return true, &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response " + *parsed.Response.Status, Type: "response_" + *parsed.Response.Status}}
+			return true, validateResponsesOutcome(parsed.Response)
 		case responses.StreamEventTypeResponseFailed:
 			if parsed.Response != nil && parsed.Response.Error != nil {
 				return true, &llm.ResponseError{Detail: llm.ErrorDetail{Code: parsed.Response.Error.Code, Message: parsed.Response.Error.Message, Type: parsed.Response.Error.Type}}
 			}
 			return true, &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response failed", Type: "response_failed"}}
 		case responses.StreamEventTypeResponseIncomplete:
-			message := "response incomplete"
-			if parsed.Response != nil && parsed.Response.IncompleteDetails != nil && parsed.Response.IncompleteDetails.Reason != "" {
-				message += ": " + parsed.Response.IncompleteDetails.Reason
-			}
-			return true, &llm.ResponseError{Detail: llm.ErrorDetail{Message: message, Type: "response_incomplete"}}
+			// 达到输出上限或内容过滤仍是有效终态；保留部分内容、停止原因与用量，不能自动重试。
+			return true, validateResponsesOutcome(parsed.Response)
 		case responses.StreamEventTypeResponseCancelled:
 			return true, &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response cancelled", Type: "response_cancelled"}}
 		case responses.StreamEventTypeError:
@@ -159,11 +149,29 @@ func validateResponse(format llm.APIFormat, response *llm.Response) error {
 	switch *response.Choices[0].FinishReason {
 	case "error":
 		return &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response failed", Type: "response_failed"}}
-	case "length":
-		return &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response incomplete", Type: "response_incomplete"}}
 	case "cancelled":
 		return &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response cancelled", Type: "response_cancelled"}}
 	default:
 		return nil
+	}
+}
+
+// validateResponsesOutcome checks the original status before tool-call conversion
+// can overwrite it. Incomplete is a valid final response, not a channel failure.
+func validateResponsesOutcome(response *responses.Response) error {
+	if response == nil {
+		return nil
+	}
+	if response.Error != nil {
+		return &llm.ResponseError{Detail: llm.ErrorDetail{Code: response.Error.Code, Message: response.Error.Message, Type: response.Error.Type}}
+	}
+	if response.Status == nil {
+		return nil
+	}
+	switch *response.Status {
+	case "", "completed", "incomplete":
+		return nil
+	default:
+		return &llm.ResponseError{Detail: llm.ErrorDetail{Message: "response " + *response.Status, Type: "response_" + *response.Status}}
 	}
 }

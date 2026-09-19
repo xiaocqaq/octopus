@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,12 +29,13 @@ const promptCacheKeyField = "prompt_cache_key"
 // upstreamResponse 是已验证但尚未写给客户端的上游成功响应; events 为 nil 表示非流式响应。
 // 透传响应保留上游响应头; 跨协议响应由客户端协议决定响应头。失败一律以 error 返回。
 type upstreamResponse struct {
-	body   []byte                                  // 非流式响应的完整正文。
-	header http.Header                             // 同协议透传时需要原样返回的上游响应头。
-	events streams.Stream[*httpclient.StreamEvent] // 流式响应中首个事件之后的剩余事件。
-	first  *httpclient.StreamEvent                 // 已预读并验证的首个事件。
-	last   bool                                    // 首个事件已经终止整个响应流。
-	usage  *llm.Usage                              // 上游本次可确认的用量。
+	body        []byte                                  // 非流式响应的完整正文。
+	header      http.Header                             // 同协议透传时需要原样返回的上游响应头。
+	events      streams.Stream[*httpclient.StreamEvent] // 流式响应中首个事件之后的剩余事件。
+	first       *httpclient.StreamEvent                 // 已预读并验证的首个事件。
+	last        bool                                    // 首个事件已经终止整个响应流。
+	usage       *llm.Usage                              // 上游本次可确认的用量。
+	streamUsage func() *llm.Usage                       // 跨协议流读取完成后，取得上游而非客户端合成的用量。
 	// closeIdle 非 nil 时为渠道专用代理独占客户端的空闲连接归还入口, 消费方读完事件流后必须调用。
 	// 仅流式响应会带上它: 非流式响应返回时连接已经用完, 由发起方就地归还。
 	closeIdle func()
@@ -94,6 +96,19 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return nil, err
 	}
 	// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态。
+	if format == llm.APIFormatOpenAIResponse {
+		var original responses.Response
+		if err := json.Unmarshal(response.Body, &original); err != nil {
+			return nil, err
+		}
+		if err := validateResponsesOutcome(&original); err != nil {
+			partial := &upstreamResponse{}
+			if original.Usage != nil {
+				partial.usage = original.Usage.ToUsage()
+			}
+			return partial, err
+		}
+	}
 	parsed, err := outbound.TransformResponse(ctx, response)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, response.Body)
@@ -150,18 +165,38 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 
 // conversionMiddleware 保存跨协议 pipeline 单次调用需要应用和取得的状态。
 type conversionMiddleware struct {
-	pipeline.DummyMiddleware // 提供本次无需处理的其余 pipeline 中间件方法。
-	channel model.Channel // 本轮上游请求使用的渠道配置。
-	format  llm.APIFormat // 上游渠道协议, 用于校验统一响应终态。
-	rawBody []byte        // 上游非流式响应或错误的原始正文。
-	usage   *llm.Usage    // 非流式统一响应中确认的用量。
+	pipeline.DummyMiddleware                 // 提供本次无需处理的其余 pipeline 中间件方法。
+	channel                  model.Channel   // 本轮上游请求使用的渠道配置。
+	format                   llm.APIFormat   // 上游渠道协议, 用于校验统一响应终态。
+	rawBody                  []byte          // 上游非流式响应或错误的原始正文。
+	usage                    *llm.Usage      // 已确认的最新上游用量，失败终态也保留。
+	messageUsage             anthropic.Usage // Messages 累积 usage；增量事件省略的字段不能清零。
 }
 
 // OnOutboundRawRequest 在转换后的上游请求上应用渠道参数和自定义 Header。
 func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *httpclient.Request) (*httpclient.Request, error) {
 	// 先清掉目标协议不认的字段, 再应用渠道参数: 顺序反过来会让渠道显式覆盖的值得不到尊重。
 	dropForeignChatFields(m.format, request)
-	return request, applyChannelConfig(m.channel, request)
+	if err := applyChannelConfig(m.channel, request); err != nil {
+		return nil, err
+	}
+	// 必须按最终目标协议设置；Responses / Messages 入站没有 Chat 的 stream_options。
+	if m.format == llm.APIFormatOpenAIChatCompletion {
+		var payload struct {
+			Stream bool `json:"stream"`
+		}
+		if json.Unmarshal(request.Body, &payload) == nil && payload.Stream {
+			body, err := sjson.SetBytes(request.Body, "stream_options.include_usage", true)
+			if err != nil {
+				return nil, err
+			}
+			request.Body = body
+			if len(request.JSONBody) > 0 {
+				request.JSONBody = slices.Clone(body)
+			}
+		}
+	}
+	return request, nil
 }
 
 // dropForeignChatFields 清掉转换到 Chat Completions 的请求体里 OpenAI 专有、别家 schema 不认的字段。
@@ -203,20 +238,38 @@ func (m *conversionMiddleware) OnOutboundRawError(_ context.Context, err error) 
 // OnOutboundRawResponse 保留上游成功响应的原始正文, 供后续转换或终态校验失败时诊断。
 func (m *conversionMiddleware) OnOutboundRawResponse(_ context.Context, response *httpclient.Response) (*httpclient.Response, error) {
 	m.rawBody = slices.Clone(response.Body)
+	if m.format == llm.APIFormatOpenAIResponse {
+		var parsed responses.Response
+		if err := json.Unmarshal(response.Body, &parsed); err != nil {
+			return nil, err
+		}
+		if parsed.Usage != nil {
+			m.usage = parsed.Usage.ToUsage()
+		}
+		if err := validateResponsesOutcome(&parsed); err != nil {
+			return nil, err
+		}
+	}
 	return response, nil
 }
 
 // OnOutboundLlmResponse 取得非流式用量并在回转客户端协议前校验上游终态。
 func (m *conversionMiddleware) OnOutboundLlmResponse(_ context.Context, response *llm.Response) (*llm.Response, error) {
+	if response == nil {
+		return nil, errors.New("upstream response is empty")
+	}
+	m.usage = response.Usage
 	if err := validateResponse(m.format, response); err != nil {
 		return nil, err
 	}
-	m.usage = response.Usage
 	return response, nil
 }
 
 // sendConverted 经 axonhub pipeline 把客户端请求转换成渠道协议后请求上游, 响应再转换回客户端协议。
 func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool) (*upstreamResponse, error) {
+	if err := validateConversionReferences(format, outbound.APIFormat(), raw); err != nil {
+		return nil, err
+	}
 	var inbound transformer.Inbound
 	switch format {
 	case llm.APIFormatOpenAIResponse:
@@ -248,16 +301,17 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	)
 	result, err := processor.Process(ctx, raw)
 	if err != nil {
+		partial := &upstreamResponse{usage: middleware.usage}
 		if len(middleware.rawBody) > 0 {
-			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
+			return partial, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
-		return nil, err
+		return partial, err
 	}
 	if !streaming {
 		return &upstreamResponse{body: slices.Clone(result.Response.Body), usage: middleware.usage}, nil
 	}
 
-	events := result.EventStream
+	events := &clientErrorStream{source: result.EventStream, format: format}
 	for events.Next() {
 		event := events.Current()
 		if event == nil || len(event.Data) == 0 {
@@ -266,10 +320,10 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		last, err := inspectStreamEvent(format, event)
 		if err != nil {
 			events.Close()
-			return nil, fmt.Errorf("%w: %s", err, event.Data)
+			return &upstreamResponse{usage: middleware.usage}, fmt.Errorf("%w: %s", err, event.Data)
 		}
 		committed = true
-		return &upstreamResponse{events: events, first: event, last: last, closeIdle: closeIdle}, nil
+		return &upstreamResponse{events: events, first: event, last: last, closeIdle: closeIdle, streamUsage: func() *llm.Usage { return middleware.usage }}, nil
 	}
 
 	err = events.Err()
