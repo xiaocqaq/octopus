@@ -144,7 +144,10 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         if (!isTouchDevice) return;
         // 如果点击发生在按钮上(模式切换/编辑/复制/删除), 不触发展开切换。
         const target = event.target as HTMLElement;
-        if (target.closest('button, a, [role="button"]')) return;
+        const interactiveTarget = target.closest('button, a, [role="button"]');
+        // 标题栏自己也是 role="button", 不能把它当成内部操作按钮拦掉。
+        // 但编辑触发器是 motion.div[role="button"]，仍需保留对真正内部控件的保护。
+        if (interactiveTarget && interactiveTarget !== event.currentTarget) return;
         event.stopPropagation();
         setActiveGroup(expanded ? null : group.id);
     }, [isTouchDevice, expanded, group.id, setActiveGroup]);
