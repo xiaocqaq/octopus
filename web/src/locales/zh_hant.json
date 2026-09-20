@@ -417,7 +417,9 @@
             "disconnected": "日誌連線已中斷，正在重新連線"
         },
         "status": {
-            "committed": "回應中"
+            "committed": "回應中",
+            "failed": "請求失敗",
+            "canceled": "請求已取消"
         },
         "card": {
             "errorInfo": "錯誤訊息",
@@ -437,12 +439,23 @@
             "noRequestContent": "(無請求內容)",
             "noResponseContent": "(無回應內容)",
             "tokens": "詞元",
-            "retryIndex": "重試 {index}",
+            "retryIndex": "第 {index} 輪",
             "retryDetails": "重試詳情",
-            "stopRound": "停止目前輪次",
-            "stopFailed": "停止目前輪次失敗",
+            "retryHistory": "失敗歷史（{count}）· 查看詳情",
+            "latestFailure": "最近失敗 · 第 {index} 輪 · {channel}",
+            "currentAttempt": "目前輪次",
+            "duration": "請求總耗時，包含重試",
+            "estimatedOutput": "輸出估算（SSE 事件數）",
+            "estimatedEventSpeed": "估算事件速度（每秒 SSE 事件數）",
+            "completionTokens": "輸出詞元數",
+            "tokenSpeed": "輸出詞元速度（每秒詞元數）",
+            "cacheWrite": "快取寫入詞元數",
+            "stopRound": "取消目前輪次",
+            "stopFailed": "取消目前輪次失敗",
+            "cancelRequest": "取消目前請求",
+            "cancelFailed": "取消目前請求失敗",
             "waitingChannelSelection": "正在等待選擇供應源",
-            "firstToken": "首字耗時",
+            "firstToken": "首字耗時：從請求到達到首字輸出，包含重試",
             "cacheRate": "快取命中率",
             "waitingResponse": "正在等待上游回應",
             "responseStreaming": "上游已回應，串流傳輸正在進行"

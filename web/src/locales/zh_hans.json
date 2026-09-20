@@ -417,7 +417,9 @@
             "disconnected": "日志连接已断开，正在重连"
         },
         "status": {
-            "committed": "响应中"
+            "committed": "响应中",
+            "failed": "请求失败",
+            "canceled": "请求已取消"
         },
         "card": {
             "errorInfo": "错误信息",
@@ -437,12 +439,23 @@
             "noRequestContent": "(无请求内容)",
             "noResponseContent": "(无响应内容)",
             "tokens": "词元",
-            "retryIndex": "重试 {index}",
+            "retryIndex": "第 {index} 轮",
             "retryDetails": "重试详情",
-            "stopRound": "停止当前轮次",
-            "stopFailed": "停止当前轮次失败",
+            "retryHistory": "失败历史（{count}）· 查看详情",
+            "latestFailure": "最近失败 · 第 {index} 轮 · {channel}",
+            "currentAttempt": "当前轮次",
+            "duration": "请求总耗时，包含重试",
+            "estimatedOutput": "输出估算（SSE 事件数）",
+            "estimatedEventSpeed": "估算事件速度（每秒 SSE 事件数）",
+            "completionTokens": "输出词元数",
+            "tokenSpeed": "输出词元速度（每秒词元数）",
+            "cacheWrite": "缓存写入词元数",
+            "stopRound": "取消当前轮次",
+            "stopFailed": "取消当前轮次失败",
+            "cancelRequest": "取消当前请求",
+            "cancelFailed": "取消当前请求失败",
             "waitingChannelSelection": "正在等待选择渠道",
-            "firstToken": "首字耗时",
+            "firstToken": "首字耗时：从请求到达到首字输出，包含重试",
             "cacheRate": "缓存命中率",
             "waitingResponse": "正在等待上游响应",
             "responseStreaming": "上游已响应，流式传输正在进行"

@@ -76,7 +76,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 		// 登记进程内请求状态, 返回的记录是后续全部状态写入和前端可视化推送的入口。
 		request := newRequestState(c.Request.Context(), metadata.Model, group.ID, requestProtocol, string(raw.Body), c.GetInt("api_key_id"))
-		ctx := c.Request.Context()
+		ctx := request.requestCtx
 		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
 		failures := 0     // 该成员包含首次请求的连续失败次数。
 		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
@@ -88,6 +88,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// 第一轮照旧等待一个重试间隔(成员可能只是正在冷却, 配置可能正在被修好), 连续两轮同样结果即报错。
 		// 状态码用 503: 这是"目标暂时不可用"而非"请求写错了", 客户端据此重试是有意义的。
 		blocked := func(reason string) bool {
+			request.failSelection(reason)
 			blockedRounds++
 			if blockedRounds <= 1 {
 				return false
@@ -239,19 +240,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			if err != nil {
-				// 记录本轮上游调用已经结束及其失败原因。
-				request.finishRound(err.Error())
-				// 父上下文结束说明客户端已经取消, 归还探测占用并以取消终态结束请求。
+				// 父上下文结束说明客户端已经取消, 归还探测占用并以取消终态结束请求; 主动取消不记为供应商失败。
 				if ctx.Err() != nil {
 					releaseRouteProbe(group, item.ID)
 					request.markCanceled(ctx.Err(), "", nil)
 					return
 				}
-				// 仅人工中止本轮时不计失败也不等待; 响应超时属于真实失败并消耗尝试次数。
+				// 仅人工中止本轮时不记录失败、不计入失败历史也不等待; 响应超时属于真实失败并记录。
 				if context.Cause(roundCtx) == context.Canceled {
 					releaseRouteProbe(group, item.ID)
 					continue
 				}
+				// 真实上游/转换错误在进入剥离思维凭据或换目标前保留, 供日志页展示。
+				request.finishRound(err.Error())
 				// 本地协议能力或请求格式不匹配，重试同一请求不会恢复，且不应惩罚渠道。
 				if !passthrough {
 					if failure := conversionClientError(err); failure != nil {
@@ -282,6 +283,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						// 重选路要能再次选中同一个成员才能重试: 本轮若占着它的探测名额,
 						// 不换成员的单成员分组会因名额未释放而永远选不出目标。
 						releaseRouteProbe(group, item.ID)
+						cancelRound()
 						continue
 					}
 				}
@@ -316,6 +318,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 			// 记录本轮已经取得可提交的上游响应。
 			request.finishRound("")
+			// 请求级取消可能与上游成功同时到达, 此时不应提交响应或继续重试。
+			if ctx.Err() != nil {
+				if result.events != nil {
+					result.events.Close()
+				}
+				if result.closeIdle != nil {
+					result.closeIdle()
+				}
+				cancelRound()
+				releaseRouteProbe(group, item.ID)
+				request.markCanceled(ctx.Err(), "", result.usage)
+				return
+			}
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
 			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
 			for key, values := range result.header {
@@ -336,7 +351,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
 				_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
 				recordRouteSuccess(group, item.ID)
-				request.markCommitted()
 				n, err := c.Writer.Write(result.body)
 				if err == nil && n != len(result.body) {
 					err = io.ErrShortWrite
@@ -349,6 +363,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					}
 					return
 				}
+				request.markCommitted(false)
 				request.markSucceeded(string(result.body), result.usage)
 				return
 			}
@@ -387,14 +402,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			for {
 				if event != nil {
 					chunks = append(chunks, event)
+					// 每个事件计一个输出字符供日志页展示, 按节流间隔发布。
+					request.addOutput()
 					encoded.Reset()
 					if encodeErr := sse.Encode(&encoded, sse.Event{Id: event.LastEventID, Event: event.Type, Data: event.Data}); encodeErr != nil {
 						err = encodeErr
 						break
-					}
-					if !committed {
-						request.markCommitted()
-						committed = true
 					}
 					n, writeErr := c.Writer.Write(encoded.Bytes())
 					if writeErr == nil && n != encoded.Len() {
@@ -403,6 +416,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if writeErr != nil {
 						err = writeErr
 						break
+					}
+					if !committed {
+						request.markCommitted(true)
+						committed = true
 					}
 					c.Writer.Flush()
 				}
@@ -435,6 +452,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				err = streamTotalErr
 				streamFailure = true
 			}
+			request.finishStream()
 			result.events.Close()
 			// 事件流已读完, 渠道专用代理的独占连接池到此归还。
 			if result.closeIdle != nil {
@@ -443,6 +461,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			cancelRound()
 			// 使用客户端协议转换器聚合已转发事件, 统一取得最终响应正文和用量。
 			responseBody, meta, aggregateErr := inbound.AggregateStreamChunks(context.WithoutCancel(ctx), chunks)
+			if aggregateErr != nil {
+				// 已经写出客户端的事件无法重试, 但聚合失败仍必须以失败终态记录, 不能污染成功统计。
+				err = aggregateErr
+				streamFailure = true
+			}
 			if result.streamUsage != nil {
 				// 不使用转换器为缺失 usage 合成的占位值；未知用量保持未知。
 				result.usage = result.streamUsage()

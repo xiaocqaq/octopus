@@ -417,7 +417,9 @@
             "disconnected": "Log stream disconnected, reconnecting"
         },
         "status": {
-            "committed": "Responding"
+            "committed": "Responding",
+            "failed": "Request failed",
+            "canceled": "Request canceled"
         },
         "card": {
             "errorInfo": "Error Info",
@@ -437,12 +439,23 @@
             "noRequestContent": "(No request content)",
             "noResponseContent": "(No response content)",
             "tokens": "tokens",
-            "retryIndex": "Retry {index}",
+            "retryIndex": "Round {index}",
             "retryDetails": "Retry Details",
-            "stopRound": "Stop Current Round",
-            "stopFailed": "Failed to stop current round",
+            "retryHistory": "Failed attempts ({count}) · View details",
+            "latestFailure": "Latest failure · Round {index} · {channel}",
+            "currentAttempt": "Current attempt",
+            "duration": "Total request duration, including retries",
+            "estimatedOutput": "Estimated output (SSE events)",
+            "estimatedEventSpeed": "Estimated event speed (SSE events per second)",
+            "completionTokens": "Output tokens",
+            "tokenSpeed": "Output token speed (tokens per second)",
+            "cacheWrite": "Cache write tokens",
+            "stopRound": "Cancel Current Round",
+            "stopFailed": "Failed to cancel current round",
+            "cancelRequest": "Cancel Current Request",
+            "cancelFailed": "Failed to cancel current request",
             "waitingChannelSelection": "Waiting for channel selection",
-            "firstToken": "Time to first token",
+            "firstToken": "Time from request arrival to first output, including retries",
             "cacheRate": "Cache Hit Rate",
             "waitingResponse": "Waiting for upstream response",
             "responseStreaming": "Upstream responded; streaming is in progress"

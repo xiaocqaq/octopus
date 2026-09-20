@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"path"
 	"slices"
 	"strings"
 	"time"
-
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,20 @@ import (
 
 // imageMaxAttempts 限定单个图片请求的最大上游尝试轮次。
 const imageMaxAttempts = 6
+
+type imageCommitWriter struct {
+	dst          io.Writer
+	onFirstWrite func()
+}
+
+func (w *imageCommitWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	if n > 0 && w.onFirstWrite != nil {
+		w.onFirstWrite()
+		w.onFirstWrite = nil
+	}
+	return n, err
+}
 
 // ForwardImage 承载 /v1/images/generations 与 /v1/images/edits 的转发。
 // added 20260908: axonhub llm 库没有图片接口的 APIFormat, 图片接口也没有跨协议
@@ -51,6 +66,10 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				return
 			}
 			groupName = strings.TrimSpace(c.Request.FormValue("model"))
+			if form := c.Request.MultipartForm; form != nil {
+				_ = form.RemoveAll()
+				c.Request.MultipartForm = nil
+			}
 		} else {
 			raw, err := httpclient.ReadHTTPRequest(c.Request)
 			if err != nil {
@@ -86,8 +105,8 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			return
 		}
 
-		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIImage, string(body), c.GetInt("api_key_id"))
-		ctx := c.Request.Context()
+		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIImage, fmt.Sprintf("<image request body omitted: %d bytes>", len(body)), c.GetInt("api_key_id"))
+		ctx := request.requestCtx
 		failedItemID := 0
 		failures := 0
 		// 图片请求没有流式首包可作为“已开始”的信号, 客户端只能干等, 故限定尝试轮次:
@@ -109,6 +128,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 			group, err = op.GroupGetByName(groupName)
 			if err != nil {
+				request.failSelection(fmt.Sprintf("group %q not found: %v", groupName, err))
 				if !request.wait(ctx, model.DefaultGroupRelayConfig().MemberRetryIntervalSeconds) {
 					return
 				}
@@ -117,6 +137,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 			item := pickGroupItem(group)
 			if item.ID == 0 {
+				request.failSelection(noAvailableMemberReason(group))
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -126,6 +147,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			grant, err := op.ChannelGrantGet(item.ChannelGrantID)
 			if err != nil {
 				releaseRouteProbe(group, item.ID)
+				request.failSelection(fmt.Sprintf("member of group %q is not usable: %v", group.Name, err))
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -135,6 +157,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			channelKey := grant.ChannelKey
 			if channelModel == nil || channelKey == nil {
 				releaseRouteProbe(group, item.ID)
+				request.failSelection(fmt.Sprintf("member of group %q is missing its model or key", group.Name))
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -144,6 +167,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			channel, err := op.ChannelGet(channelModel.ChannelID)
 			if err != nil {
 				releaseRouteProbe(group, item.ID)
+				request.failSelection(fmt.Sprintf("channel of a member in group %q is unavailable: %v", group.Name, err))
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
@@ -156,24 +180,29 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			// 这是配置事实而非偶发失败, 重试同一个成员不会有别的结果。
 			// 分组内没有任何成员登记时, 尝试轮次很快耗尽并以错误收敛。
 			if grant.Protocols&model.ProtocolOpenAIImage == 0 {
+				request.failSelection(fmt.Sprintf("channel %q model %q does not support image requests", channel.Name, channelModel.Name))
 				recordRouteFailure(group, item.ID, group.RelayConfig.MemberMaxAttempts)
 				continue
 			}
 
-			// JSON 正文按分组成员配置改写真实模型名; multipart 正文原样透传。
+			// JSON 和 multipart 正文都按分组成员配置改写真实模型名, 避免上游收到分组名。
 			// 与聊天面同理: 本轮选路占用了探测名额时, 凡未走到成败定局点就结束请求的路径都要先归还。
 			roundBody := body
-			if !isMultipart {
+			roundContentType := contentType
+			if isMultipart {
+				roundBody, roundContentType, err = rewriteImageMultipartModel(body, contentType, channelModel.Name)
+			} else {
 				roundBody, err = sjson.SetBytes(body, "model", channelModel.Name)
-				if err != nil {
-					releaseRouteProbe(group, item.ID)
-					request.markFailed(err, "", nil)
-					imageReject(c, err)
-					return
-				}
+			}
+			if err != nil {
+				releaseRouteProbe(group, item.ID)
+				request.markFailed(err, "", nil)
+				imageReject(c, err)
+				return
 			}
 
-			roundCtx, cancelRound := context.WithCancel(ctx)
+			roundCtx, cancelRoundCause := context.WithCancelCause(ctx)
+			cancelRound := func() { cancelRoundCause(context.Canceled) }
 			request.startRound(cancelRound, channel.Name, channelModel.Name, model.ProtocolOpenAIImage)
 			roundStartedAt := time.Now()
 
@@ -187,20 +216,24 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				return
 			}
 
-			response, err := sendImageUpstream(roundCtx, httpClient, channel, *channelKey, contentType, roundBody, kind)
+			response, err := sendImageUpstream(roundCtx, httpClient, channel, *channelKey, roundContentType, c.Request.Header.Get("Accept"), c.Request.URL.RawQuery, c.Request.Header, roundBody, kind)
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds()
 
 			if err != nil {
-				cancelRound()
 				if closeIdle != nil {
 					closeIdle()
 				}
-				request.finishRound(err.Error())
 				if ctx.Err() != nil {
 					releaseRouteProbe(group, item.ID)
 					request.markCanceled(ctx.Err(), "", nil)
 					return
 				}
+				if context.Cause(roundCtx) == context.Canceled {
+					releaseRouteProbe(group, item.ID)
+					continue
+				}
+				request.finishRound(err.Error())
+				cancelRound()
 				metrics := model.StatsMetrics{WaitTime: roundWaitTime, RequestFailed: 1}
 				_ = op.ChannelStatsUpdate(channel.ID, metrics)
 				_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
@@ -221,12 +254,17 @@ func ForwardImage(kind string) gin.HandlerFunc {
 
 			// 取得可提交响应: 记成功, 落统计, 回给客户端。
 			request.finishRound("")
-			recordRouteSuccess(group, item.ID)
-			metrics := model.StatsMetrics{WaitTime: roundWaitTime, RequestSuccess: 1}
-			_ = op.ChannelStatsUpdate(channel.ID, metrics)
-			_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
-			_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
-			request.markCommitted()
+			if ctx.Err() != nil {
+				response.Body.Close()
+				cancelRound()
+				if closeIdle != nil {
+					closeIdle()
+				}
+				releaseRouteProbe(group, item.ID)
+				request.markCanceled(ctx.Err(), "", nil)
+				return
+			}
+			streaming := strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream")
 
 			for key, values := range response.Header {
 				if strings.EqualFold(key, "Content-Length") ||
@@ -241,14 +279,25 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			}
 			c.Writer.WriteHeader(response.StatusCode)
 
-			// 上游可能以 SSE 分片下发图片, 边读边写以免整份缓存在内存里。
-			written, copyErr := io.Copy(c.Writer, response.Body)
+			committed := false
+			markCommitted := func() {
+				if !committed {
+					request.markCommitted(streaming)
+					committed = true
+				}
+			}
+			// 首次成功写出字节时标记已提交, 完整复制成功后才记渠道成功。
+			trackedWriter := &imageCommitWriter{dst: c.Writer, onFirstWrite: markCommitted}
+			written, copyErr := io.Copy(trackedWriter, response.Body)
 			response.Body.Close()
 			cancelRound()
 			if closeIdle != nil {
 				closeIdle()
 			}
 			if copyErr != nil {
+				if streaming && committed {
+					request.finishStream()
+				}
 				if ctx.Err() != nil {
 					request.markCanceled(ctx.Err(), "", nil)
 				} else {
@@ -256,6 +305,17 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				}
 				return
 			}
+			if !committed {
+				markCommitted()
+			}
+			if streaming {
+				request.finishStream()
+			}
+			metrics := model.StatsMetrics{WaitTime: roundWaitTime, RequestSuccess: 1}
+			_ = op.ChannelStatsUpdate(channel.ID, metrics)
+			_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
+			_ = op.ChannelKeyStatsUpdate(channelKey.ID, metrics)
+			recordRouteSuccess(group, item.ID)
 			// 图片正文可达数 MB, 只登记大小而不留全文, 避免请求状态占满内存。
 			request.markSucceeded(fmt.Sprintf("<image response %d bytes>", written), nil)
 			return
@@ -263,8 +323,59 @@ func ForwardImage(kind string) gin.HandlerFunc {
 	}
 }
 
+func rewriteImageMultipartModel(body []byte, contentType, modelName string) ([]byte, string, error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+		if err == nil {
+			err = errors.New("multipart content type has no boundary")
+		}
+		return nil, "", fmt.Errorf("parse multipart content type: %w", err)
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	var output bytes.Buffer
+	writer := multipart.NewWriter(&output)
+	if err := writer.SetBoundary(params["boundary"]); err != nil {
+		return nil, "", fmt.Errorf("preserve multipart boundary: %w", err)
+	}
+	foundModel := false
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("read multipart body: %w", err)
+		}
+		partBody, err := io.ReadAll(part)
+		if err != nil {
+			return nil, "", fmt.Errorf("read multipart field: %w", err)
+		}
+		if part.FormName() == "model" {
+			partBody = []byte(modelName)
+			foundModel = true
+		}
+		if err := func() error {
+			newPart, err := writer.CreatePart(part.Header)
+			if err != nil {
+				return err
+			}
+			_, err = newPart.Write(partBody)
+			return err
+		}(); err != nil {
+			return nil, "", fmt.Errorf("write multipart body: %w", err)
+		}
+	}
+	if !foundModel {
+		return nil, "", errors.New("multipart image request has no model field")
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", fmt.Errorf("close multipart body: %w", err)
+	}
+	return output.Bytes(), writer.FormDataContentType(), nil
+}
+
 // sendImageUpstream 按渠道配置向上游图片接口发起一次请求, 4xx/5xx 视为本轮失败。
-func sendImageUpstream(ctx context.Context, client *http.Client, channel model.Channel, key model.ChannelKey, contentType string, body []byte, kind string) (*http.Response, error) {
+func sendImageUpstream(ctx context.Context, client *http.Client, channel model.Channel, key model.ChannelKey, contentType, accept, rawQuery string, clientHeaders http.Header, body []byte, kind string) (*http.Response, error) {
 	// BaseURL 以 ## 结尾表示地址已完整, 只取到末段目录, 不再拼渠道配置的协议路径。
 	trimmed := strings.TrimSuffix(channel.BaseURL, "##")
 	base := strings.TrimSuffix(trimmed, "/")
@@ -272,17 +383,29 @@ func sendImageUpstream(ctx context.Context, client *http.Client, channel model.C
 	if trimmed != channel.BaseURL {
 		target = base + "/" + path.Base(imageUpstreamPath(channel, kind))
 	}
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
 
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	upstream.Header.Set("Content-Type", contentType)
-	upstream.Header.Set("Accept", "text/event-stream")
+	if accept == "" {
+		accept = "*/*"
+	}
+	upstream.Header.Set("Accept", accept)
 	upstream.Header.Set("Authorization", "Bearer "+key.Key)
 	for _, header := range channel.CustomHeader {
 		if header.HeaderKey != "" && header.HeaderValue != "" {
-			upstream.Header.Set(header.HeaderKey, header.HeaderValue)
+			if httpclient.IsSensitiveHeader(header.HeaderKey) && upstream.Header.Get(header.HeaderKey) != "" {
+				continue
+			}
+			value := clientHeaderPlaceholder.ReplaceAllStringFunc(header.HeaderValue, func(placeholder string) string {
+				return clientHeaders.Get(placeholder[len("{client_header:") : len(placeholder)-1])
+			})
+			upstream.Header.Set(header.HeaderKey, value)
 		}
 	}
 

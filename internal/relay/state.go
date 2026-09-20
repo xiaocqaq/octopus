@@ -27,23 +27,23 @@ const (
 
 // 客户端请求的完整进程内状态, 同时作为状态流的消息形状; 上半部分在请求到达时写入并在结束时定稿, 下半部分每轮循环覆盖。
 type RequestState struct {
-	ID         uint64         `json:"id"`           // 请求在当前进程内的唯一标识。
-	Status     Status         `json:"status"`       // 请求当前状态。
-	StartedAt  time.Time      `json:"started_at"`   // 请求到达时间。
-	Duration   time.Duration  `json:"duration"`     // 请求总耗时, 未结束时为零。
-	// FirstTokenDuration 是首字耗时: 从请求到达到第一个字节写出客户端的时间, 含此前的选路与失败重试。
-	// 流式请求即首个事件写出的时刻, 非流式请求与总耗时相同; 未提交前为零。
-	FirstTokenDuration time.Duration `json:"first_token_duration"`
-	Model      string         `json:"model"`        // 客户端请求的模型名称, 即分组名称。
-	Protocol   model.Protocol `json:"protocol"`     // 客户端请求使用的协议, 由入站格式定出, 单个协议位而非掩码组合。
-	GroupID    int            `json:"group_id"`     // 承载本请求的分组 ID, 供界面按主键直接定位分组而不必按名称回查。
-	APIKeyName string         `json:"api_key_name"` // 发起请求时的 API Key 名称。
-	// Reasoning 是客户端请求声明的思维强度, 取自请求体, 空串表示未声明。
-	// 三种协议的字段各不相同: OpenAI Chat 用 reasoning_effort, Responses 用 reasoning.effort,
-	// Anthropic 用 thinking.budget_tokens; 归一为一段短文本, 界面只需展示不需再分协议。
-	Reasoning string    `json:"reasoning,omitempty"`
-	Usage     llm.Usage `json:"usage"` // 请求结束时写入的展示用量。
-	Cost      float64   `json:"cost"`  // 请求结束时写入的累计费用。
+	ID        uint64        `json:"id"`
+	Status    Status        `json:"status"`
+	StartedAt time.Time     `json:"started_at"`
+	Duration  time.Duration `json:"duration"`
+	// FirstTokenDuration 从请求到达到首字节提交, 包括选路、等待与重试; 非流式同样记录。
+	FirstTokenDuration time.Duration  `json:"first_token_duration"`
+	StreamDuration     time.Duration  `json:"stream_duration"`
+	ResponseDuration   time.Duration  `json:"response_duration"`
+	Model              string         `json:"model"`
+	Protocol           model.Protocol `json:"protocol"`
+	GroupID            int            `json:"group_id"`
+	APIKeyName         string         `json:"api_key_name"`
+	Reasoning          string         `json:"reasoning,omitempty"`
+	Usage              llm.Usage      `json:"usage"`
+	Cost               float64        `json:"cost"`
+	OutputChars        int            `json:"output_chars"`
+	RetryErrors        []RetryError   `json:"retry_errors,omitempty"`
 
 	Round          int            `json:"round"`            // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
 	RoundStartedAt time.Time      `json:"round_started_at"` // 最新一轮上游请求的开始时间。
@@ -53,38 +53,56 @@ type RequestState struct {
 	Sending        bool           `json:"sending"`          // 最新一轮是否仍在等待上游响应。
 	Error          string         `json:"error,omitempty"`  // 最新一轮的失败原因, 请求结束后即为最终错误。
 
-	body         string             // 客户端原始请求体, 体积大故不进状态流, 由独立接口按需拉取。
-	responseBody string             // 聚合后的完整最终响应体, 同样按需拉取。
-	apiKeyID     int                // 发起请求的 API Key ID, 用于请求完成后的归属统计。
-	cancel       context.CancelFunc // 中止最新一轮上游请求, 仅在该轮等待响应期间非空。
-	finalized    bool               // 终态统计是否已写入, 防止成功/失败/取消被重复定稿时把分组用量记两遍。
+	requestBody   string
+	responseBody  string
+	apiKeyID      int
+	finalized     bool // 终态与请求级统计只能定稿一次。
+	requestCtx    context.Context
+	requestCancel context.CancelFunc
+	roundCancel   context.CancelFunc
+	lastPublish   time.Time
+	streamStarted time.Time
 }
 
-const streamBuffer = 16 // 单个状态流连接的非阻塞消息缓冲容量。
-const maxFinished = 50  // 进程内最多保留的已结束请求数量。
+// RetryError 保留失败轮次, 即使后续重试、成功或取消也不清除。
+type RetryError struct {
+	Round         int    `json:"round"`
+	TargetChannel string `json:"target_channel"`
+	TargetModel   string `json:"target_model"`
+	Error         string `json:"error"`
+}
+
+const maxRetryErrors = 20
+
+const streamBuffer = 16                              // 单个状态流连接的非阻塞消息缓冲容量。
+const maxFinished = 50                               // 进程内最多保留的已结束请求数量。
+const outputPublishInterval = 500 * time.Millisecond // 输出字符数实时推送的最短发布间隔。
 
 var (
-	idSeq    atomic.Uint64                     // 进程内严格递增的请求 ID。
-	mu       sync.Mutex                        // 全部共享状态的互斥锁。
+	idSeq    atomic.Uint64                          // 进程内严格递增的请求 ID。
+	mu       sync.Mutex                             // 全部共享状态的互斥锁。
 	requests = make(map[uint64]*RequestState)       // 按请求 ID 保存的全部请求状态。
 	watchers = make(map[chan RequestState]struct{}) // 全部状态流 SSE 连接。
 )
 
 // newRequestState 分配请求 ID 并登记初始运行状态; 返回的记录是本请求后续全部状态写入的入口。
 func newRequestState(ctx context.Context, modelName string, groupID int, protocol model.Protocol, body string, apiKeyID int) *RequestState {
+	requestCtx, requestCancel := context.WithCancel(ctx)
 	mu.Lock()
 	defer mu.Unlock()
 
 	request := &RequestState{
-		ID:        idSeq.Add(1),
-		Status:    StatusRunning,
-		StartedAt: time.Now(),
-		Model:     modelName,
-		Protocol:  protocol,
-		GroupID:   groupID,
-		Reasoning: reasoningOf(body),
-		body:      body,
-		apiKeyID:  apiKeyID,
+		ID:            idSeq.Add(1),
+		Status:        StatusRunning,
+		StartedAt:     time.Now(),
+		Model:         modelName,
+		Protocol:      protocol,
+		GroupID:       groupID,
+		Reasoning:     reasoningOf(body),
+		requestBody:   body,
+		apiKeyID:      apiKeyID,
+		requestCtx:    requestCtx,
+		requestCancel: requestCancel,
 	}
 	// 登记时保存名称快照, 查询失败时留空。
 	if apiKey, err := op.APIKeyGet(apiKeyID, ctx); err == nil {
@@ -102,12 +120,14 @@ func (r *RequestState) startRound(cancel context.CancelFunc, channel, modelName 
 
 	r.Round++
 	r.RoundStartedAt = time.Now()
+	r.OutputChars = 0 // 新一轮从头计数, 避免累计上一轮未提交的输出。
+	r.lastPublish = time.Time{}
 	r.TargetChannel = channel
 	r.TargetModel = modelName
 	r.TargetProtocol = protocol
 	r.Sending = true
 	r.Error = ""
-	r.cancel = cancel
+	r.roundCancel = cancel
 	publishRequestLocked(r)
 	return r.Round
 }
@@ -119,23 +139,80 @@ func (r *RequestState) finishRound(errText string) {
 
 	r.Sending = false
 	r.Error = errText
-	r.cancel = nil
+	r.appendRetryErrorLocked(errText)
+	r.roundCancel = nil
 	publishRequestLocked(r)
+}
+
+// appendRetryErrorLocked 使用新数组, 已发布的浅拷贝快照因此保持不可变。
+func (r *RequestState) appendRetryErrorLocked(errText string) {
+	if errText == "" {
+		return
+	}
+	failure := RetryError{Round: r.Round, TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, Error: errText}
+	for _, previous := range r.RetryErrors {
+		if previous == failure {
+			return
+		}
+	}
+	start := max(0, len(r.RetryErrors)-maxRetryErrors+1)
+	next := make([]RetryError, len(r.RetryErrors)-start+1)
+	copy(next, r.RetryErrors[start:])
+	next[len(next)-1] = failure
+	r.RetryErrors = next
+}
+
+// failSelection 为没有发起上游调用的选路失败保留独立轮次, 不沿用上一轮的目标。
+func (r *RequestState) failSelection(reason string) {
+	r.startRound(nil, "", "", 0)
+	r.finishRound(reason)
+}
+
+// addOutput 每个转发事件累加一个输出字符并按节流间隔发布快照; 距上次发布不足阈值时只累加不出流。
+func (r *RequestState) addOutput() {
+	mu.Lock()
+	defer mu.Unlock()
+
+	r.OutputChars++
+	if time.Since(r.lastPublish) >= outputPublishInterval {
+		r.lastPublish = time.Now()
+		if !r.streamStarted.IsZero() {
+			r.StreamDuration = time.Since(r.streamStarted)
+		}
+		publishRequestLocked(r)
+	}
 }
 
 // Interrupt 中止指定请求仍在等待响应且轮次匹配的上游请求; 轮次不匹配说明该轮已结束, 不影响后续轮次。
 func Interrupt(id uint64, round int) {
 	mu.Lock()
 	request := requests[id]
-	if request == nil || request.Round != round || request.cancel == nil {
+	if request == nil || request.Round != round || request.roundCancel == nil {
 		mu.Unlock()
 		return
 	}
-	cancel := request.cancel
-	request.cancel = nil
+	cancel := request.roundCancel
+	request.roundCancel = nil
 	mu.Unlock()
 
 	cancel()
+}
+
+// CancelRequest 取消指定的完整请求; 已结束请求不会被重新改写状态。
+func CancelRequest(id uint64) {
+	mu.Lock()
+	request := requests[id]
+	if request == nil {
+		mu.Unlock()
+		return
+	}
+	cancel := request.requestCancel
+	request.requestCancel = nil
+	mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // wait 在重新选择目标之前退避 seconds 秒; 客户端在退避期间断开时以取消终态定稿并返回 false。
@@ -149,23 +226,41 @@ func (r *RequestState) wait(ctx context.Context, seconds int) bool {
 	}
 }
 
-// markCommitted 标记响应已提交; 流式响应在此之后仍会持续转发, 故必须先于提交动作调用。
-// 首字耗时在此定稿: 这是第一个字节写出客户端的时刻, 此前的重试与等待都算在客户端感受到的首字里。
-func (r *RequestState) markCommitted() {
+// markCommitted 记录客户端感受到的首字耗时及最终轮次的响应耗时。
+func (r *RequestState) markCommitted(streaming bool) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	now := time.Now()
 	r.Status = StatusCommitted
 	if r.FirstTokenDuration == 0 {
-		r.FirstTokenDuration = time.Since(r.StartedAt)
+		r.FirstTokenDuration = now.Sub(r.StartedAt)
+	}
+	if streaming {
+		r.streamStarted = now
+	} else {
+		r.ResponseDuration = now.Sub(r.RoundStartedAt)
 	}
 	publishRequestLocked(r)
+}
+
+// finishStream 记录首字节提交至流式响应实际结束的耗时。
+func (r *RequestState) finishStream() {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !r.streamStarted.IsZero() {
+		r.StreamDuration = time.Since(r.streamStarted)
+	}
 }
 
 // markSucceeded 以成功终态定稿请求。
 func (r *RequestState) markSucceeded(responseBody string, usage *llm.Usage) {
 	mu.Lock()
 	defer mu.Unlock()
+	if r.finalized {
+		return
+	}
 
 	r.Status = StatusSuccess
 	r.Error = ""
@@ -177,9 +272,17 @@ func (r *RequestState) markSucceeded(responseBody string, usage *llm.Usage) {
 func (r *RequestState) markFailed(err error, responseBody string, usage *llm.Usage) {
 	mu.Lock()
 	defer mu.Unlock()
+	if r.finalized {
+		return
+	}
 
-	r.Status = StatusFailed
-	r.Error = err.Error()
+	if r.requestCtx != nil && r.requestCtx.Err() != nil {
+		r.Status = StatusCanceled
+		r.Error = r.requestCtx.Err().Error()
+	} else {
+		r.Status = StatusFailed
+		r.Error = err.Error()
+	}
 	if responseBody != "" {
 		r.responseBody = responseBody
 	}
@@ -190,6 +293,9 @@ func (r *RequestState) markFailed(err error, responseBody string, usage *llm.Usa
 func (r *RequestState) markCanceled(err error, responseBody string, usage *llm.Usage) {
 	mu.Lock()
 	defer mu.Unlock()
+	if r.finalized {
+		return
+	}
 
 	r.Status = StatusCanceled
 	r.Error = err.Error()
@@ -202,7 +308,11 @@ func (r *RequestState) markCanceled(err error, responseBody string, usage *llm.U
 // finishLocked 写入用量和费用, 发布终态, 更新请求级统计并裁剪历史; 调用方必须持有锁。
 func (r *RequestState) finishLocked(usage *llm.Usage) {
 	r.Sending = false
-	r.cancel = nil
+	r.roundCancel = nil
+	if r.requestCancel != nil {
+		r.requestCancel()
+	}
+	r.requestCancel = nil
 	if usage != nil {
 		r.Usage = *usage
 	}
@@ -350,7 +460,7 @@ func RequestBody(id uint64) string {
 	defer mu.Unlock()
 
 	if request := requests[id]; request != nil {
-		return request.body
+		return request.requestBody
 	}
 	return ""
 }

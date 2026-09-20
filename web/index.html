@@ -60,21 +60,28 @@
         stroke: currentColor;
         stroke-width: 6;
         stroke-linecap: round;
-        stroke-dasharray: 1;
+        stroke-dasharray: 1 2;
         stroke-dashoffset: 1;
         opacity: 0;
-        animation: octoDraw 2s ease-in-out infinite both;
       }
-      #initial-loader path:nth-child(1) { animation-delay: 0s; }
-      #initial-loader path:nth-child(2) { animation-delay: 0.15s; }
-      #initial-loader path:nth-child(3) { animation-delay: 0.30s; }
-      #initial-loader path:nth-child(4) { animation-delay: 0.45s; }
-      #initial-loader path:nth-child(5) { animation-delay: 0.60s; }
+      #initial-loader .octo-outline {
+        animation: octoDrawOuter 2s ease-in-out infinite both;
+      }
+      #initial-loader .octo-inner {
+        animation: octoDrawInner 2s ease-in-out infinite both;
+      }
 
-      @keyframes octoDraw {
+      @keyframes octoDrawOuter {
         0%   { stroke-dashoffset: 1; opacity: 0; }
-        5%   { opacity: 1; }
-        40%  { stroke-dashoffset: 0; opacity: 1; }
+        4%   { opacity: 1; }
+        28%  { stroke-dashoffset: 0; opacity: 1; }
+        100% { stroke-dashoffset: 0; opacity: 1; }
+      }
+      @keyframes octoDrawInner {
+        0%   { stroke-dashoffset: 1; opacity: 0; }
+        32%  { stroke-dashoffset: 1; opacity: 0; }
+        34%  { stroke-dashoffset: 1; opacity: 1; }
+        58%  { stroke-dashoffset: 0; opacity: 1; }
         100% { stroke-dashoffset: 0; opacity: 1; }
       }
       @keyframes octoFade {
@@ -97,11 +104,9 @@
     <div id="initial-loader" role="status" aria-label="Loading">
       <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
         <g class="octo-group">
-          <path pathLength="1" d="M50 15 C70 15 85 30 85 50 C85 65 75 75 70 80 M50 15 C30 15 15 30 15 50 C15 65 25 75 30 80" />
-          <path pathLength="1" d="M30 80 Q30 90 20 90" />
-          <path pathLength="1" d="M43 77 Q43 90 38 90" />
-          <path pathLength="1" d="M57 77 Q57 90 62 90" />
-          <path pathLength="1" d="M70 80 Q70 90 80 90" />
+          <path class="octo-outline" pathLength="1" d="M20 90 Q30 90 30 83 Q30 80 27.88 77.88 C25 75 15 65 15 50 C15 30 30 15 50 15 C70 15 85 30 85 50 C85 65 75 75 72.12 77.88 Q70 80 70 83 Q70 90 80 90" />
+          <path class="octo-inner" pathLength="1" d="M43 77 L43 85 C43 87.76 40.76 90 38 90" />
+          <path class="octo-inner" pathLength="1" d="M62 90 C59.24 90 57 87.76 57 85 L57 77" />
         </g>
       </svg>
     </div>
