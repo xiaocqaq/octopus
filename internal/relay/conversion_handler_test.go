@@ -48,7 +48,7 @@ func TestConversionForward(t *testing.T) {
 		{"reject_custom_tool", llm.APIFormatOpenAIResponse, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, true, func(r conversionTestMap) {
 			r["tools"] = []any{conversionTestMap{"type": "custom", "name": "execute", "format": conversionTestMap{"type": "text"}}}
 		}, "", 400, 0, false},
-		{"reject_json_schema", llm.APIFormatOpenAIChatCompletion, model.ProtocolAnthropicMessage, llm.APIFormatAnthropicMessage, false, func(r conversionTestMap) { r["response_format"] = conversionTestMap{"type": "json_object"} }, "", 400, 0, false},
+		{"json_object_fallback", llm.APIFormatOpenAIChatCompletion, model.ProtocolAnthropicMessage, llm.APIFormatAnthropicMessage, false, func(r conversionTestMap) { r["response_format"] = conversionTestMap{"type": "json_object"} }, "", 200, 1, false},
 		{"stream_usage", llm.APIFormatAnthropicMessage, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, true, nil, "", 200, 1, false},
 		{"stream_failed", llm.APIFormatAnthropicMessage, model.ProtocolOpenAIResponse, llm.APIFormatOpenAIResponse, true, nil,
 			strings.ReplaceAll(strings.ReplaceAll(conversionTestStream(llm.APIFormatOpenAIResponse, false, true), "response.completed", "response.failed"), `"status":"completed"`, `"status":"failed"`), 200, 1, true},

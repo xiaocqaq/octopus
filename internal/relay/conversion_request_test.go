@@ -58,6 +58,48 @@ func TestConversionClientErrorClassification(t *testing.T) {
 	}
 }
 
+func assertAnthropicJSONModeWire(t *testing.T, sent []byte) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(sent, &payload); err != nil {
+		t.Fatalf("invalid Anthropic request: %v body=%s", err, sent)
+	}
+	if !strings.Contains(string(payload["system"]), anthropicJSONModeInstruction) {
+		t.Fatalf("JSON mode instruction is not in Anthropic system: %s", sent)
+	}
+	for _, field := range []string{"response_format", "text"} {
+		if _, exists := payload[field]; exists {
+			t.Fatalf("incompatible %s field leaked to Anthropic: %s", field, sent)
+		}
+	}
+}
+func TestAnthropicJSONModeFallback(t *testing.T) {
+	req := conversionTestRequest(llm.APIFormatOpenAIChatCompletion, false, false)
+	req["response_format"] = conversionTestMap{"type": "json_object"}
+	_, _, sent, err := conversionTestRun(t, llm.APIFormatOpenAIChatCompletion, llm.APIFormatAnthropicMessage, req, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAnthropicJSONModeWire(t, sent)
+}
+
+func TestAnthropicJSONModeFallbackFromResponses(t *testing.T) {
+	req := conversionTestRequest(llm.APIFormatOpenAIResponse, false, false)
+	req["text"] = conversionTestMap{"format": conversionTestMap{"type": "json_object"}}
+	_, _, sent, err := conversionTestRun(t, llm.APIFormatOpenAIResponse, llm.APIFormatAnthropicMessage, req, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAnthropicJSONModeWire(t, sent)
+}
+func TestAnthropicJSONSchemaRemainsRejected(t *testing.T) {
+	req := conversionTestRequest(llm.APIFormatOpenAIChatCompletion, false, false)
+	req["response_format"] = conversionTestMap{"type": "json_schema", "json_schema": conversionTestMap{"name": "result", "schema": conversionTestMap{"type": "object"}}}
+	_, _, sent, err := conversionTestRun(t, llm.APIFormatOpenAIChatCompletion, llm.APIFormatAnthropicMessage, req, false, false)
+	if conversionClientError(err) == nil || len(sent) != 0 {
+		t.Fatalf("JSON schema should be rejected before upstream: err=%v sent=%s", err, sent)
+	}
+}
+
 func TestSameProtocolPreservesAdvancedRequest(t *testing.T) {
 	format := llm.APIFormatOpenAIResponse
 	body := []byte(`{"model":"mock","previous_response_id":"resp_previous","tools":[{"type":"custom","name":"run_code","format":{"type":"text"}}],"input":"continue","text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"}}}}`)

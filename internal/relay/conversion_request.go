@@ -25,6 +25,26 @@ func incompatibleField(format llm.APIFormat, param string) error {
 	return &conversionRequestError{param: param, message: fmt.Sprintf("cannot convert %s to %s without losing its semantics; use a compatible same-protocol channel or send a self-contained supported request", param, format)}
 }
 
+const anthropicJSONModeInstruction = "Return only one valid JSON object. Do not wrap it in Markdown fences or add any text before or after the JSON object."
+
+func normalizeAnthropicResponseFormat(request *llm.Request) error {
+	responseFormat := request.ResponseFormat
+	if responseFormat == nil || responseFormat.Type == "" || responseFormat.Type == "text" {
+		return nil
+	}
+	if responseFormat.Type != "json_object" {
+		return incompatibleField(llm.APIFormatAnthropicMessage, "response_format / text.format")
+	}
+
+	instruction := anthropicJSONModeInstruction
+	request.Messages = append([]llm.Message{{
+		Role: "system",
+		Content: llm.MessageContent{Content: &instruction},
+	}}, request.Messages...)
+	request.ResponseFormat = nil
+	return nil
+}
+
 // validateConversionReferences 拦住统一请求模型没有承载的 Responses 服务端引用。
 // 同协议透传不经过这里；代理没有存储上游会话，不能把引用删掉后假装完成了转换。
 func validateConversionReferences(source, target llm.APIFormat, raw *httpclient.Request) error {
@@ -61,8 +81,10 @@ func (m *conversionMiddleware) OnInboundLlmRequest(_ context.Context, request *l
 	if m.format != llm.APIFormatOpenAIResponse && request.PreviousResponseID != nil && *request.PreviousResponseID != "" {
 		return nil, incompatibleField(m.format, "previous_response_id")
 	}
-	if m.format == llm.APIFormatAnthropicMessage && request.ResponseFormat != nil && request.ResponseFormat.Type != "" && request.ResponseFormat.Type != "text" {
-		return nil, incompatibleField(m.format, "response_format / text.format")
+	if m.format == llm.APIFormatAnthropicMessage {
+		if err := normalizeAnthropicResponseFormat(request); err != nil {
+			return nil, err
+		}
 	}
 	for _, tool := range request.Tools {
 		supported := true
