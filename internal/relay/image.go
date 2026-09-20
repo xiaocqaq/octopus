@@ -24,20 +24,6 @@ import (
 // imageMaxAttempts 限定单个图片请求的最大上游尝试轮次。
 const imageMaxAttempts = 6
 
-type imageCommitWriter struct {
-	dst          io.Writer
-	onFirstWrite func()
-}
-
-func (w *imageCommitWriter) Write(p []byte) (int, error) {
-	n, err := w.dst.Write(p)
-	if n > 0 && w.onFirstWrite != nil {
-		w.onFirstWrite()
-		w.onFirstWrite = nil
-	}
-	return n, err
-}
-
 // ForwardImage 承载 /v1/images/generations 与 /v1/images/edits 的转发。
 // added 20260908: axonhub llm 库没有图片接口的 APIFormat, 图片接口也没有跨协议
 // 转换的余地, 故不复用 Forward 的转换管线, 只做原始正文透传, 但沿用同一套
@@ -278,24 +264,17 @@ func ForwardImage(kind string) gin.HandlerFunc {
 				c.Header("Content-Type", "application/json")
 			}
 			c.Writer.WriteHeader(response.StatusCode)
+			// 状态行与响应头一经写出客户端即视为已提交, 此后不可再改选上游重试。
+			request.markCommitted(streaming)
 
-			committed := false
-			markCommitted := func() {
-				if !committed {
-					request.markCommitted(streaming)
-					committed = true
-				}
-			}
-			// 首次成功写出字节时标记已提交, 完整复制成功后才记渠道成功。
-			trackedWriter := &imageCommitWriter{dst: c.Writer, onFirstWrite: markCommitted}
-			written, copyErr := io.Copy(trackedWriter, response.Body)
+			written, copyErr := io.Copy(c.Writer, response.Body)
 			response.Body.Close()
 			cancelRound()
 			if closeIdle != nil {
 				closeIdle()
 			}
 			if copyErr != nil {
-				if streaming && committed {
+				if streaming {
 					request.finishStream()
 				}
 				if ctx.Err() != nil {
@@ -304,9 +283,6 @@ func ForwardImage(kind string) gin.HandlerFunc {
 					request.markFailed(copyErr, "", nil)
 				}
 				return
-			}
-			if !committed {
-				markCommitted()
 			}
 			if streaming {
 				request.finishStream()

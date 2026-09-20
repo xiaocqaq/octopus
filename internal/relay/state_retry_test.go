@@ -135,9 +135,10 @@ func TestFirstTokenDurationIncludesRoutingAndRetries(t *testing.T) {
 				t.Fatalf("first token excludes earlier attempts: %v", r.FirstTokenDuration)
 			}
 			if streaming {
+				r.streamStarted = time.Now().Add(-time.Second)
 				r.addOutput()
 				r.finishStream()
-				if r.ResponseDuration != 0 || r.StreamDuration <= 0 || r.OutputChars != 1 {
+				if r.ResponseDuration != 0 || r.StreamDuration < time.Second || r.StreamDuration > 2*time.Second || r.OutputChars != 1 {
 					t.Fatalf("stream timing/output: %+v", r)
 				}
 			} else if r.StreamDuration != 0 || r.ResponseDuration < time.Second || r.ResponseDuration > 2*time.Second {
