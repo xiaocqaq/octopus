@@ -486,7 +486,10 @@
             "edit": "Edit",
             "delete": "Delete",
             "confirmDelete": "Confirm Delete",
-            "cancel": "Cancel"
+            "cancel": "Cancel",
+            "addToGroup": "Add to group",
+            "addToGroupSuccess": "Added {count} models to group \"{group}\"",
+            "addToGroupNone": "All models of this channel are already in group \"{group}\""
         },
         "form": {
             "stepPreset": "Start",

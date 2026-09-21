@@ -486,7 +486,10 @@
             "edit": "編輯",
             "delete": "刪除",
             "confirmDelete": "確認刪除",
-            "cancel": "取消"
+            "cancel": "取消",
+            "addToGroup": "加入分組",
+            "addToGroupSuccess": "已將 {count} 個模型加入分組「{group}」",
+            "addToGroupNone": "該渠道的模型已全部分組「{group}」內，無需重複加入"
         },
         "form": {
             "stepPreset": "開始",

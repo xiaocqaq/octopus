@@ -53,6 +53,12 @@ func init() {
 			// 一键测活: 不带成员 ID 时测分组内全部成员, 也可带成员 ID 列表只测其中一部分。
 			router.NewRoute("/probe/:id", http.MethodPost).
 				Handle(probeGroup),
+		).
+		AddRoute(
+			// 一键把指定渠道的全部有效授权追加为分组成员: 添加供应商后模型免逐条点选。
+			// 分组与渠道都走路径: id 是分组, channelId 是渠道, 请求体恒为空对象。
+			router.NewRoute("/add-channel/:id/:channelId", http.MethodPost).
+				Handle(addChannelToGroup),
 		)
 }
 
@@ -311,4 +317,33 @@ func publishProbeEvent(groupID int) {
 		return
 	}
 	publishGroupEvent(groupEvent{Name: "changed", Data: groupResponse{Group: group, Runtime: relay.RouteStateOf(group)}})
+}
+
+// addChannelToGroup 一键把指定渠道的全部有效授权追加为分组成员。
+// 返回新增数量与更新后的分组: 界面据此提示"新增了几个", 全部已存在时提示无需添加。
+// 变更后的完整分组照例推入事件流, 其他会话无需重新拉取列表即可同步到新成员。
+func addChannelToGroup(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req model.GroupAddChannelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	channelID, err := strconv.Atoi(c.Param("channel_id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	added, group, err := op.GroupAddChannel(groupID, channelID, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response := groupResponse{Group: *group, Runtime: relay.RouteStateOf(*group)}
+	publishGroupEvent(groupEvent{Name: "changed", Data: response})
+	resp.Success(c, gin.H{"added": added, "group": response})
 }

@@ -236,6 +236,84 @@ func syncGroupItems(tx *gorm.DB, groupID int, requested []model.GroupItemInput) 
 	return nil
 }
 
+// GroupAddChannel 把渠道的全部有效授权一键追加为分组成员。
+// 逐条对齐分组页手工添加的语义: 渠道或凭据被禁用及两侧缺失的授权不进组, 与 ChannelGrantCandidates 的候选口径一致;
+// 分组内已有的授权跳过(成员按渠道授权唯一), 其余按候选定序追加到现有优先级之后, 已有成员的主键与顺序不受影响。
+// 返回本次实际新增的成员数, 供界面提示"新增了几个"; 追加与优先级重写在同一事务内完成。
+func GroupAddChannel(groupID, channelID int, ctx context.Context) (int, *model.Group, error) {
+	if _, ok := groupCache.Get(groupID); !ok {
+		return 0, nil, fmt.Errorf("group not found")
+	}
+	if _, ok := channelCache.Get(channelID); !ok {
+		return 0, nil, fmt.Errorf("channel not found")
+	}
+
+	added := 0
+	var group model.Group
+	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		added = 0
+		if err := tx.Preload("Items").First(&group, groupID).Error; err != nil {
+			return fmt.Errorf("failed to load group: %w", err)
+		}
+		sortGroupItems(group.Items)
+		existing := make(map[int]struct{}, len(group.Items))
+		for _, item := range group.Items {
+			existing[item.ChannelGrantID] = struct{}{}
+		}
+		for _, candidate := range channelGrantCandidatesOfChannel(channelID) {
+			if _, ok := existing[candidate.ID]; ok {
+				continue
+			}
+			newItem := model.GroupItem{GroupID: groupID, ChannelGrantID: candidate.ID, Priority: len(group.Items) + 1}
+			if err := tx.Create(&newItem).Error; err != nil {
+				return fmt.Errorf("failed to create group item: %w", err)
+			}
+			group.Items = append(group.Items, newItem)
+			existing[candidate.ID] = struct{}{}
+			added++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	groupCache.Set(group.ID, group)
+	snapshot := groupSnapshot(group)
+	return added, &snapshot, nil
+}
+
+// channelGrantCandidatesOfChannel 返回指定渠道的授权候选, 口径与定序规则同 ChannelGrantCandidates。
+func channelGrantCandidatesOfChannel(channelID int) []model.ChannelGrantCandidate {
+	candidates := make([]model.ChannelGrantCandidate, 0, channelGrantCache.Len())
+	for _, grant := range channelGrantCache.GetAll() {
+		channelModel, modelOK := channelModelCache.Get(grant.ChannelModelID)
+		channelKey, keyOK := channelKeyCache.Get(grant.ChannelKeyID)
+		if !modelOK || !keyOK {
+			continue
+		}
+		channel, channelOK := channelCache.Get(channelModel.ChannelID)
+		if !channelOK || channel.ID != channelID {
+			continue
+		}
+		candidates = append(candidates, model.ChannelGrantCandidate{
+			ID:          grant.ID,
+			ChannelID:   channel.ID,
+			ChannelName: channel.Name,
+			ModelName:   channelModel.Name,
+			KeyName:     channelKey.Name,
+			Protocols:   grant.Protocols,
+			Available:   channel.Enabled && channelKey.Enabled,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ModelName != candidates[j].ModelName {
+			return candidates[i].ModelName < candidates[j].ModelName
+		}
+		return candidates[i].KeyName < candidates[j].KeyName
+	})
+	return candidates
+}
+
 // GroupDel 删除分组及其成员，成员删除不会影响被其他分组引用的渠道授权。
 func GroupDel(id int, ctx context.Context) error {
 	group, ok := groupCache.Get(id)

@@ -125,3 +125,7 @@ type GroupUpdateRequest struct {
 type GroupItemInput struct {
 	ChannelGrantID int `json:"channel_grant_id" binding:"required"` // 待引用的渠道授权 ID。
 }
+
+// 一键把指定渠道的授权追加为分组成员的请求; 渠道主键走路径, 不进请求体。
+// 空结构体只为满足 POST 有 JSON 体这条路, 渠道在提交前已由渠道页面创建。
+type GroupAddChannelRequest struct{}

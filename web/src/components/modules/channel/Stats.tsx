@@ -10,6 +10,7 @@ import {
     Eye,
     EyeOff,
     FileText,
+    LayersPlus,
     MessageSquare,
     Pencil,
     Share2,
@@ -20,8 +21,16 @@ import { snapdom } from '@zumer/snapdom';
 import { toast } from 'sonner';
 import { useTranslations } from 'use-intl';
 import { type ChannelStatsFormatted, useDeleteChannel } from '@/api/channel';
+import { useAddChannelToGroup, useGroupList } from '@/api/group';
 import { type StatsMetricsFormatted } from '@/api/stats';
 import { useMorphingDialog } from '@/components/ui/morphing-dialog';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 
 type FormattedMetric = StatsMetricsFormatted['request_count'];
 
@@ -55,6 +64,8 @@ export function ChannelStats({ channel, onEdit }: {
     const tCommon = useTranslations('common');
     const { setIsOpen } = useMorphingDialog();
     const deleteChannel = useDeleteChannel();
+    const { data: groups = [] } = useGroupList();
+    const addChannelToGroup = useAddChannelToGroup();
     const [modelSort, setModelSort] = useState<ModelSortKey>('cost');
     // 隐藏渠道名称, 分享图也跟随此状态
     const [isNameHidden, setIsNameHidden] = useState(false);
@@ -252,6 +263,43 @@ export function ChannelStats({ channel, onEdit }: {
                                     >
                                         <Pencil className="size-3.5" />
                                     </button>
+                                    {/* 一键添加到分组: 拉取的模型免逐条点选, 选中分组即提交。
+                                        与其他头部按钮同为 size-6 素色, 避免在统计视图里抢视觉。 */}
+                                    <Select
+                                        value=""
+                                        onValueChange={(value) => {
+                                            const groupId = Number(value);
+                                            if (!groupId) return;
+                                            addChannelToGroup.mutate(
+                                                { groupId, channelId: channel.channel_id },
+                                                {
+                                                    onSuccess: (data) => {
+                                                        if (data.added > 0) {
+                                                            toast.success(t('addToGroupSuccess', { count: data.added, group: data.group.name }));
+                                                        } else {
+                                                            toast.info(t('addToGroupNone', { group: data.group.name }));
+                                                        }
+                                                    },
+                                                    onError: (error) => toast.error(error.message),
+                                                },
+                                            );
+                                        }}
+                                        disabled={groups.length === 0 || addChannelToGroup.isPending}
+                                    >
+                                        <SelectTrigger
+                                            aria-label={t('addToGroup')}
+                                            className="h-6 w-6 rounded-md border-none p-0 text-muted-foreground/60 shadow-none transition-colors hover:text-foreground focus-visible:ring-0 [&>svg]:size-3.5 [&>svg]:text-current"
+                                        >
+                                            <SelectValue placeholder={<LayersPlus className="size-3.5" />} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {groups.map((group) => (
+                                                <SelectItem key={group.id} value={String(group.id)}>
+                                                    {group.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                     <button
                                         type="button"
                                         onClick={() => setIsConfirmingDelete(true)}
