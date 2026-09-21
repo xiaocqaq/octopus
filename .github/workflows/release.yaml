@@ -90,10 +90,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Verify release assets
+        run: |
+          test -s build/archives/SHA256SUMS
+          test "$(find build/archives -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 7
+
       - name: Upload Release
         uses: softprops/action-gh-release@v3
         with:
-          files: build/archives/*
+          files: |
+            build/archives/*.zip
+            build/archives/SHA256SUMS
           prerelease: false
           tag_name: ${{ steps.version.outputs.version }}
 
