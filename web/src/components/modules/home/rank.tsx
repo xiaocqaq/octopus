@@ -68,7 +68,7 @@ function RankCard({
                 </div>
             ) : (
                 <>
-                    <div className={`${grid} pt-4 pb-1 text-sm text-muted-foreground`}>
+                    <div className={`${grid} pt-2 pb-1 text-sm text-muted-foreground`}>
                         <div />
                         <div />
                         {RANK_COLUMNS.map((key) => (
@@ -184,7 +184,6 @@ export function Rank() {
             />
             <RankCard
                 title={t('group')}
-                hint={t('sinceEnabled')}
                 items={groupItems}
                 sort={groupRankSort}
                 onSortChange={setGroupRankSort}

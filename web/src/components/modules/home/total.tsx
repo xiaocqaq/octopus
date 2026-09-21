@@ -8,8 +8,7 @@ import {
     ArrowUpFromLine,
     Rewind,
     DollarSign,
-    FastForward,
-    Percent
+    FastForward
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslations } from 'use-intl';
@@ -84,8 +83,6 @@ export function Total() {
             items: [
                 { label: t('inputTokens'), metric: stats?.input_token, icon: Rewind, bgColor: 'bg-chart-3/10' },
                 { label: t('inputCost'), metric: stats?.input_cost, icon: DollarSign, bgColor: 'bg-chart-3/10' },
-                // 缓存命中率归在输入侧: 命中的部分本就是输入词元里的一个子集, 单列一张卡片会与输入统计重复。
-                { label: t('cacheRate'), metric: stats?.cache_rate, icon: Percent, bgColor: 'bg-chart-3/10' },
             ],
         },
         {
