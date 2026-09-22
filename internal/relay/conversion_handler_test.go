@@ -45,9 +45,12 @@ func TestConversionForward(t *testing.T) {
 		failed       bool
 	}{
 		{"reject_context", llm.APIFormatOpenAIResponse, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, false, func(r conversionTestMap) { r["previous_response_id"] = "resp_other" }, "", 400, 0, false},
-		{"reject_custom_tool", llm.APIFormatOpenAIResponse, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, true, func(r conversionTestMap) {
-			r["tools"] = []any{conversionTestMap{"type": "custom", "name": "execute", "format": conversionTestMap{"type": "text"}}}
-		}, "", 400, 0, false},
+		{"drop_native_tools", llm.APIFormatOpenAIResponse, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, true, func(r conversionTestMap) {
+			r["tools"] = []any{
+				conversionTestMap{"type": "web_search"},
+				conversionTestMap{"type": "custom", "name": "execute", "format": conversionTestMap{"type": "text"}},
+			}
+		}, "", 200, 1, false},
 		{"json_object_fallback", llm.APIFormatOpenAIChatCompletion, model.ProtocolAnthropicMessage, llm.APIFormatAnthropicMessage, false, func(r conversionTestMap) { r["response_format"] = conversionTestMap{"type": "json_object"} }, "", 200, 1, false},
 		{"stream_usage", llm.APIFormatAnthropicMessage, model.ProtocolOpenAIChatCompletion, llm.APIFormatOpenAIChatCompletion, true, nil, "", 200, 1, false},
 		{"stream_failed", llm.APIFormatAnthropicMessage, model.ProtocolOpenAIResponse, llm.APIFormatOpenAIResponse, true, nil,

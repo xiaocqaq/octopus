@@ -387,11 +387,21 @@ func TestConversionStructuredOutputToMessages(t *testing.T) {
 }
 func TestConversionNativeToolToChat(t *testing.T) {
 	req := conversionTestRequest(llm.APIFormatOpenAIResponse, false, false)
-	req["tools"] = []any{conversionTestMap{"type": "custom", "name": "run_code", "description": "Execute code", "format": conversionTestMap{"type": "text"}}}
+	req["tools"] = []any{
+		conversionTestMap{"type": "web_search"},
+		conversionTestMap{"type": "function", "name": "weather", "parameters": conversionTestMap{"type": "object"}},
+		conversionTestMap{"type": "custom", "name": "run_code", "description": "Execute code", "format": conversionTestMap{"type": "text"}},
+	}
 	_, _, sent, err := conversionTestRun(t, llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIChatCompletion, req, false, false)
-	t.Logf("outbound=%s; err=%v", sent, err)
-	if conversionClientError(err) == nil || len(sent) != 0 {
-		t.Errorf("unsupported custom tool must be rejected locally: err=%v outbound=%s", err, sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(sent)
+	if strings.Contains(body, "web_search") || strings.Contains(body, "run_code") || strings.Contains(body, `"custom"`) {
+		t.Fatalf("axonhub should drop native tools chat cannot represent: %s", body)
+	}
+	if !strings.Contains(body, "weather") {
+		t.Fatalf("function tool was dropped with native tools: %s", body)
 	}
 }
 
