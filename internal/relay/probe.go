@@ -223,6 +223,53 @@ func probeConverted(ctx context.Context, outbound transformer.Outbound, channel 
 	return nil
 }
 
+// ProbeChannelGrant 对一条当前渠道授权复用真实转发的出站构造和发送逻辑, 但不写入分组路由状态。
+// 模型页测活尚未把模型加入分组, 因此不能借用 ProbeItem 的分组成员 ID；网络请求路径仍完全复用 runProbe。
+func ProbeChannelGrant(ctx context.Context, grantID int, streaming bool) ProbeResult {
+	grant, err := op.ChannelGrantGet(grantID)
+	if err != nil {
+		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+	}
+	channelModel := grant.ChannelModel
+	channelKey := grant.ChannelKey
+	if channelModel == nil || channelKey == nil {
+		return ProbeResult{ItemID: grantID, Message: "channel grant is incomplete", ProbedAt: time.Now().UnixMilli()}
+	}
+	channel, err := op.ChannelGet(channelModel.ChannelID)
+	if err != nil {
+		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+	}
+	if !channel.Enabled {
+		return ProbeResult{ItemID: grantID, Message: "channel is disabled", ProbedAt: time.Now().UnixMilli()}
+	}
+	outbound, _, passthrough, err := buildOutbound(channel, grant, *channelKey, model.ProtocolOpenAIChatCompletion)
+	if err != nil {
+		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+	}
+	request, err := buildProbeRequest(ctx, outbound, channel, channelModel.Name, streaming)
+	if err != nil {
+		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+	}
+	config := model.DefaultGroupRelayConfig()
+	timeout := time.Duration(config.MemberNonStreamResponseTimeoutSeconds) * time.Second
+	if streaming {
+		timeout = time.Duration(config.MemberStreamFirstEventTimeoutSeconds) * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	startedAt := time.Now()
+	probeErr := runProbe(probeCtx, outbound, channel, channelModel.Name, request, passthrough, streaming)
+	latency := time.Since(startedAt).Milliseconds()
+	if probeErr != nil {
+		message := probeErr.Error()
+		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			message = fmt.Sprintf("probe timeout after %s", timeout)
+		}
+		return ProbeResult{ItemID: grantID, LatencyMS: latency, Message: message, ProbedAt: time.Now().UnixMilli()}
+	}
+	return ProbeResult{ItemID: grantID, OK: true, LatencyMS: latency, ProbedAt: time.Now().UnixMilli()}
+}
+
 func stringPtr(value string) *string { return &value }
 
 func int64Ptr(value int64) *int64 { return &value }

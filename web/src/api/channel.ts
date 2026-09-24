@@ -131,6 +131,56 @@ export type FetchModel = {
     protocols: number; // Protocol 位掩码。
 };
 
+export type ChannelModelGroupAssignment = {
+    model_name: string;
+    group_id: number;
+};
+
+export type GroupAssignChannelModelResult = {
+    model_name: string;
+    group_id: number;
+    grant_count: number;
+    skipped: boolean;
+    reason?: string;
+};
+
+export type ChannelModelProbeResult = {
+    model_name: string;
+    key_name: string;
+    ok: boolean;
+    latency_ms: number;
+    message?: string;
+};
+
+export function useAssignChannelModels() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ channelId, assignments }: { channelId: number; assignments: ChannelModelGroupAssignment[] }) =>
+            apiRequest<GroupAssignChannelModelResult[]>('/api/v1/channel/assign-models', {
+                method: 'POST',
+                body: { channel_id: channelId, assignments },
+            }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: groupListQueryOptions.queryKey });
+        },
+    });
+}
+
+export function useProbeChannelModels() {
+    return useMutation({
+        mutationFn: ({ channelId, modelNames, keyName, streaming = false }: {
+            channelId: number;
+            modelNames: string[];
+            keyName?: string;
+            streaming?: boolean;
+        }) => apiRequest<ChannelModelProbeResult[]>('/api/v1/channel/probe-models', {
+            method: 'POST',
+            body: { channel_id: channelId, model_names: modelNames, key_name: keyName ?? '', streaming },
+        }),
+    });
+}
+
+
 // channelGrantListQueryOptions 供分组页查询可选授权。
 // 与渠道列表分开: 选取成员只需名称与可用性, 拉整份渠道会连带路径, 代理与凭据明文。
 export const channelGrantListQueryOptions = queryOptions({

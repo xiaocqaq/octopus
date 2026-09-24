@@ -55,8 +55,7 @@ func init() {
 				Handle(probeGroup),
 		).
 		AddRoute(
-			// 一键把指定渠道的全部有效授权追加为分组成员: 添加供应商后模型免逐条点选。
-			// 分组与渠道都走路径: id 是分组, channelId 是渠道, 请求体恒为空对象。
+			// 兼容已有分组页接口; 渠道首页不再使用此入口, 但保留接口避免旧客户端断裂。
 			router.NewRoute("/add-channel/:id/:channelId", http.MethodPost).
 				Handle(addChannelToGroup),
 		)

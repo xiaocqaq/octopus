@@ -58,6 +58,14 @@ func init() {
 		AddRoute(
 			router.NewRoute("/fetch-model", http.MethodPost).
 				Handle(fetchModel),
+		).
+		AddRoute(
+			router.NewRoute("/assign-models", http.MethodPost).
+				Handle(assignChannelModels),
+		).
+		AddRoute(
+			router.NewRoute("/probe-models", http.MethodPost).
+				Handle(probeChannelModels),
 		)
 }
 

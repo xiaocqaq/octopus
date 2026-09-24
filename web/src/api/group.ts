@@ -261,26 +261,6 @@ export function useDeleteGroup() {
     });
 }
 
-// GroupAddChannelResponse 是一键把渠道授权追加为分组成员的响应。
-// added 是本次实际新增的成员数(已在分组内的授权不重复计入), group 是更新后的完整分组。
-export interface GroupAddChannelResponse {
-    added: number;
-    group: Group;
-}
-
-// useAddChannelToGroup 一键把指定渠道的全部有效授权追加为分组成员。
-// 响应与事件流都带完整分组, 经 writeGroupCache 收敛进缓存; 事件流随后的 changed 事件会写入同一份数据, 幂等。
-export function useAddChannelToGroup() {
-    return useMutation({
-        mutationFn: ({ groupId, channelId }: { groupId: number; channelId: number }) =>
-            apiRequest<GroupAddChannelResponse>(`/api/v1/group/add-channel/${groupId}/${channelId}`, {
-                method: 'POST',
-                body: {},
-            }),
-        onSuccess: (data) => writeGroupCache(data.group),
-    });
-}
-
 // useProbeGroupItem 测活单个成员（体检一条）。
 // 结论由后端写进路由状态并经事件流广播，故此处不写缓存：重复写会让本地的乐观值与随后到达的事件互相覆盖。
 export function useProbeGroupItem() {

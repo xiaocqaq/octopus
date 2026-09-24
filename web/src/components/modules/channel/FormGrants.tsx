@@ -1,34 +1,26 @@
-import { useState } from 'react';
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, Plus, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ArrowDownUp, CheckCheck, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, HeartPulse, LoaderCircle, Plus, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { toast } from 'sonner';
 import { useTranslations } from 'use-intl';
-import { Protocol } from '@/api/channel';
+import { Protocol, useAssignChannelModels, useProbeChannelModels } from '@/api/channel';
+import { useGroupList } from '@/api/group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/common/IconButton';
 import { useModelProbe } from './probe';
 import { grantKey, type ChannelFormState } from './state';
 
-// GrantCells 渲染一行右侧固定的五格: chat, response, message, image 四个协议勾选和一个删除。
-// 表头, 模型行, 凭据子行的差别只是这一行覆盖的 (模型 × 凭据) 范围与删除动作, 勾选,
-// 三态和写入是同一套逻辑, 故三级共用此段, 列宽与对齐也因此天然一致。
-// 四个协议列固定, 凭据作为模型的子行, 故列数不随凭据数变化。
+// GrantCells 渲染右侧固定的五格: chat, response, message, image 四个协议勾选和一个删除。
 function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip }: {
     state: ChannelFormState;
     setState: (next: ChannelFormState) => void;
-    models: string[]; // 本行覆盖的模型名。
-    keyNames: string[]; // 本行覆盖的凭据名。
-    remove?: () => void; // 为空表示本行没有删除动作, 末格仍占位以保持列对齐。
-    icon: LucideIcon; // 删除格的图标, 表头用橡皮, 模型与凭据行用垃圾桶。
-    tip: string; // 删除格的提示, 三级的删除语义不同。
+    models: string[];
+    keyNames: string[];
+    remove?: () => void;
+    icon: LucideIcon;
+    tip: string;
 }) {
-    // cell 渲染一个协议格: 覆盖范围内全部组合都开为 true, 全关为 false, 其余为半选。
     const cell = (bit: number) => {
         let on = 0;
         for (const modelName of models) {
@@ -44,7 +36,6 @@ function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip
                     checked={value}
                     disabled={total === 0}
                     onCheckedChange={() => {
-                        // 已全开则整片取消, 否则整片打开; 协议位清空即该条授权不存在, 直接从 Map 移除。
                         const grants = new Map(state.grants);
                         for (const modelName of models) {
                             for (const keyName of keyNames) {
@@ -70,12 +61,7 @@ function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip
             {cell(Protocol.OpenAIImage)}
             <span className="w-7 flex justify-center">
                 {remove && (
-                    <IconButton
-                        onClick={remove}
-                        disabled={models.length === 0}
-                        className="size-7 hover:text-destructive"
-                        tip={tip}
-                    >
+                    <IconButton onClick={remove} disabled={models.length === 0} className="size-7 hover:text-destructive" tip={tip}>
                         <Icon className="size-3.5" />
                     </IconButton>
                 )}
@@ -84,39 +70,49 @@ function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip
     );
 }
 
-// FormGrants 模型集合与授权矩阵。
-// ALL_KEYS 是凭据下拉里的"全部"选项, 与具体凭据名区分开。
-// 真实凭据名由用户填写, 用带下划线的保留字可避免与之撞名。
 const ALL_KEYS = '__all__';
 
-// 模型行的复选框一键设置该模型下所有凭据, 凭据子行只改自己那一条授权;
-// 协议位全为空即该授权不存在, 提交时被丢弃。
-export function FormGrants({ state, setState }: {
+type ProbeMark = { ok: boolean; latency_ms: number; message?: string };
+
+// 模型页管理当前渠道的模型、授权矩阵，以及模型分组和测活操作。
+export function FormGrants({ state, setState, channelId }: {
     state: ChannelFormState;
     setState: (next: ChannelFormState) => void;
+    channelId?: number;
 }) {
     const t = useTranslations('channel.form');
     const { probe, pendingKey } = useModelProbe();
-    const [expanded, setExpanded] = useState<Set<string>>(new Set()); // 已展开的模型名, 支持同时展开多个。
-    const [adding, setAdding] = useState('');
-    // 默认停在"全部": 打开时先给出渠道的完整模型视图, 与过滤前一致, 免得看起来像模型丢了。
+    const { data: groups = [] } = useGroupList();
+    const assignModels = useAssignChannelModels();
+    const probeModels = useProbeChannelModels();
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const [searchTerm, setSearchTerm] = useState('');
     const [selectedKey, setSelectedKey] = useState(ALL_KEYS);
+    const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+    const [manualGroups, setManualGroups] = useState<Record<string, number>>({});
+    const [probeMarks, setProbeMarks] = useState<Record<string, ProbeMark>>({});
+    const [probingModels, setProbingModels] = useState<Set<string>>(new Set());
+    const [addDialogOpen, setAddDialogOpen] = useState(false);
+    const [newModelName, setNewModelName] = useState('');
 
     const keyNames = state.keys.map((k) => k.name);
     const isAllKeys = selectedKey === ALL_KEYS;
-    // activeKey 是"添加模型"与"刷新"的凭据目标, 这两件事都必须落到某一个具体凭据上:
-    // 停在"全部"时退回第一份凭据, 与加过滤之前的行为一致。
     const activeKey = isAllKeys ? (keyNames[0] || '') : selectedKey;
-
-    // 选中具体凭据时只列出它已授权的模型, 选"全部"则列出全部模型。
-    // 协议位为零即该 (模型, 凭据) 的授权不存在, 故非零即为已授权。
-    const visibleModels = isAllKeys
-        ? state.models
-        : state.models.filter((name) => (state.grants.get(grantKey(name, selectedKey)) ?? 0) !== 0);
-
+    const visibleModels = useMemo(() => {
+        const source = isAllKeys
+            ? state.models
+            : state.models.filter((name) => (state.grants.get(grantKey(name, selectedKey)) ?? 0) !== 0);
+        const term = searchTerm.trim().toLowerCase();
+        return term ? source.filter((name) => name.toLowerCase().includes(term)) : source;
+    }, [isAllKeys, searchTerm, selectedKey, state.grants, state.models]);
     const allExpanded = visibleModels.length > 0 && visibleModels.every((m) => expanded.has(m));
+    const defaultGroups = useMemo(() => new Map(groups.map((group) => [group.name, group.id])), [groups]);
+    const targetGroupID = (modelName: string) => manualGroups[modelName] ?? defaultGroups.get(modelName) ?? 0;
+    const targetGroupValue = (modelName: string) => Object.prototype.hasOwnProperty.call(manualGroups, modelName)
+        ? String(manualGroups[modelName])
+        : defaultGroups.has(modelName) ? String(defaultGroups.get(modelName)) : '';
+    const selectedVisibleModels = visibleModels.filter((modelName) => selectedModels.has(modelName));
 
-    // removeGrant 移除该模型在指定凭据上的授权, 模型与凭据本身保留。
     const removeGrant = (modelName: string, keyName: string) => {
         const grants = new Map(state.grants);
         grants.delete(grantKey(modelName, keyName));
@@ -126,23 +122,85 @@ export function FormGrants({ state, setState }: {
     const removeModel = (modelName: string) => {
         const grants = new Map(state.grants);
         for (const keyName of keyNames) grants.delete(grantKey(modelName, keyName));
+        setSelectedModels((previous) => {
+            const next = new Set(previous);
+            next.delete(modelName);
+            return next;
+        });
         setState({ ...state, models: state.models.filter((m) => m !== modelName), grants });
     };
 
-    // 自定义模型直接授权给当前选中的凭据, 协议位沿用该凭据在其他模型上已有的并集。
-    // 并集来自此前刷新探测出的结果, 即该凭据确实讲得通的协议; 该凭据尚无任何授权时退回 Responses,
-    // 与探测的默认一致: Chat Completions 已被官方标记弃用, 需要它的渠道由用户手动勾选 Chat 列。
     const addModel = () => {
-        const name = adding.trim();
-        if (!name || state.models.includes(name)) return;
+        const name = newModelName.trim();
+        if (!name || state.models.includes(name) || !activeKey) return;
         let protocols = 0;
-        for (const modelName of state.models) {
-            protocols |= state.grants.get(grantKey(modelName, activeKey)) ?? 0;
-        }
+        for (const modelName of state.models) protocols |= state.grants.get(grantKey(modelName, activeKey)) ?? 0;
         const grants = new Map(state.grants);
-        if (activeKey) grants.set(grantKey(name, activeKey), protocols || Protocol.OpenAIResponse);
+        grants.set(grantKey(name, activeKey), protocols || Protocol.OpenAIResponse);
         setState({ ...state, models: [...state.models, name], grants });
-        setAdding('');
+        setNewModelName('');
+        setSearchTerm('');
+        setAddDialogOpen(false);
+    };
+
+    const toggleAll = () => {
+        setSelectedModels((previous) => {
+            const next = new Set(previous);
+            for (const modelName of visibleModels) next.add(modelName);
+            return next;
+        });
+    };
+
+    const invertSelection = () => {
+        setSelectedModels((previous) => {
+            const next = new Set(previous);
+            for (const modelName of visibleModels) {
+                if (next.has(modelName)) next.delete(modelName);
+                else next.add(modelName);
+            }
+            return next;
+        });
+    };
+
+    const handleAssign = () => {
+        if (!channelId || selectedVisibleModels.length === 0) return;
+        assignModels.mutate({
+            channelId,
+            assignments: selectedVisibleModels.map((modelName) => ({ model_name: modelName, group_id: targetGroupID(modelName) })),
+        }, {
+            onSuccess: (results) => {
+                const assigned = results.filter((result) => !result.skipped && result.grant_count > 0).length;
+                const skipped = results.filter((result) => result.skipped || result.grant_count === 0).length;
+                toast.success(t('modelAssignDone', { assigned, skipped }));
+                setSelectedModels(new Set());
+            },
+            onError: (error) => toast.error(t('modelAssignFailed'), { description: error.message }),
+        });
+    };
+
+    const handleProbe = (modelNames: string[]) => {
+        if (!channelId || modelNames.length === 0) return;
+        setProbingModels((previous) => new Set([...previous, ...modelNames]));
+        probeModels.mutate({ channelId, modelNames, keyName: isAllKeys ? '' : selectedKey }, {
+            onSuccess: (results) => {
+                setProbeMarks((previous) => {
+                    const next = { ...previous };
+                    for (const result of results) next[`${result.model_name}\0${result.key_name}`] = result;
+                    return next;
+                });
+                const failed = results.filter((result) => !result.ok).length;
+                if (results.length > 0) {
+                    if (failed === 0) toast.success(t('modelProbeAllOk', { count: results.length }));
+                    else toast.warning(t('modelProbePartial', { ok: results.length - failed, failed }));
+                }
+            },
+            onError: (error) => toast.error(t('modelProbeFailed'), { description: error.message }),
+            onSettled: () => setProbingModels((previous) => {
+                const next = new Set(previous);
+                for (const modelName of modelNames) next.delete(modelName);
+                return next;
+            }),
+        });
     };
 
     if (state.keys.length === 0) {
@@ -150,140 +208,101 @@ export function FormGrants({ state, setState }: {
     }
 
     return (
-        // 撑满步骤区高度, 模型列表内部滚动, 避免与步骤区形成两层滚动容器。
-        <div className="flex flex-col gap-3 h-full min-h-0">
-            {/* 凭据选择既决定下方列出哪些模型 (具体凭据只看它已授权的, "全部"看所有),
-                也是自定义添加与刷新的目标凭据, 使新增模型与它所属的凭据在同一行里对应清楚。 */}
+        <div className="relative flex flex-col gap-3 h-full min-h-0">
             <div className="flex items-center gap-2 shrink-0">
-                <Select value={selectedKey} onValueChange={setSelectedKey}>
-                    <SelectTrigger className="rounded-xl h-9 w-32"><SelectValue /></SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                        <SelectItem value={ALL_KEYS} className="rounded-lg">{t('grantAllKeys')}</SelectItem>
-                        {state.keys.map((k) => (
-                            <SelectItem key={k.name} value={k.name} className="rounded-lg">{k.name}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="h-9 w-32 rounded-xl border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring">
+                    <option value={ALL_KEYS}>{t('grantAllKeys')}</option>
+                    {state.keys.map((key) => <option key={key.name} value={key.name}>{key.name}</option>)}
+                </select>
                 <Input
-                    value={adding}
-                    onChange={(e) => setAdding(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addModel(); } }}
-                    placeholder={t('modelCustomPlaceholder')}
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder={t('modelSearchPlaceholder')}
                     className="rounded-xl h-9 flex-1"
                 />
-                <IconButton
-                    onClick={addModel}
-                    disabled={!adding.trim() || state.models.includes(adding.trim())}
-                    className="size-9"
-                    tip={t('modelAdd')}
-                >
+                <IconButton onClick={() => setAddDialogOpen(true)} className="size-9" tip={t('modelAdd')}>
                     <Plus className="size-4" />
                 </IconButton>
-                <IconButton
-                    onClick={() => probe(state, setState, activeKey)}
-                    disabled={pendingKey !== null || !state.base_url.trim()}
-                    className="size-9"
-                    tip={t('modelRefresh')}
-                >
+                <IconButton onClick={() => probe(state, setState, activeKey)} disabled={pendingKey !== null || !state.base_url.trim()} className="size-9" tip={t('modelRefresh')}>
                     <RefreshCw className={`size-4 ${pendingKey !== null ? 'animate-spin' : ''}`} />
                 </IconButton>
             </div>
 
+            <div className="flex items-center gap-1 shrink-0">
+                <IconButton onClick={toggleAll} disabled={visibleModels.length === 0} className="size-8" tip={t('modelSelectAll')}><CheckCheck className="size-4" /></IconButton>
+                <IconButton onClick={invertSelection} disabled={visibleModels.length === 0} className="size-8" tip={t('modelInvertSelection')}><ArrowDownUp className="size-4" /></IconButton>
+                <Button type="button" variant="secondary" size="sm" onClick={handleAssign} disabled={!channelId || selectedVisibleModels.length === 0 || assignModels.isPending} className="ml-1 h-8 rounded-lg text-xs">
+                    {assignModels.isPending ? <LoaderCircle className="mr-1 size-3.5 animate-spin" /> : null}{t('modelAssignSelected')}
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => handleProbe(selectedVisibleModels)} disabled={!channelId || selectedVisibleModels.length === 0 || probeModels.isPending} className="h-8 rounded-lg text-xs">
+                    {probeModels.isPending ? <LoaderCircle className="mr-1 size-3.5 animate-spin" /> : <HeartPulse className="mr-1 size-3.5" />}{t('modelProbeSelected')}
+                </Button>
+                <span className="ml-auto text-xs text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
+            </div>
+
             <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-border overflow-hidden">
-                {/* 展开折叠在最左, 与下面模型行的箭头同侧; 协议标签, 三个批量勾选和清空靠右成组。
-                    标签用 ml-auto 顶到右侧, 紧挨复选框, 才能读作这三列的表头。 */}
                 <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
-                    {/* 全部展开与全部折叠共用一个按钮: 已全展开时折叠, 否则展开全部。 */}
-                    <IconButton
-                        onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))}
-                        disabled={state.models.length === 0}
-                        className="size-5"
-                        tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}
-                    >
+                    <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-5" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
                         {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
                     </IconButton>
-                    <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
-                        chat / response / message / image
-                    </span>
-                    {/* 表头作用于它覆盖的那一片范围: 选中具体凭据时只改该凭据 (清除即摘掉该凭据名下的
-                        全部授权, 模型与凭据本身保留); 选"全部凭据"时才跨全部模型与全部凭据。 */}
+                    <span className="ml-2 text-xs text-muted-foreground">{t('modelGroupColumn')}</span>
+                    <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">chat / response / message / image</span>
                     <GrantCells
-                        state={state} setState={setState}
-                        models={isAllKeys ? state.models : visibleModels}
-                        keyNames={isAllKeys ? keyNames : [selectedKey]}
-                        remove={isAllKeys
-                            ? () => setState({ ...state, models: [], grants: new Map() })
-                            : () => {
-                                const grants = new Map(state.grants);
-                                for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
-                                setState({ ...state, grants });
-                            }}
-                        icon={Eraser}
-                        tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
+                        state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
+                        remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
+                            const grants = new Map(state.grants);
+                            for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
+                            setState({ ...state, grants });
+                        }}
+                        icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
                     />
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
                     {visibleModels.length === 0 ? (
-                        // 渠道本身没有模型, 与"该凭据名下没有已授权模型"是两回事, 提示要分开。
-                        <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                            {state.models.length === 0 ? t('modelNoSelected') : t('modelNoneForKey')}
-                        </p>
+                        <p className="px-3 py-6 text-center text-sm text-muted-foreground">{state.models.length === 0 ? t('modelNoSelected') : t('modelNoneForKey')}</p>
                     ) : visibleModels.map((modelName) => {
                         const isOpen = expanded.has(modelName);
-                        const granted = keyNames.filter(
-                            (keyName) => (state.grants.get(grantKey(modelName, keyName)) ?? 0) !== 0
-                        ).length;
+                        const granted = keyNames.filter((keyName) => (state.grants.get(grantKey(modelName, keyName)) ?? 0) !== 0).length;
+                        const mark = Object.entries(probeMarks).find(([key]) => key.startsWith(`${modelName}\0`))?.[1];
                         return (
                             <div key={modelName} className="border-b border-border last:border-0">
                                 <div className="flex items-center gap-1 px-3 py-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setExpanded((prev) => {
-                                            const next = new Set(prev);
-                                            if (!next.delete(modelName)) next.add(modelName);
-                                            return next;
-                                        })}
-                                        className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-                                    >
+                                    <Checkbox checked={selectedModels.has(modelName)} onCheckedChange={(checked) => setSelectedModels((previous) => {
+                                        const next = new Set(previous);
+                                        if (checked) next.add(modelName); else next.delete(modelName);
+                                        return next;
+                                    })} aria-label={t('modelSelect', { model: modelName })} />
+                                    <button type="button" onClick={() => setExpanded((previous) => {
+                                        const next = new Set(previous);
+                                        if (!next.delete(modelName)) next.add(modelName);
+                                        return next;
+                                    })} className="flex items-center gap-1.5 min-w-0 flex-1 text-left">
                                         <ChevronRight className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? 'rotate-90' : ''}`} />
                                         <span className="text-sm truncate">{modelName}</span>
-                                        {/* 按凭据过滤时, 列表里的每个模型都已是该凭据授权的, 再标"几个凭据有它"没有意义;
-                                            只在"全部凭据"视图里给出这个计数, 那里的勾选框本就跨凭据, 两者才对应得上。 */}
-                                        {isAllKeys && (
-                                            <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                                                {granted}/{keyNames.length}
-                                            </span>
-                                        )}
+                                        {isAllKeys && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{granted}/{keyNames.length}</span>}
                                     </button>
-                                    <GrantCells
-                                        state={state} setState={setState}
-                                        models={[modelName]}
-                                        keyNames={isAllKeys ? keyNames : [selectedKey]}
-                                        remove={isAllKeys
-                                            ? () => removeModel(modelName)
-                                            : () => removeGrant(modelName, selectedKey)}
-                                        icon={Trash2}
-                                        tip={isAllKeys ? t('modelRemove') : t('grantRemove')}
-                                    />
+                                    <select value={targetGroupValue(modelName)} onChange={(event) => setManualGroups((previous) => ({ ...previous, [modelName]: Number(event.target.value) }))} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 w-32 shrink-0 rounded-lg border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring">
+                                        <option value="">{t('modelGroupUnmatched')}</option>
+                                        {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
+                                        <option value="0">{t('modelGroupNone')}</option>
+                                    </select>
+                                    <IconButton
+                                        onClick={() => handleProbe([modelName])}
+                                        disabled={!channelId || probingModels.has(modelName)}
+                                        className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`}
+                                        tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}
+                                    >
+                                        {probingModels.has(modelName) ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
+                                    </IconButton>
+                                    <GrantCells state={state} setState={setState} models={[modelName]} keyNames={isAllKeys ? keyNames : [selectedKey]} remove={isAllKeys ? () => removeModel(modelName) : () => removeGrant(modelName, selectedKey)} icon={Trash2} tip={isAllKeys ? t('modelRemove') : t('grantRemove')} />
                                 </div>
-
-                                {/* 未授权的凭据也要列出, 否则没有入口给它打勾; 压暗以区分于已授权的凭据。 */}
                                 {isOpen && state.keys.map((channelKey) => {
                                     const protocols = state.grants.get(grantKey(modelName, channelKey.name)) ?? 0;
                                     return (
-                                        <div
-                                            key={channelKey.name}
-                                            className={`flex items-center gap-1 pl-9 pr-3 py-1.5 bg-muted/20 ${protocols === 0 ? 'opacity-45' : ''}`}
-                                        >
+                                        <div key={channelKey.name} className={`flex items-center gap-1 pl-14 pr-3 py-1.5 bg-muted/20 ${protocols === 0 ? 'opacity-45' : ''}`}>
                                             <span className="flex-1 text-xs text-muted-foreground truncate">{channelKey.name}</span>
-                                            <GrantCells
-                                                state={state} setState={setState}
-                                                models={[modelName]} keyNames={[channelKey.name]}
-                                                remove={protocols !== 0 ? () => removeGrant(modelName, channelKey.name) : undefined}
-                                                icon={Trash2}
-                                                tip={t('grantRemove')}
-                                            />
+                                            <GrantCells state={state} setState={setState} models={[modelName]} keyNames={[channelKey.name]} remove={protocols !== 0 ? () => removeGrant(modelName, channelKey.name) : undefined} icon={Trash2} tip={t('grantRemove')} />
                                         </div>
                                     );
                                 })}
@@ -292,6 +311,19 @@ export function FormGrants({ state, setState }: {
                     })}
                 </div>
             </div>
+
+            {addDialogOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/35 p-4" onClick={() => setAddDialogOpen(false)}>
+                    <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-4 shadow-2xl" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+                        <h3 className="text-sm font-semibold">{t('modelAddTitle')}</h3>
+                        <Input autoFocus value={newModelName} onChange={(event) => setNewModelName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addModel(); } }} placeholder={t('modelCustomPlaceholder')} className="mt-3 rounded-xl" />
+                        <div className="mt-4 flex gap-2">
+                            <Button type="button" variant="secondary" onClick={() => setAddDialogOpen(false)} className="flex-1 rounded-xl">{t('cancel')}</Button>
+                            <Button type="button" onClick={addModel} disabled={!newModelName.trim() || state.models.includes(newModelName.trim())} className="flex-1 rounded-xl">{t('modelAddConfirm')}</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
