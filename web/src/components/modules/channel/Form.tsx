@@ -115,7 +115,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     // keys 与 grants 的首行是 36px 控件行, 文案居中后天然齐平, 无需补白。步骤区自带 4px 内边距供焦点环显示。
     // calc 一项夹住矮屏, 弹窗不提供滚动, 内容超出视口时底部按钮会点不到。详情视图取同一高度以对齐尺寸。
     return (
-        <form onSubmit={submit} className="flex flex-col md:flex-row gap-6 h-[min(29rem,calc(100vh-10rem))]">
+        <form onSubmit={submit} className="flex flex-col gap-3 md:flex-row md:gap-6 h-[min(29rem,calc(100dvh-7rem))] md:h-[min(29rem,calc(100vh-10rem))]">
             <nav className="md:w-28 shrink-0 flex md:flex-col gap-1 overflow-x-auto pt-1">
                 {steps.map((s) => (
                     <button

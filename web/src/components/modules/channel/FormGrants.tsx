@@ -191,6 +191,25 @@ export function FormGrants({ state, setState, channelId }: {
         });
     };
 
+    const toggleModelSelection = (modelName: string, checked: boolean) => {
+        setSelectedModels((previous) => {
+            const next = new Set(previous);
+            if (checked) next.add(modelName); else next.delete(modelName);
+            return next;
+        });
+        setSelectionOverrides((previous) => {
+            const next = new Set(previous);
+            if (checked) next.delete(modelName); else next.add(modelName);
+            return next;
+        });
+    };
+
+    const changeModelGroup = (modelName: string, value: string) => {
+        const groupID = value === '' ? null : Number(value);
+        setManualGroups((previous) => ({ ...previous, [modelName]: groupID }));
+        toggleModelSelection(modelName, groupID !== null && groupID > 0);
+    };
+
     const handleAssign = () => {
         if (!channelId || selectedVisibleModels.length === 0) return;
         assignModels.mutate({
@@ -239,7 +258,7 @@ export function FormGrants({ state, setState, channelId }: {
 
     return (
         <div className="relative flex flex-col gap-3 h-full min-h-0">
-            <div className="flex items-center gap-2 overflow-x-auto shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="h-8 w-28 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
                     <option value={ALL_KEYS}>{t('grantAllKeys')}</option>
                     {state.keys.map((key) => <option key={key.name} value={key.name}>{key.name}</option>)}
@@ -248,28 +267,30 @@ export function FormGrants({ state, setState, channelId }: {
                     value={searchTerm}
                     onChange={(event) => setSearchTerm(event.target.value)}
                     placeholder={t('modelSearchPlaceholder')}
-                    className="h-8 min-w-24 flex-1 rounded-lg px-2 text-xs"
+                    className="h-8 min-w-0 flex-1 basis-32 rounded-lg px-2 text-xs"
                 />
-                <IconButton onClick={() => setAddDialogOpen(true)} className="size-8 shrink-0" tip={t('modelAdd')}>
-                    <Plus className="size-3.5" />
-                </IconButton>
-                <IconButton onClick={() => probe(state, setState, activeKey)} disabled={pendingKey !== null || !state.base_url.trim()} className="size-8 shrink-0" tip={t('modelRefresh')}>
-                    <RefreshCw className={`size-3.5 ${pendingKey !== null ? 'animate-spin' : ''}`} />
-                </IconButton>
-                <span className="mx-1 h-5 w-px shrink-0 bg-border" />
-                <IconButton onClick={toggleAll} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelSelectAll')}><CheckCheck className="size-3.5" /></IconButton>
-                <IconButton onClick={invertSelection} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelInvertSelection')}><ArrowDownUp className="size-3.5" /></IconButton>
-                <IconButton onClick={handleAssign} disabled={!channelId || selectedVisibleModels.length === 0 || assignModels.isPending} className="size-8 shrink-0" tip={t('modelAssignSelected')}>
-                    {assignModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
-                </IconButton>
-                <IconButton onClick={() => handleProbe(selectedVisibleModels)} disabled={!channelId || selectedVisibleModels.length === 0 || probeModels.isPending} className="size-8 shrink-0" tip={t('modelProbeSelected')}>
-                    {probeModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
-                </IconButton>
-                <span className="ml-auto shrink-0 px-1 text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
+                <div className="flex w-full items-center gap-1 md:w-auto md:gap-2">
+                    <IconButton onClick={() => setAddDialogOpen(true)} className="size-8 shrink-0" tip={t('modelAdd')}>
+                        <Plus className="size-3.5" />
+                    </IconButton>
+                    <IconButton onClick={() => probe(state, setState, activeKey)} disabled={pendingKey !== null || !state.base_url.trim()} className="size-8 shrink-0" tip={t('modelRefresh')}>
+                        <RefreshCw className={`size-3.5 ${pendingKey !== null ? 'animate-spin' : ''}`} />
+                    </IconButton>
+                    <span className="mx-1 h-5 w-px shrink-0 bg-border" />
+                    <IconButton onClick={toggleAll} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelSelectAll')}><CheckCheck className="size-3.5" /></IconButton>
+                    <IconButton onClick={invertSelection} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelInvertSelection')}><ArrowDownUp className="size-3.5" /></IconButton>
+                    <IconButton onClick={handleAssign} disabled={!channelId || selectedVisibleModels.length === 0 || assignModels.isPending} className="size-8 shrink-0" tip={t('modelAssignSelected')}>
+                        {assignModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
+                    </IconButton>
+                    <IconButton onClick={() => handleProbe(selectedVisibleModels)} disabled={!channelId || selectedVisibleModels.length === 0 || probeModels.isPending} className="size-8 shrink-0" tip={t('modelProbeSelected')}>
+                        {probeModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
+                    </IconButton>
+                    <span className="ml-auto shrink-0 px-1 text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
+                </div>
             </div>
 
             <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-border overflow-hidden">
-                <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
+                <div className="hidden md:flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
                     <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-5" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
                         {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
                     </IconButton>
@@ -285,6 +306,26 @@ export function FormGrants({ state, setState, channelId }: {
                         icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
                     />
                 </div>
+                <div className="flex md:hidden flex-col gap-1 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
+                    <div className="flex items-center gap-1">
+                        <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-6" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
+                            {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
+                        </IconButton>
+                        <span className="text-xs text-muted-foreground">{t('modelGroupColumn')} / {t('modelProbeOne')}</span>
+                        <span className="ml-auto text-xs text-muted-foreground">chat · response · message · image</span>
+                    </div>
+                    <div className="flex items-center justify-end gap-1 pl-1">
+                        <GrantCells
+                            state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
+                            remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
+                                const grants = new Map(state.grants);
+                                for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
+                                setState({ ...state, grants });
+                            }}
+                            icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
+                        />
+                    </div>
+                </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
                     {visibleModels.length === 0 ? (
@@ -295,19 +336,45 @@ export function FormGrants({ state, setState, channelId }: {
                         const mark = Object.entries(probeMarks).find(([key]) => key.startsWith(`${modelName}\0`))?.[1];
                         return (
                             <div key={modelName} className="border-b border-border last:border-0">
-                                <div className="flex items-center gap-1 px-3 py-2">
-                                    <Checkbox checked={selectedModelSet.has(modelName)} onCheckedChange={(checked) => {
-                                        setSelectedModels((previous) => {
+                                <div className="flex md:hidden flex-col gap-2 px-3 py-2">
+                                    <div className="flex items-center gap-1">
+                                        <Checkbox checked={selectedModelSet.has(modelName)} onCheckedChange={(checked) => toggleModelSelection(modelName, checked === true)} aria-label={t('modelSelect', { model: modelName })} />
+                                        <button type="button" onClick={() => setExpanded((previous) => {
                                             const next = new Set(previous);
-                                            if (checked) next.add(modelName); else next.delete(modelName);
+                                            if (!next.delete(modelName)) next.add(modelName);
                                             return next;
-                                        });
-                                        setSelectionOverrides((previous) => {
-                                            const next = new Set(previous);
-                                            if (checked) next.delete(modelName); else next.add(modelName);
-                                            return next;
-                                        });
-                                    }} aria-label={t('modelSelect', { model: modelName })} />
+                                        })} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                                            <ChevronRight className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                                            <span className="truncate text-sm">{modelName}</span>
+                                            {isAllKeys && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{granted}/{keyNames.length}</span>}
+                                        </button>
+                                        <IconButton
+                                            onClick={() => handleProbe([modelName])}
+                                            disabled={!channelId || probingModels.has(modelName)}
+                                            className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`}
+                                            tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}
+                                        >
+                                            {probingModels.has(modelName) ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
+                                        </IconButton>
+                                        <IconButton onClick={isAllKeys ? () => removeModel(modelName) : () => removeGrant(modelName, selectedKey)} className="size-8 shrink-0 hover:text-destructive" tip={isAllKeys ? t('modelRemove') : t('grantRemove')}>
+                                            <Trash2 className="size-3.5" />
+                                        </IconButton>
+                                    </div>
+                                    <div className="flex items-center gap-2 pl-7">
+                                        <span className="shrink-0 text-xs text-muted-foreground">{t('modelGroupColumn')}</span>
+                                        <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
+                                            <option value="">{t('modelGroupUnmatched')}</option>
+                                            {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
+                                            <option value="0">{t('modelGroupNone')}</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1 pl-7">
+                                        <span className="mr-auto text-xs text-muted-foreground">chat · response · message · image</span>
+                                        <GrantCells state={state} setState={setState} models={[modelName]} keyNames={isAllKeys ? keyNames : [selectedKey]} icon={Trash2} tip={t('grantRemove')} />
+                                    </div>
+                                </div>
+                                <div className="hidden md:flex items-center gap-1 px-3 py-2">
+                                    <Checkbox checked={selectedModelSet.has(modelName)} onCheckedChange={(checked) => toggleModelSelection(modelName, checked === true)} aria-label={t('modelSelect', { model: modelName })} />
                                     <button type="button" onClick={() => setExpanded((previous) => {
                                         const next = new Set(previous);
                                         if (!next.delete(modelName)) next.add(modelName);
@@ -317,21 +384,7 @@ export function FormGrants({ state, setState, channelId }: {
                                         <span className="text-sm truncate">{modelName}</span>
                                         {isAllKeys && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{granted}/{keyNames.length}</span>}
                                     </button>
-                                    <select value={targetGroupValue(modelName)} onChange={(event) => {
-                                        const value = event.target.value;
-                                        const groupID = value === '' ? null : Number(value);
-                                        setManualGroups((previous) => ({ ...previous, [modelName]: groupID }));
-                                        setSelectedModels((previous) => {
-                                            const next = new Set(previous);
-                                            if (groupID && groupID > 0) next.add(modelName); else next.delete(modelName);
-                                            return next;
-                                        });
-                                        setSelectionOverrides((previous) => {
-                                            const next = new Set(previous);
-                                            if (groupID && groupID > 0) next.delete(modelName); else next.add(modelName);
-                                            return next;
-                                        });
-                                    }} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 w-32 shrink-0 rounded-lg border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring">
+                                    <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 w-32 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
                                         <option value="">{t('modelGroupUnmatched')}</option>
                                         {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
                                         <option value="0">{t('modelGroupNone')}</option>
@@ -349,7 +402,7 @@ export function FormGrants({ state, setState, channelId }: {
                                 {isOpen && state.keys.map((channelKey) => {
                                     const protocols = state.grants.get(grantKey(modelName, channelKey.name)) ?? 0;
                                     return (
-                                        <div key={channelKey.name} className={`flex items-center gap-1 pl-14 pr-3 py-1.5 bg-muted/20 ${protocols === 0 ? 'opacity-45' : ''}`}>
+                                        <div key={channelKey.name} className={`flex items-center gap-1 pl-10 pr-3 py-1.5 bg-muted/20 md:pl-14 ${protocols === 0 ? 'opacity-45' : ''}`}>
                                             <span className="flex-1 text-xs text-muted-foreground truncate">{channelKey.name}</span>
                                             <GrantCells state={state} setState={setState} models={[modelName]} keyNames={[channelKey.name]} remove={protocols !== 0 ? () => removeGrant(modelName, channelKey.name) : undefined} icon={Trash2} tip={t('grantRemove')} />
                                         </div>

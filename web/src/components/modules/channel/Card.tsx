@@ -120,7 +120,7 @@ export function Card({ channel }: { channel: ChannelStatsFormatted }) {
             <MorphingDialogContainer>
                 <MorphingDialogContent
                     dismissOnClickOutside={!openInEditing}
-                    className="relative w-full md:max-w-3xl h-fit bg-card text-card-foreground p-4 rounded-3xl overflow-hidden"
+                    className="relative w-full max-w-[calc(100vw-1rem)] md:max-w-3xl max-h-[calc(100dvh-1rem)] bg-card text-card-foreground p-3 md:p-4 rounded-2xl md:rounded-3xl overflow-hidden"
                 >
                     {/* 高度固定在外层, 与表单自带的高度取同一值: 切换时两者同高, 弹窗才不会随内容缩放。
                         两个视图绝对定位重叠, 退场与入场同时进行: 串行会在两段动画之间留出谁都不在的空档。
