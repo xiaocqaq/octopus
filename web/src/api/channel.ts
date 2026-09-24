@@ -134,11 +134,13 @@ export type FetchModel = {
 export type ChannelModelGroupAssignment = {
     model_name: string;
     group_id: number;
+    grants?: { model_name: string; key_name: string; protocols: number }[];
 };
 
 export type GroupAssignChannelModelResult = {
     model_name: string;
     group_id: number;
+    group_name?: string;
     grant_count: number;
     skipped: boolean;
     reason?: string;
@@ -155,10 +157,10 @@ export type ChannelModelProbeResult = {
 export function useAssignChannelModels() {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: ({ channelId, assignments }: { channelId: number; assignments: ChannelModelGroupAssignment[] }) =>
+        mutationFn: ({ channelId, keyName = '', assignments }: { channelId: number; keyName?: string; assignments: ChannelModelGroupAssignment[] }) =>
             apiRequest<GroupAssignChannelModelResult[]>('/api/v1/channel/assign-models', {
                 method: 'POST',
-                body: { channel_id: channelId, assignments },
+                body: { channel_id: channelId, key_name: keyName, assignments },
             }),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: groupListQueryOptions.queryKey });

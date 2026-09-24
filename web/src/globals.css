@@ -162,15 +162,6 @@ html.dark,
     -ms-overflow-style: none;
   }
 
-  html.dark .theme-select {
-    color-scheme: dark;
-  }
-
-  .theme-select option {
-    background-color: var(--popover);
-    color: var(--popover-foreground);
-  }
-
   body {
     @apply bg-background text-foreground;
     isolation: isolate;

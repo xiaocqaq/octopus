@@ -132,6 +132,47 @@ func TestGroupAssignChannelModelsSkipsNoTarget(t *testing.T) {
 	}
 }
 
+func TestGroupAssignChannelModelsReportsUnsavedWithoutGrants(t *testing.T) {
+	ctx := setupChannelModelActionsTest(t)
+	channelID, _ := seedChannelModelActionsChannel(t, ctx)
+	group, err := GroupCreate(&model.GroupCreateRequest{Name: "target", Mode: model.GroupModeFailover}, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := GroupAssignChannelModels(&model.GroupAssignChannelModelsRequest{
+		ChannelID:   channelID,
+		Assignments: []model.ChannelModelGroupAssignment{{ModelName: "not-saved", GroupID: group.ID}},
+	}, ctx)
+	if err != nil || len(results) != 1 || !results[0].Skipped || results[0].Reason != "model_not_saved" || results[0].GrantCount != 0 {
+		t.Fatalf("unsaved model must not look successful: results=%+v err=%v", results, err)
+	}
+}
+
+func TestGroupAssignChannelModelsCreatesUnsavedGrantThenAppends(t *testing.T) {
+	ctx := setupChannelModelActionsTest(t)
+	channelID, _ := seedChannelModelActionsChannel(t, ctx)
+	group, err := GroupCreate(&model.GroupCreateRequest{Name: "target", Mode: model.GroupModeFailover}, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := GroupAssignChannelModels(&model.GroupAssignChannelModelsRequest{
+		ChannelID: channelID,
+		KeyName:   "key-a",
+		Assignments: []model.ChannelModelGroupAssignment{{
+			ModelName: "fresh-model",
+			GroupID:   group.ID,
+			Grants:    []model.ChannelGrantConfig{{ModelName: "fresh-model", KeyName: "key-a", Protocols: model.ProtocolOpenAIResponse}},
+		}},
+	}, ctx)
+	if err != nil || len(results) != 1 || results[0].Skipped || results[0].GrantCount != 1 || results[0].GroupName != "target" {
+		t.Fatalf("unsaved grant should be created and appended: results=%+v err=%v", results, err)
+	}
+	got, err := GroupGet(group.ID)
+	if err != nil || len(got.Items) != 1 || got.Items[0].ModelName != "fresh-model" || got.Items[0].KeyName != "key-a" {
+		t.Fatalf("group did not receive the new grant: %+v err=%v", got.Items, err)
+	}
+}
+
 func containsInt(values []int, want int) bool {
 	for _, value := range values {
 		if value == want {

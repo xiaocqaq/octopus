@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowDownUp, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, FolderPlus, HeartPulse, LoaderCircle, Plus, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'use-intl';
@@ -13,28 +14,66 @@ import { grantKey, type ChannelFormState } from './state';
 
 type SelectOption = { value: string; label: string };
 
-function MobileSelect({ value, options, onChange, ariaLabel }: {
+function ThemeSelect({ value, options, onChange, ariaLabel, className }: {
     value: string;
     options: SelectOption[];
     onChange: (value: string) => void;
     ariaLabel: string;
+    className?: string;
 }) {
     const [open, setOpen] = useState(false);
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const [box, setBox] = useState({ top: 0, left: 0, width: 0, maxHeight: 240 });
     const selected = options.find((option) => option.value === value) ?? options[0];
+
+    const place = () => {
+        const rect = buttonRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const maxHeight = Math.min(240, Math.max(120, spaceBelow > 160 ? spaceBelow - 12 : rect.top - 12));
+        const top = spaceBelow > 160 ? rect.bottom + 4 : Math.max(8, rect.top - maxHeight - 4);
+        setBox({ top, left: rect.left, width: Math.max(rect.width, 176), maxHeight });
+    };
+
+    useEffect(() => {
+        if (!open) return;
+        place();
+        const onPointer = (event: MouseEvent) => {
+            const target = event.target as Node;
+            if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+            setOpen(false);
+        };
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', onPointer);
+        document.addEventListener('keydown', onKey);
+        window.addEventListener('resize', place);
+        window.addEventListener('scroll', place, true);
+        return () => {
+            document.removeEventListener('mousedown', onPointer);
+            document.removeEventListener('keydown', onKey);
+            window.removeEventListener('resize', place);
+            window.removeEventListener('scroll', place, true);
+        };
+    }, [open]);
+
     return (
-        <div className="relative min-w-0 flex-1">
-            <button type="button" role="combobox" aria-label={ariaLabel} aria-expanded={open} onClick={() => setOpen((previous) => !previous)} className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-input bg-card px-2 text-left text-xs text-foreground shadow-none">
+        <div className={className}>
+            <button ref={buttonRef} type="button" role="combobox" aria-label={ariaLabel} aria-expanded={open} onClick={() => setOpen((previous) => !previous)} className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-border bg-card px-2 text-left text-xs text-card-foreground">
                 <span className="min-w-0 truncate">{selected?.label}</span>
                 <ChevronDown className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
             </button>
-            {open && (
-                <div role="listbox" aria-label={ariaLabel} className="absolute inset-x-0 top-[calc(100%+0.25rem)] z-50 max-h-52 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+            {open && createPortal(
+                <div ref={menuRef} role="listbox" aria-label={ariaLabel} style={{ top: box.top, left: box.left, width: box.width, maxHeight: box.maxHeight }} className="fixed z-[80] overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
                     {options.map((option) => (
-                        <button key={option.value} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }} className={`flex min-h-8 w-full items-center rounded-md px-2 text-left text-xs text-popover-foreground ${option.value === value ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`}>
+                        <button key={`${option.value}:${option.label}`} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }} className={`flex min-h-8 w-full items-center rounded-md px-2 text-left text-xs ${option.value === value ? 'bg-accent text-accent-foreground' : 'text-popover-foreground hover:bg-muted hover:text-foreground'}`}>
                             <span className="min-w-0 truncate">{option.label}</span>
                         </button>
                     ))}
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );
@@ -136,19 +175,20 @@ export function FormGrants({ state, setState, channelId }: {
         return term ? source.filter((name) => name.toLowerCase().includes(term)) : source;
     }, [isAllKeys, searchTerm, selectedKey, state.grants, state.models]);
     const allExpanded = visibleModels.length > 0 && visibleModels.every((m) => expanded.has(m));
-    const defaultGroups = useMemo(() => new Map(groups.map((group) => [group.name, group.id])), [groups]);
+    const defaultGroups = useMemo(() => new Map(groups.map((group) => [group.name.toLowerCase(), group.id])), [groups]);
+    const defaultGroupID = (modelName: string) => defaultGroups.get(modelName.toLowerCase()) ?? 0;
     const targetGroupID = (modelName: string) => Object.prototype.hasOwnProperty.call(manualGroups, modelName)
         ? manualGroups[modelName] ?? 0
-        : defaultGroups.get(modelName) ?? 0;
+        : defaultGroupID(modelName);
     const targetGroupValue = (modelName: string) => Object.prototype.hasOwnProperty.call(manualGroups, modelName)
         ? manualGroups[modelName] === null ? '' : String(manualGroups[modelName])
-        : defaultGroups.has(modelName) ? String(defaultGroups.get(modelName)) : '';
+        : defaultGroups.has(modelName.toLowerCase()) ? String(defaultGroupID(modelName)) : '';
     const selectedModelSet = useMemo(() => {
         const next = new Set(selectedModels);
         for (const modelName of state.models) {
             const targetID = Object.prototype.hasOwnProperty.call(manualGroups, modelName)
                 ? manualGroups[modelName] ?? 0
-                : defaultGroups.get(modelName) ?? 0;
+                : defaultGroups.get(modelName.toLowerCase()) ?? 0;
             if (!selectionOverrides.has(modelName) && targetID > 0) next.add(modelName);
         }
         return next;
@@ -239,18 +279,49 @@ export function FormGrants({ state, setState, channelId }: {
         toggleModelSelection(modelName, groupID !== null && groupID > 0);
     };
 
+    const assignReason = (reason?: string) => {
+        switch (reason) {
+            case 'model_not_saved': return t('modelAssignReasonUnsaved');
+            case 'no_available_grants': return t('modelAssignReasonUnavailable');
+            case 'no_target_group': return t('modelAssignReasonNoGroup');
+            case 'group_not_found': return t('modelAssignReasonMissingGroup');
+            case 'already_in_group': return t('modelAssignReasonAlready');
+            default: return reason || t('modelAssignFailed');
+        }
+    };
+
     const handleAssign = () => {
         if (!channelId || selectedVisibleModels.length === 0) return;
+        const missingGroup = selectedVisibleModels.filter((modelName) => targetGroupID(modelName) <= 0);
+        if (missingGroup.length === selectedVisibleModels.length) {
+            toast.error(t('modelAssignNeedGroup'));
+            return;
+        }
+        const keyNamesForAssign = isAllKeys ? keyNames : [selectedKey];
         assignModels.mutate({
             channelId,
-            assignments: selectedVisibleModels.map((modelName) => ({ model_name: modelName, group_id: targetGroupID(modelName) })),
+            keyName: isAllKeys ? '' : selectedKey,
+            assignments: selectedVisibleModels.map((modelName) => ({
+                model_name: modelName,
+                group_id: targetGroupID(modelName),
+                grants: keyNamesForAssign
+                    .map((keyName) => ({ model_name: modelName, key_name: keyName, protocols: state.grants.get(grantKey(modelName, keyName)) ?? 0 }))
+                    .filter((grant) => grant.protocols !== 0),
+            })),
         }, {
             onSuccess: (results) => {
-                const assigned = results.filter((result) => !result.skipped && result.grant_count > 0).length;
-                const skipped = results.filter((result) => result.skipped || result.grant_count === 0).length;
-                toast.success(t('modelAssignDone', { assigned, skipped }));
+                const assigned = results.filter((result) => !result.skipped && result.grant_count > 0);
+                const skipped = results.filter((result) => result.skipped || result.grant_count === 0);
+                const groups = [...new Set(assigned.map((result) => result.group_name || String(result.group_id)))];
+                const reasons = [...new Set(skipped.map((result) => assignReason(result.reason)))].join('；');
+                if (assigned.length === 0) {
+                    toast.error(t('modelAssignNone', { reason: reasons || t('modelAssignFailed') }));
+                    return;
+                }
+                if (skipped.length > 0) toast.warning(t('modelAssignPartial', { assigned: assigned.length, skipped: skipped.length, groups: groups.join('、'), reason: reasons }));
+                else toast.success(t('modelAssignDone', { assigned: assigned.length, groups: groups.join('、') }));
                 setSelectedModels(new Set());
-                setSelectionOverrides((previous) => new Set([...previous, ...selectedVisibleModels]));
+                setSelectionOverrides((previous) => new Set([...previous, ...assigned.map((result) => result.model_name)]));
             },
             onError: (error) => toast.error(t('modelAssignFailed'), { description: error.message }),
         });
@@ -288,18 +359,13 @@ export function FormGrants({ state, setState, channelId }: {
     return (
         <div className="relative flex flex-col gap-3 h-full min-h-0">
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <div className="md:hidden flex min-w-0 flex-1">
-                    <MobileSelect
-                        value={selectedKey}
-                        onChange={setSelectedKey}
-                        ariaLabel={t('grantAllKeys')}
-                        options={[{ value: ALL_KEYS, label: t('grantAllKeys') }, ...state.keys.map((key) => ({ value: key.name, label: key.name }))]}
-                    />
-                </div>
-                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="theme-select hidden h-8 w-28 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0 md:block">
-                    <option value={ALL_KEYS}>{t('grantAllKeys')}</option>
-                    {state.keys.map((key) => <option key={key.name} value={key.name}>{key.name}</option>)}
-                </select>
+                <ThemeSelect
+                    className="min-w-0 flex-1 md:w-36 md:flex-none"
+                    value={selectedKey}
+                    onChange={setSelectedKey}
+                    ariaLabel={t('grantAllKeys')}
+                    options={[{ value: ALL_KEYS, label: t('grantAllKeys') }, ...state.keys.map((key) => ({ value: key.name, label: key.name }))]}
+                />
                 <Input
                     value={searchTerm}
                     onChange={(event) => setSearchTerm(event.target.value)}
@@ -405,11 +471,7 @@ export function FormGrants({ state, setState, channelId }: {
                                     </div>
                                     <div className="flex items-center gap-2 pl-7">
                                         <span className="shrink-0 text-xs font-medium">{t('modelGroupColumn')}</span>
-                                        <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="theme-select h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
-                                            <option value="">{t('modelGroupUnmatched')}</option>
-                                            {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
-                                            <option value="0">{t('modelGroupNone')}</option>
-                                        </select>
+                                        <ThemeSelect className="min-w-0 flex-1" value={targetGroupValue(modelName)} onChange={(value) => changeModelGroup(modelName, value)} ariaLabel={t('modelGroupFor', { model: modelName })} options={[{ value: '', label: t('modelGroupUnmatched') }, ...groups.map((group) => ({ value: String(group.id), label: group.name })), { value: '0', label: t('modelGroupNone') }]} />
                                     </div>
                                     {isOpen && (
                                         <div className="ml-7 rounded-lg border border-border/70 bg-muted/20 p-2">
@@ -441,11 +503,7 @@ export function FormGrants({ state, setState, channelId }: {
                                         <span className="text-sm truncate">{modelName}</span>
                                         {isAllKeys && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{granted}/{keyNames.length}</span>}
                                     </button>
-                                    <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="theme-select h-8 w-32 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
-                                        <option value="">{t('modelGroupUnmatched')}</option>
-                                        {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
-                                        <option value="0">{t('modelGroupNone')}</option>
-                                    </select>
+                                    <ThemeSelect className="w-40 shrink-0" value={targetGroupValue(modelName)} onChange={(value) => changeModelGroup(modelName, value)} ariaLabel={t('modelGroupFor', { model: modelName })} options={[{ value: '', label: t('modelGroupUnmatched') }, ...groups.map((group) => ({ value: String(group.id), label: group.name })), { value: '0', label: t('modelGroupNone') }]} />
                                     <IconButton onClick={() => handleProbe([modelName])} disabled={!channelId || probingModels.has(modelName)} className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`} tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}>
                                         {probingModels.has(modelName) ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
                                     </IconButton>
