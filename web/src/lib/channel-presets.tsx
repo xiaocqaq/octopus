@@ -62,15 +62,15 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
     {
         id: 'volcengine', label: '火山方舟', Icon: VolcengineIcon,
         dialect: 'generic',
-        base_url: 'https://ark.cn-beijing.volces.com/api/v3',
-        openai_chat_completion_path: '/chat/completions', openai_response_path: '/responses', anthropic_message_path: '/messages',
+        base_url: 'https://ark.cn-beijing.volces.com',
+        openai_chat_completion_path: '/api/v3/chat/completions', openai_response_path: '/api/v3/responses', anthropic_message_path: '/api/compatible/v1/messages',
         openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
     },
     {
         id: 'deepseek', label: 'DeepSeek', Icon: DeepSeekIcon,
         dialect: 'generic',
         base_url: 'https://api.deepseek.com',
-        openai_chat_completion_path: CHAT, openai_response_path: RESP, anthropic_message_path: ANTH,
+        openai_chat_completion_path: '/chat/completions', openai_response_path: '/responses', anthropic_message_path: '/anthropic/v1/messages',
     },
     {
         id: 'openrouter', label: 'OpenRouter', Icon: OpenRouterIcon, iconClassName: 'brightness-0 dark:invert',
@@ -87,20 +87,20 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
     {
         id: 'dashscope', label: '通义千问', Icon: QwenIcon, iconClassName: 'brightness-0 dark:invert',
         dialect: 'generic',
-        base_url: 'https://dashscope.aliyuncs.com/compatible-mode',
-        openai_chat_completion_path: CHAT, openai_response_path: RESP, anthropic_message_path: ANTH,
+        base_url: 'https://dashscope.aliyuncs.com',
+        openai_chat_completion_path: '/compatible-mode/v1/chat/completions', openai_response_path: '/compatible-mode/v1/responses', anthropic_message_path: '/apps/anthropic/v1/messages',
     },
     {
         id: 'moonshot', label: 'Moonshot', Icon: MoonshotIcon, iconClassName: 'brightness-0 dark:invert',
         dialect: 'generic',
         base_url: 'https://api.moonshot.cn',
-        openai_chat_completion_path: CHAT, openai_response_path: RESP, anthropic_message_path: ANTH,
+        openai_chat_completion_path: CHAT, openai_response_path: RESP, anthropic_message_path: '/anthropic/v1/messages',
     },
     {
         id: 'zhipu', label: '智谱 GLM', Icon: ZhipuIcon,
         dialect: 'generic',
-        base_url: 'https://open.bigmodel.cn/api/paas/v4',
-        openai_chat_completion_path: '/chat/completions', openai_response_path: '/responses', anthropic_message_path: '/messages',
+        base_url: 'https://open.bigmodel.cn',
+        openai_chat_completion_path: '/api/paas/v4/chat/completions', openai_response_path: '/api/v1/responses', anthropic_message_path: '/api/anthropic/v1/messages',
         openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
     },
     {
@@ -119,6 +119,6 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         id: 'azure', label: 'Azure OpenAI', Icon: AzureIcon,
         dialect: 'generic',
         base_url: '',
-        openai_chat_completion_path: CHAT, openai_response_path: RESP, anthropic_message_path: ANTH,
+        openai_chat_completion_path: '/openai/v1/chat/completions', openai_response_path: '/openai/v1/responses', anthropic_message_path: ANTH,
     },
 ];
