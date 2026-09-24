@@ -239,8 +239,8 @@ export function FormGrants({ state, setState, channelId }: {
 
     return (
         <div className="relative flex flex-col gap-3 h-full min-h-0">
-            <div className="flex items-center gap-1 overflow-x-auto shrink-0">
-                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="h-8 w-28 shrink-0 rounded-lg border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring">
+            <div className="flex items-center gap-2 overflow-x-auto shrink-0">
+                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="h-8 w-28 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
                     <option value={ALL_KEYS}>{t('grantAllKeys')}</option>
                     {state.keys.map((key) => <option key={key.name} value={key.name}>{key.name}</option>)}
                 </select>
