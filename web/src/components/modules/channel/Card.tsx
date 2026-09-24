@@ -126,7 +126,7 @@ export function Card({ channel }: { channel: ChannelStatsFormatted }) {
                         两个视图绝对定位重叠, 退场与入场同时进行: 串行会在两段动画之间留出谁都不在的空档。
                         重叠期间旧视图 pointer-events-none, 否则正在淡出的那份还能挡住点击。
                         位移方向表达前进与后退: 进编辑时表单自右侧推入, 返回统计时反向。 */}
-                    <MorphingDialogDescription className="relative h-[min(29rem,calc(100vh-10rem))]">
+                    <MorphingDialogDescription className="relative h-[min(29rem,calc(100dvh-5rem))]">
                         <AnimatePresence initial={false}>
                             {openInEditing ? (
                                 <motion.div

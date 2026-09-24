@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useTranslations } from 'use-intl';
 import {
     type ChannelDetail,
@@ -59,23 +60,63 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     const updateChannel = useUpdateChannel();
     const [state, setState] = useState<ChannelFormState>(channel ? fromChannel(channel) : emptyFormState);
     const [step, setStep] = useState<StepID>(channel ? 'connection' : 'preset');
+    const [channelId, setChannelId] = useState(channel?.id);
+    const stateRef = useRef(state);
+    const idRef = useRef(channel?.id);
+    const dirtyRef = useRef(false);
+    const persistChain = useRef(Promise.resolve());
+    const saveRef = useRef<() => Promise<number | undefined>>(async () => undefined);
     const isPending = createChannel.isPending || updateChannel.isPending;
     // 新建与编辑弹窗可同时存在, 控件 id 需按渠道隔离。
     const idPrefix = channel ? `channel-${channel.id}` : 'new-channel';
 
-    // 后端会拒的四项在此先挡: 名称与地址非空, 路径以 / 开头, 至少一份填了 Key 的凭据, 至少一个模型。
-    const canSubmit = state.name.trim() !== ''
-        && state.base_url.trim() !== ''
+    // 凭据一旦填完就落库，不要求先有模型，也不必再点底部保存。底部保存只负责收尾关闭。
+    const persistable = (next: ChannelFormState) => next.name.trim() !== ''
+        && next.base_url.trim() !== ''
         && [
-            state.openai_chat_completion_path,
-            state.openai_response_path,
-            state.anthropic_message_path,
-            state.openai_image_generation_path,
-            state.openai_image_edit_path,
+            next.openai_chat_completion_path,
+            next.openai_response_path,
+            next.anthropic_message_path,
+            next.openai_image_generation_path,
+            next.openai_image_edit_path,
         ].every((path) => path === '' || path.startsWith('/'))
-        && state.keys.length > 0
-        && state.keys.every((k) => k.key.trim() !== '')
-        && state.models.length > 0;
+        && next.keys.some((key) => key.name.trim() !== '' && key.key.trim() !== '');
+
+    const ensureSaved = () => {
+        const run = persistChain.current.then(async () => {
+            const next = stateRef.current;
+            if (!persistable(next)) return idRef.current;
+            const id = idRef.current ?? 0;
+            const saved = id
+                ? await updateChannel.mutateAsync(toChannelDetail(next, id))
+                : await createChannel.mutateAsync(toChannelDetail(next, 0));
+            idRef.current = saved.id;
+            setChannelId(saved.id);
+            dirtyRef.current = false;
+            return saved.id;
+        }).catch((error: unknown) => {
+            toast.error(t('saveFailed'), { description: error instanceof Error ? error.message : undefined });
+            throw error;
+        });
+        persistChain.current = run.then(() => undefined, () => undefined);
+        return run;
+    };
+
+    const updateState = (next: ChannelFormState) => {
+        dirtyRef.current = true;
+        setState(next);
+    };
+
+    useEffect(() => {
+        stateRef.current = state;
+        saveRef.current = ensureSaved;
+    });
+
+    useEffect(() => {
+        if (!dirtyRef.current || !persistable(state)) return;
+        const timer = window.setTimeout(() => { void saveRef.current().catch(() => undefined); }, 400);
+        return () => window.clearTimeout(timer);
+    }, [state]);
 
     const steps: { id: StepID; label: string }[] = [
         ...(channel ? [] : [{ id: 'preset' as StepID, label: t('stepPreset') }]),
@@ -86,7 +127,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     ];
 
     const applyPreset = (preset: ChannelPreset) => {
-        setState({
+        updateState({
             ...state,
             name: state.name || preset.label,
             dialect: preset.dialect,
@@ -103,10 +144,8 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     // 新建与编辑都一趟完成且都提交整份配置: 授权按名称引用, 与凭据和模型在同一次请求里原子生效。
     const submit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        if (!canSubmit) return;
-        const detail = toChannelDetail(state, channel?.id ?? 0);
-        const mutation = channel ? updateChannel : createChannel;
-        mutation.mutate(detail, { onSuccess: () => setIsOpen(false) });
+        if (!persistable(state)) return;
+        void ensureSaved().then(() => setIsOpen(false)).catch(() => undefined);
     };
 
     // 表单高度固定, 否则切换步骤时弹窗会随内容高度跳动; 内容更高的步骤由步骤区内部滚动消化。
@@ -115,7 +154,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     // keys 与 grants 的首行是 36px 控件行, 文案居中后天然齐平, 无需补白。步骤区自带 4px 内边距供焦点环显示。
     // calc 一项夹住矮屏, 弹窗不提供滚动, 内容超出视口时底部按钮会点不到。详情视图取同一高度以对齐尺寸。
     return (
-        <form onSubmit={submit} className="flex flex-col gap-3 md:flex-row md:gap-6 h-[min(29rem,calc(100dvh-7rem))] md:h-[min(29rem,calc(100vh-10rem))]">
+        <form onSubmit={submit} className="flex flex-col gap-3 md:flex-row md:gap-6 h-[min(29rem,calc(100dvh-5rem))]">
             <nav className="md:w-28 shrink-0 flex md:flex-col gap-1 overflow-x-auto pt-1">
                 {steps.map((s) => (
                     <button
@@ -136,7 +175,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                         className="md:mt-auto flex items-center gap-1.5 rounded-xl px-3 py-2 text-left text-sm whitespace-nowrap text-muted-foreground transition-colors hover:bg-muted/50"
                     >
                         <ChevronLeft className="size-4 shrink-0" />
-                        {t('backToStats')}
+                        <span className="hidden md:inline">{t('backToStats')}</span>
                     </button>
                 )}
             </nav>
@@ -166,7 +205,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 <Input
                                     id={`${idPrefix}-name`}
                                     value={state.name}
-                                    onChange={(e) => setState({ ...state, name: e.target.value })}
+                                    onChange={(e) => updateState({ ...state, name: e.target.value })}
                                     className="rounded-xl"
                                     required
                                 />
@@ -177,7 +216,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                     id={`${idPrefix}-base-url`}
                                     type="url"
                                     value={state.base_url}
-                                    onChange={(e) => setState({ ...state, base_url: e.target.value })}
+                                    onChange={(e) => updateState({ ...state, base_url: e.target.value })}
                                     className="rounded-xl"
                                     required
                                 />
@@ -194,7 +233,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                     <Input
                                         id={`${idPrefix}-${field}`}
                                         value={state[field]}
-                                        onChange={(e) => setState({ ...state, [field]: e.target.value })}
+                                        onChange={(e) => updateState({ ...state, [field]: e.target.value })}
                                         aria-invalid={state[field] !== '' && !state[field].startsWith('/')}
                                         className="rounded-xl font-mono text-sm"
                                     />
@@ -205,7 +244,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                     <label key={field} className="flex items-center gap-2 cursor-pointer">
                                         <Switch
                                             checked={state[field]}
-                                            onCheckedChange={(checked) => setState({ ...state, [field]: checked })}
+                                            onCheckedChange={(checked) => updateState({ ...state, [field]: checked })}
                                         />
                                         <span className="text-sm">{label}</span>
                                     </label>
@@ -214,8 +253,8 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                         </div>
                     )}
 
-                    {step === 'keys' && <FormKeys state={state} setState={setState} />}
-                    {step === 'grants' && <FormGrants state={state} setState={setState} channelId={channel?.id} />}
+                    {step === 'keys' && <FormKeys state={state} setState={updateState} />}
+                    {step === 'grants' && <FormGrants state={state} setState={updateState} channelId={channelId} ensureSaved={ensureSaved} />}
 
                     {step === 'advanced' && (
                         <div className="space-y-4 pt-2">
@@ -228,7 +267,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                     <Input
                                         id={`${idPrefix}-${field}`}
                                         value={state[field]}
-                                        onChange={(e) => setState({ ...state, [field]: e.target.value })}
+                                        onChange={(e) => updateState({ ...state, [field]: e.target.value })}
                                         className="rounded-xl"
                                     />
                                 </div>
@@ -238,7 +277,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 <textarea
                                     id={`${idPrefix}-param-override`}
                                     value={state.param_override}
-                                    onChange={(e) => setState({ ...state, param_override: e.target.value })}
+                                    onChange={(e) => updateState({ ...state, param_override: e.target.value })}
                                     className="min-h-24 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 />
                             </div>
@@ -247,7 +286,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 <div className="flex items-center justify-between">
                                     <Label>{t('customHeader')}</Label>
                                     <IconButton
-                                        onClick={() => setState({
+                                        onClick={() => updateState({
                                             ...state,
                                             custom_header: [...state.custom_header, { header_key: '', header_value: '' }],
                                         })}
@@ -271,7 +310,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                             <Input
                                                 key={field}
                                                 value={header[field]}
-                                                onChange={(e) => setState({
+                                                onChange={(e) => updateState({
                                                     ...state,
                                                     custom_header: state.custom_header.map((h, i) =>
                                                         i === idx ? { ...h, [field]: e.target.value } : h),
@@ -280,7 +319,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                             />
                                         ))}
                                         <IconButton
-                                            onClick={() => setState({
+                                            onClick={() => updateState({
                                                 ...state,
                                                 custom_header: state.custom_header.filter((_, i) => i !== idx),
                                             })}
@@ -305,7 +344,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                     >
                         {t('cancel')}
                     </Button>
-                    <Button type="submit" disabled={isPending || !canSubmit} className="rounded-xl h-9 px-4">
+                    <Button type="submit" disabled={isPending || !persistable(state)} className="rounded-xl h-9 px-4">
                         {channel ? t('save') : t('submit')}
                     </Button>
                 </div>

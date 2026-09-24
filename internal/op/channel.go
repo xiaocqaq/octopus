@@ -583,6 +583,11 @@ func syncChannelKeys(tx *gorm.DB, channelID int, requested []model.ChannelKeyCon
 		if err := tx.Create(&newKey).Error; err != nil {
 			return fmt.Errorf("failed to create channel key: %w", err)
 		}
+		// gorm default:true 会把零值 false 写成 true，禁用凭据必须再按列写入。
+		if err := tx.Model(&model.ChannelKey{}).Where("id = ?", newKey.ID).
+			Updates(map[string]any{"enabled": requestedKey.Enabled}).Error; err != nil {
+			return fmt.Errorf("failed to set channel key enabled: %w", err)
+		}
 	}
 	deletedKeyIDs := make([]int, 0, len(existingByName))
 	for _, channelKey := range existingByName {

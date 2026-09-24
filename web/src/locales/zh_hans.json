@@ -553,6 +553,7 @@
             "delete": "删除",
             "submit": "创建",
             "save": "保存",
+            "saveFailed": "保存失败",
             "cancel": "取消",
             "backToStats": "返回统计",
             "grantClearAll": "清空全部模型",

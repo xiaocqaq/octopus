@@ -553,6 +553,7 @@
             "delete": "Delete",
             "submit": "Create",
             "save": "Save",
+            "saveFailed": "Save failed",
             "cancel": "Cancel",
             "backToStats": "Back to Stats",
             "grantClearAll": "Clear all models",

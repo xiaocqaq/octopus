@@ -143,10 +143,11 @@ const ALL_KEYS = '__all__';
 type ProbeMark = { ok: boolean; latency_ms: number; message?: string };
 
 // 模型页管理当前渠道的模型、授权矩阵，以及模型分组和测活操作。
-export function FormGrants({ state, setState, channelId }: {
+export function FormGrants({ state, setState, channelId, ensureSaved }: {
     state: ChannelFormState;
     setState: (next: ChannelFormState) => void;
     channelId?: number;
+    ensureSaved?: () => Promise<number | undefined>;
 }) {
     const t = useTranslations('channel.form');
     const { probe, pendingKey } = useModelProbe();
@@ -177,12 +178,28 @@ export function FormGrants({ state, setState, channelId }: {
     const allExpanded = visibleModels.length > 0 && visibleModels.every((m) => expanded.has(m));
     const defaultGroups = useMemo(() => new Map(groups.map((group) => [group.name.toLowerCase(), group.id])), [groups]);
     const defaultGroupID = (modelName: string) => defaultGroups.get(modelName.toLowerCase()) ?? 0;
+    const assignedGroupID = (modelName: string) => {
+        if (!channelId) return 0;
+        const want = modelName.toLowerCase();
+        let fallback = 0;
+        for (const group of groups) {
+            const matched = (group.items ?? []).some((item) => item.channel_id === channelId && item.model_name.toLowerCase() === want);
+            if (!matched) continue;
+            if (group.name.toLowerCase() === want) return group.id;
+            if (!fallback) fallback = group.id;
+        }
+        return fallback;
+    };
     const targetGroupID = (modelName: string) => Object.prototype.hasOwnProperty.call(manualGroups, modelName)
         ? manualGroups[modelName] ?? 0
-        : defaultGroupID(modelName);
-    const targetGroupValue = (modelName: string) => Object.prototype.hasOwnProperty.call(manualGroups, modelName)
-        ? manualGroups[modelName] === null ? '' : String(manualGroups[modelName])
-        : defaultGroups.has(modelName.toLowerCase()) ? String(defaultGroupID(modelName)) : '';
+        : assignedGroupID(modelName) || defaultGroupID(modelName);
+    const targetGroupValue = (modelName: string) => {
+        if (Object.prototype.hasOwnProperty.call(manualGroups, modelName)) {
+            return manualGroups[modelName] === null ? '' : String(manualGroups[modelName]);
+        }
+        const id = assignedGroupID(modelName) || defaultGroupID(modelName);
+        return id > 0 ? String(id) : '';
+    };
     const selectedModelSet = useMemo(() => {
         const next = new Set(selectedModels);
         for (const modelName of state.models) {
@@ -244,17 +261,20 @@ export function FormGrants({ state, setState, channelId }: {
     };
 
     const invertSelection = () => {
+        const shown = new Set(selectedVisibleModels);
         setSelectedModels((previous) => {
             const next = new Set(previous);
             for (const modelName of visibleModels) {
-                if (next.has(modelName)) next.delete(modelName); else next.add(modelName);
+                if (shown.has(modelName)) next.delete(modelName);
+                else next.add(modelName);
             }
             return next;
         });
         setSelectionOverrides((previous) => {
             const next = new Set(previous);
             for (const modelName of visibleModels) {
-                if (selectedModelSet.has(modelName)) next.add(modelName); else next.delete(modelName);
+                if (shown.has(modelName)) next.add(modelName);
+                else next.delete(modelName);
             }
             return next;
         });
@@ -291,65 +311,86 @@ export function FormGrants({ state, setState, channelId }: {
     };
 
     const handleAssign = () => {
-        if (!channelId || selectedVisibleModels.length === 0) return;
+        if (selectedVisibleModels.length === 0) return;
         const missingGroup = selectedVisibleModels.filter((modelName) => targetGroupID(modelName) <= 0);
         if (missingGroup.length === selectedVisibleModels.length) {
             toast.error(t('modelAssignNeedGroup'));
             return;
         }
         const keyNamesForAssign = isAllKeys ? keyNames : [selectedKey];
-        assignModels.mutate({
-            channelId,
-            keyName: isAllKeys ? '' : selectedKey,
-            assignments: selectedVisibleModels.map((modelName) => ({
-                model_name: modelName,
-                group_id: targetGroupID(modelName),
-                grants: keyNamesForAssign
-                    .map((keyName) => ({ model_name: modelName, key_name: keyName, protocols: state.grants.get(grantKey(modelName, keyName)) ?? 0 }))
-                    .filter((grant) => grant.protocols !== 0),
-            })),
-        }, {
-            onSuccess: (results) => {
-                const assigned = results.filter((result) => !result.skipped && result.grant_count > 0);
-                const skipped = results.filter((result) => result.skipped || result.grant_count === 0);
-                const groups = [...new Set(assigned.map((result) => result.group_name || String(result.group_id)))];
-                const reasons = [...new Set(skipped.map((result) => assignReason(result.reason)))].join('；');
-                if (assigned.length === 0) {
-                    toast.error(t('modelAssignNone', { reason: reasons || t('modelAssignFailed') }));
-                    return;
-                }
-                if (skipped.length > 0) toast.warning(t('modelAssignPartial', { assigned: assigned.length, skipped: skipped.length, groups: groups.join('、'), reason: reasons }));
-                else toast.success(t('modelAssignDone', { assigned: assigned.length, groups: groups.join('、') }));
-                setSelectedModels(new Set());
-                setSelectionOverrides((previous) => new Set([...previous, ...assigned.map((result) => result.model_name)]));
-            },
-            onError: (error) => toast.error(t('modelAssignFailed'), { description: error.message }),
-        });
+        void (ensureSaved?.() ?? Promise.resolve(channelId)).then((id) => {
+            if (!id) {
+                toast.error(t('keysRequiredFirst'));
+                return;
+            }
+            assignModels.mutate({
+                channelId: id,
+                keyName: isAllKeys ? '' : selectedKey,
+                assignments: selectedVisibleModels.map((modelName) => ({
+                    model_name: modelName,
+                    group_id: targetGroupID(modelName),
+                    grants: keyNamesForAssign
+                        .map((keyName) => ({ model_name: modelName, key_name: keyName, protocols: state.grants.get(grantKey(modelName, keyName)) ?? 0 }))
+                        .filter((grant) => grant.protocols !== 0),
+                })),
+            }, {
+                onSuccess: (results) => {
+                    const assigned = results.filter((result) => !result.skipped && result.grant_count > 0);
+                    const skipped = results.filter((result) => result.skipped || result.grant_count === 0);
+                    const groupNames = [...new Set(assigned.map((result) => result.group_name || String(result.group_id)))];
+                    const reasons = [...new Set(skipped.map((result) => assignReason(result.reason)))].join('；');
+                    if (assigned.length === 0) {
+                        toast.error(t('modelAssignNone', { reason: reasons || t('modelAssignFailed') }));
+                        return;
+                    }
+                    if (skipped.length > 0) toast.warning(t('modelAssignPartial', { assigned: assigned.length, skipped: skipped.length, groups: groupNames.join('、'), reason: reasons }));
+                    else toast.success(t('modelAssignDone', { assigned: assigned.length, groups: groupNames.join('、') }));
+                    setManualGroups((previous) => {
+                        const next = { ...previous };
+                        for (const result of assigned) next[result.model_name] = result.group_id;
+                        return next;
+                    });
+                    setSelectedModels((previous) => {
+                        const next = new Set(previous);
+                        for (const result of assigned) next.delete(result.model_name);
+                        return next;
+                    });
+                    setSelectionOverrides((previous) => new Set([...previous, ...assigned.map((result) => result.model_name)]));
+                },
+                onError: (error) => toast.error(t('modelAssignFailed'), { description: error.message }),
+            });
+        }).catch(() => undefined);
     };
 
     const handleProbe = (modelNames: string[]) => {
-        if (!channelId || modelNames.length === 0) return;
-        setProbingModels((previous) => new Set([...previous, ...modelNames]));
-        probeModels.mutate({ channelId, modelNames, keyName: isAllKeys ? '' : selectedKey }, {
-            onSuccess: (results) => {
-                setProbeMarks((previous) => {
-                    const next = { ...previous };
-                    for (const result of results) next[`${result.model_name}\0${result.key_name}`] = result;
+        if (modelNames.length === 0) return;
+        void (ensureSaved?.() ?? Promise.resolve(channelId)).then((id) => {
+            if (!id) {
+                toast.error(t('keysRequiredFirst'));
+                return;
+            }
+            setProbingModels((previous) => new Set([...previous, ...modelNames]));
+            probeModels.mutate({ channelId: id, modelNames, keyName: isAllKeys ? '' : selectedKey }, {
+                onSuccess: (results) => {
+                    setProbeMarks((previous) => {
+                        const next = { ...previous };
+                        for (const result of results) next[`${result.model_name}\0${result.key_name}`] = result;
+                        return next;
+                    });
+                    const failed = results.filter((result) => !result.ok).length;
+                    if (results.length > 0) {
+                        if (failed === 0) toast.success(t('modelProbeAllOk', { count: results.length }));
+                        else toast.warning(t('modelProbePartial', { ok: results.length - failed, failed }));
+                    }
+                },
+                onError: (error) => toast.error(t('modelProbeFailed'), { description: error.message }),
+                onSettled: () => setProbingModels((previous) => {
+                    const next = new Set(previous);
+                    for (const modelName of modelNames) next.delete(modelName);
                     return next;
-                });
-                const failed = results.filter((result) => !result.ok).length;
-                if (results.length > 0) {
-                    if (failed === 0) toast.success(t('modelProbeAllOk', { count: results.length }));
-                    else toast.warning(t('modelProbePartial', { ok: results.length - failed, failed }));
-                }
-            },
-            onError: (error) => toast.error(t('modelProbeFailed'), { description: error.message }),
-            onSettled: () => setProbingModels((previous) => {
-                const next = new Set(previous);
-                for (const modelName of modelNames) next.delete(modelName);
-                return next;
-            }),
-        });
+                }),
+            });
+        }).catch(() => undefined);
     };
 
     if (state.keys.length === 0) {
@@ -382,10 +423,10 @@ export function FormGrants({ state, setState, channelId }: {
                     <span className="mx-1 h-5 w-px shrink-0 bg-border" />
                     <IconButton onClick={toggleAll} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelSelectAll')}><CheckCheck className="size-3.5" /></IconButton>
                     <IconButton onClick={invertSelection} disabled={visibleModels.length === 0} className="size-8 shrink-0" tip={t('modelInvertSelection')}><ArrowDownUp className="size-3.5" /></IconButton>
-                    <IconButton onClick={handleAssign} disabled={!channelId || selectedVisibleModels.length === 0 || assignModels.isPending} className="size-8 shrink-0" tip={t('modelAssignSelected')}>
+                    <IconButton onClick={handleAssign} disabled={selectedVisibleModels.length === 0 || assignModels.isPending} className="size-8 shrink-0" tip={t('modelAssignSelected')}>
                         {assignModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
                     </IconButton>
-                    <IconButton onClick={() => handleProbe(selectedVisibleModels)} disabled={!channelId || selectedVisibleModels.length === 0 || probeModels.isPending} className="size-8 shrink-0" tip={t('modelProbeSelected')}>
+                    <IconButton onClick={() => handleProbe(selectedVisibleModels)} disabled={selectedVisibleModels.length === 0 || probeModels.isPending} className="size-8 shrink-0" tip={t('modelProbeSelected')}>
                         {probeModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
                     </IconButton>
                     <span className="ml-auto shrink-0 px-1 text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
@@ -409,30 +450,20 @@ export function FormGrants({ state, setState, channelId }: {
                         icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
                     />
                 </div>
-                <div className="flex md:hidden flex-col gap-2 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
-                    <div className="flex items-center gap-1">
-                        <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-6" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
-                            {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
-                        </IconButton>
-                        <span className="text-xs font-medium">{t('modelGroupColumn')}</span>
-                        <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <span className="w-8 shrink-0 text-[10px] text-muted-foreground">协议</span>
-                        <div className="flex-1 min-w-0 flex items-center justify-end gap-1">
-                            <GrantCells
-                                state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
-                                remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
-                                    const grants = new Map(state.grants);
-                                    for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
-                                    setState({ ...state, grants });
-                                }}
-                                icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
-                            />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-5 pl-10 pr-1 text-[9px] leading-none text-muted-foreground">
-                        <span className="text-center">chat</span><span className="text-center">response</span><span className="text-center">message</span><span className="text-center">image</span><span className="text-center">清除</span>
+                <div className="flex md:hidden items-center gap-1 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
+                    <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-6" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
+                        {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
+                    </IconButton>
+                    <div className="ml-auto flex items-center">
+                        <GrantCells
+                            state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
+                            remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
+                                const grants = new Map(state.grants);
+                                for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
+                                setState({ ...state, grants });
+                            }}
+                            icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
+                        />
                     </div>
                 </div>
 
@@ -459,7 +490,7 @@ export function FormGrants({ state, setState, channelId }: {
                                         </button>
                                         <IconButton
                                             onClick={() => handleProbe([modelName])}
-                                            disabled={!channelId || probingModels.has(modelName)}
+                                            disabled={probingModels.has(modelName)}
                                             className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`}
                                             tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}
                                         >
@@ -469,16 +500,11 @@ export function FormGrants({ state, setState, channelId }: {
                                             <Trash2 className="size-3.5" />
                                         </IconButton>
                                     </div>
-                                    <div className="flex items-center gap-2 pl-7">
-                                        <span className="shrink-0 text-xs font-medium">{t('modelGroupColumn')}</span>
-                                        <ThemeSelect className="min-w-0 flex-1" value={targetGroupValue(modelName)} onChange={(value) => changeModelGroup(modelName, value)} ariaLabel={t('modelGroupFor', { model: modelName })} options={[{ value: '', label: t('modelGroupUnmatched') }, ...groups.map((group) => ({ value: String(group.id), label: group.name })), { value: '0', label: t('modelGroupNone') }]} />
+                                    <div className="pl-7">
+                                        <ThemeSelect className="min-w-0 w-full" value={targetGroupValue(modelName)} onChange={(value) => changeModelGroup(modelName, value)} ariaLabel={t('modelGroupFor', { model: modelName })} options={[{ value: '', label: t('modelGroupUnmatched') }, ...groups.map((group) => ({ value: String(group.id), label: group.name })), { value: '0', label: t('modelGroupNone') }]} />
                                     </div>
                                     {isOpen && (
-                                        <div className="ml-7 rounded-lg border border-border/70 bg-muted/20 p-2">
-                                            <div className="mb-2 grid grid-cols-[minmax(0,1fr)_repeat(5,1.75rem)] items-center gap-1 text-[9px] leading-none text-muted-foreground">
-                                                <span>凭据</span><span className="text-center">chat</span><span className="text-center">response</span><span className="text-center">message</span><span className="text-center">image</span><span className="text-center">清除</span>
-                                            </div>
-                                            <div className="space-y-1">
+                                        <div className="ml-7 space-y-1 rounded-lg border border-border/70 bg-muted/20 p-2">
                                                 {state.keys.map((channelKey) => {
                                                     const protocols = state.grants.get(grantKey(modelName, channelKey.name)) ?? 0;
                                                     return (
@@ -488,7 +514,6 @@ export function FormGrants({ state, setState, channelId }: {
                                                         </div>
                                                     );
                                                 })}
-                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -504,12 +529,14 @@ export function FormGrants({ state, setState, channelId }: {
                                         {isAllKeys && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{granted}/{keyNames.length}</span>}
                                     </button>
                                     <ThemeSelect className="w-40 shrink-0" value={targetGroupValue(modelName)} onChange={(value) => changeModelGroup(modelName, value)} ariaLabel={t('modelGroupFor', { model: modelName })} options={[{ value: '', label: t('modelGroupUnmatched') }, ...groups.map((group) => ({ value: String(group.id), label: group.name })), { value: '0', label: t('modelGroupNone') }]} />
-                                    <IconButton onClick={() => handleProbe([modelName])} disabled={!channelId || probingModels.has(modelName)} className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`} tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}>
+                                    <IconButton onClick={() => handleProbe([modelName])} disabled={probingModels.has(modelName)} className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`} tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}>
                                         {probingModels.has(modelName) ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
                                     </IconButton>
                                     <GrantCells state={state} setState={setState} models={[modelName]} keyNames={isAllKeys ? keyNames : [selectedKey]} remove={isAllKeys ? () => removeModel(modelName) : () => removeGrant(modelName, selectedKey)} icon={Trash2} tip={isAllKeys ? t('modelRemove') : t('grantRemove')} />
                                 </div>
-                                {isOpen && state.keys.map((channelKey) => {
+                                {isOpen && (
+                                    <div className="hidden md:block">
+                                        {state.keys.map((channelKey) => {
                                     const protocols = state.grants.get(grantKey(modelName, channelKey.name)) ?? 0;
                                     return (
                                         <div key={channelKey.name} className={`flex items-center gap-1 pl-10 pr-3 py-1.5 bg-muted/20 md:pl-14 ${protocols === 0 ? 'opacity-45' : ''}`}>
@@ -518,6 +545,8 @@ export function FormGrants({ state, setState, channelId }: {
                                         </div>
                                     );
                                 })}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

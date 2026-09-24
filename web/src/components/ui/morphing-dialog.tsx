@@ -169,6 +169,7 @@ function MorphingDialogContent({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (document.querySelector('[role="listbox"]')) return;
         setIsOpen(false);
       }
       if (event.key === 'Tab') {
