@@ -64,7 +64,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         dialect: 'generic',
         base_url: 'https://ark.cn-beijing.volces.com',
         openai_chat_completion_path: '/api/v3/chat/completions', openai_response_path: '/api/v3/responses', anthropic_message_path: '/api/compatible/v1/messages',
-        openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
+        openai_image_generation_path: '/api/v3/images/generations', openai_image_edit_path: '/api/v3/images/edits',
     },
     {
         id: 'deepseek', label: 'DeepSeek', Icon: DeepSeekIcon,
@@ -89,6 +89,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         dialect: 'generic',
         base_url: 'https://dashscope.aliyuncs.com',
         openai_chat_completion_path: '/compatible-mode/v1/chat/completions', openai_response_path: '/compatible-mode/v1/responses', anthropic_message_path: '/apps/anthropic/v1/messages',
+        openai_image_generation_path: '/compatible-mode/v1/images/generations', openai_image_edit_path: '/compatible-mode/v1/images/edits',
     },
     {
         id: 'moonshot', label: 'Moonshot', Icon: MoonshotIcon, iconClassName: 'brightness-0 dark:invert',
@@ -101,7 +102,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
         dialect: 'generic',
         base_url: 'https://open.bigmodel.cn',
         openai_chat_completion_path: '/api/paas/v4/chat/completions', openai_response_path: '/api/v1/responses', anthropic_message_path: '/api/anthropic/v1/messages',
-        openai_image_generation_path: '/images/generations', openai_image_edit_path: '/images/edits',
+        openai_image_generation_path: '/api/paas/v4/images/generations', openai_image_edit_path: '/api/paas/v4/images/edits',
     },
     {
         id: 'xai', label: 'xAI', Icon: XAIIcon, iconClassName: 'brightness-0 dark:invert',
