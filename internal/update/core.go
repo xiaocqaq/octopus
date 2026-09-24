@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +22,14 @@ import (
 // 并报"更新失败", 而实际上二进制已经换好了 —— 这个延迟用来让响应先发出去。
 const restartDelay = 1 * time.Second
 
+var updateMu sync.Mutex
+
 func UpdateCore() error {
+	if !updateMu.TryLock() {
+		return errors.New("update already in progress")
+	}
+	defer updateMu.Unlock()
+
 	log.Infof("start update core")
 
 	filename, err := getDownloadFilename()

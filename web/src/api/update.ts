@@ -26,7 +26,7 @@ export function useLatestInfo() {
     return useQuery({
         queryKey: ['update', 'latest'],
         queryFn: () => apiRequest<LatestInfo>('/api/v1/update'),
-        refetchInterval: 3600000, // 1 小时
+        refetchInterval: 300000, // 5 分钟
         refetchOnMount: 'always',
     });
 }
@@ -40,7 +40,7 @@ export function useNowVersion() {
     return useQuery({
         queryKey: ['update', 'now-version'],
         queryFn: () => apiRequest<string>('/api/v1/update/now-version'),
-        refetchInterval: 3600000, // 1 小时
+        refetchInterval: 300000, // 5 分钟
         refetchOnMount: 'always',
     });
 }

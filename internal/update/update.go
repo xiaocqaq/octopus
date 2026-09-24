@@ -34,9 +34,10 @@ var (
 // 沿用元数据的 30 秒只够下一两兆, 更新会永远停在 context deadline exceeded, 表现就是
 // "点了更新等半天, 版本号还是旧的"。
 const (
-	metadataTimeout = 30 * time.Second // 元数据查询: 回 JSON, 30 秒足够。
-	downloadTimeout = 15 * time.Minute // 归档下载: 按最慢链路留足余量。
-	latestCacheTTL  = 30 * time.Minute // 最新版本查询缓存: GitHub 未认证限额按出口 IP 共享, 打开设置页不能每次都打过去。
+	metadataTimeout     = 30 * time.Second // 元数据查询: 回 JSON, 30 秒足够。
+	downloadTimeout     = 15 * time.Minute // 归档下载: 按最慢链路留足余量。
+	downloadIdleTimeout = 45 * time.Second // 下载流连续无新数据超过此时立即失败, 避免更新接口长期挂起。
+	latestCacheTTL      = 5 * time.Minute  // 最新版本查询缓存: 5 分钟内复用结果, 避免设置页频繁请求 GitHub。
 )
 
 // repoSlug 从仓库地址里取出 owner/repo 两段, 供拼接接口与下载地址。
@@ -295,12 +296,41 @@ func downloadVia(cand candidate, rawURL, dst string) error {
 	}
 	defer out.Close()
 
-	written, err := io.Copy(out, resp.Body)
+	written, err := copyWithIdleTimeout(out, resp.Body, downloadIdleTimeout)
 	if err != nil {
 		return err
 	}
 	log.Infof("downloaded %d bytes via %s", written, cand.name)
 	return nil
+}
+
+// copyWithIdleTimeout 让下载同时受总超时和读空闲超时约束。
+// http.Client 的总超时只能限制整个请求, 对持续保持连接但不再发送数据的 CDN/代理无效;
+// 这里在空闲窗口到期时主动关闭响应体, 解除阻塞的 Read。
+func copyWithIdleTimeout(dst io.Writer, src io.ReadCloser, idle time.Duration) (int64, error) {
+	type result struct {
+		written int64
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		written, err := io.Copy(dst, src)
+		resultCh <- result{written: written, err: err}
+	}()
+
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
+	select {
+	case result := <-resultCh:
+		return result.written, result.err
+	case <-timer.C:
+		_ = src.Close()
+		result := <-resultCh
+		if result.err != nil {
+			return result.written, fmt.Errorf("download idle timeout after %s: %w", idle, result.err)
+		}
+		return result.written, fmt.Errorf("download idle timeout after %s", idle)
+	}
 }
 
 func GetLatestInfo() (*LatestInfo, error) {

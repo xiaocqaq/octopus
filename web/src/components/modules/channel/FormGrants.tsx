@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowDownUp, CheckCheck, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, FolderPlus, HeartPulse, LoaderCircle, Plus, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { ArrowDownUp, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, FolderPlus, HeartPulse, LoaderCircle, Plus, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'use-intl';
 import { Protocol, useAssignChannelModels, useProbeChannelModels } from '@/api/channel';
@@ -10,6 +10,35 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/common/IconButton';
 import { useModelProbe } from './probe';
 import { grantKey, type ChannelFormState } from './state';
+
+type SelectOption = { value: string; label: string };
+
+function MobileSelect({ value, options, onChange, ariaLabel }: {
+    value: string;
+    options: SelectOption[];
+    onChange: (value: string) => void;
+    ariaLabel: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const selected = options.find((option) => option.value === value) ?? options[0];
+    return (
+        <div className="relative min-w-0 flex-1">
+            <button type="button" role="combobox" aria-label={ariaLabel} aria-expanded={open} onClick={() => setOpen((previous) => !previous)} className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-input bg-card px-2 text-left text-xs text-foreground shadow-none">
+                <span className="min-w-0 truncate">{selected?.label}</span>
+                <ChevronDown className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+            </button>
+            {open && (
+                <div role="listbox" aria-label={ariaLabel} className="absolute inset-x-0 top-[calc(100%+0.25rem)] z-50 max-h-52 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+                    {options.map((option) => (
+                        <button key={option.value} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }} className={`flex min-h-8 w-full items-center rounded-md px-2 text-left text-xs text-popover-foreground ${option.value === value ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`}>
+                            <span className="min-w-0 truncate">{option.label}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
 
 // GrantCells 渲染右侧固定的五格: chat, response, message, image 四个协议勾选和一个删除。
 function GrantCells({ state, setState, models, keyNames, remove, icon: Icon, tip }: {
@@ -259,7 +288,15 @@ export function FormGrants({ state, setState, channelId }: {
     return (
         <div className="relative flex flex-col gap-3 h-full min-h-0">
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="h-8 w-28 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
+                <div className="md:hidden flex min-w-0 flex-1">
+                    <MobileSelect
+                        value={selectedKey}
+                        onChange={setSelectedKey}
+                        ariaLabel={t('grantAllKeys')}
+                        options={[{ value: ALL_KEYS, label: t('grantAllKeys') }, ...state.keys.map((key) => ({ value: key.name, label: key.name }))]}
+                    />
+                </div>
+                <select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)} className="theme-select hidden h-8 w-28 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0 md:block">
                     <option value={ALL_KEYS}>{t('grantAllKeys')}</option>
                     {state.keys.map((key) => <option key={key.name} value={key.name}>{key.name}</option>)}
                 </select>
@@ -306,24 +343,30 @@ export function FormGrants({ state, setState, channelId }: {
                         icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
                     />
                 </div>
-                <div className="flex md:hidden flex-col gap-1 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
+                <div className="flex md:hidden flex-col gap-2 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
                     <div className="flex items-center gap-1">
                         <IconButton onClick={() => setExpanded(allExpanded ? new Set() : new Set(visibleModels))} disabled={visibleModels.length === 0} className="size-6" tip={allExpanded ? t('grantCollapseAll') : t('grantExpandAll')}>
                             {allExpanded ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
                         </IconButton>
-                        <span className="text-xs text-muted-foreground">{t('modelGroupColumn')} / {t('modelProbeOne')}</span>
-                        <span className="ml-auto text-xs text-muted-foreground">chat · response · message · image</span>
+                        <span className="text-xs font-medium">{t('modelGroupColumn')}</span>
+                        <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
                     </div>
-                    <div className="flex items-center justify-end gap-1 pl-1">
-                        <GrantCells
-                            state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
-                            remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
-                                const grants = new Map(state.grants);
-                                for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
-                                setState({ ...state, grants });
-                            }}
-                            icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
-                        />
+                    <div className="flex items-center gap-2">
+                        <span className="w-8 shrink-0 text-[10px] text-muted-foreground">协议</span>
+                        <div className="flex-1 min-w-0 flex items-center justify-end gap-1">
+                            <GrantCells
+                                state={state} setState={setState} models={isAllKeys ? state.models : visibleModels} keyNames={isAllKeys ? keyNames : [selectedKey]}
+                                remove={isAllKeys ? () => setState({ ...state, models: [], grants: new Map() }) : () => {
+                                    const grants = new Map(state.grants);
+                                    for (const modelName of state.models) grants.delete(grantKey(modelName, selectedKey));
+                                    setState({ ...state, grants });
+                                }}
+                                icon={Eraser} tip={isAllKeys ? t('grantClearAll') : t('grantClearCurrentKey')}
+                            />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-5 pl-10 pr-1 text-[9px] leading-none text-muted-foreground">
+                        <span className="text-center">chat</span><span className="text-center">response</span><span className="text-center">message</span><span className="text-center">image</span><span className="text-center">清除</span>
                     </div>
                 </div>
 
@@ -361,17 +404,31 @@ export function FormGrants({ state, setState, channelId }: {
                                         </IconButton>
                                     </div>
                                     <div className="flex items-center gap-2 pl-7">
-                                        <span className="shrink-0 text-xs text-muted-foreground">{t('modelGroupColumn')}</span>
-                                        <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
+                                        <span className="shrink-0 text-xs font-medium">{t('modelGroupColumn')}</span>
+                                        <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="theme-select h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
                                             <option value="">{t('modelGroupUnmatched')}</option>
                                             {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
                                             <option value="0">{t('modelGroupNone')}</option>
                                         </select>
                                     </div>
-                                    <div className="flex items-center justify-end gap-1 pl-7">
-                                        <span className="mr-auto text-xs text-muted-foreground">chat · response · message · image</span>
-                                        <GrantCells state={state} setState={setState} models={[modelName]} keyNames={isAllKeys ? keyNames : [selectedKey]} icon={Trash2} tip={t('grantRemove')} />
-                                    </div>
+                                    {isOpen && (
+                                        <div className="ml-7 rounded-lg border border-border/70 bg-muted/20 p-2">
+                                            <div className="mb-2 grid grid-cols-[minmax(0,1fr)_repeat(5,1.75rem)] items-center gap-1 text-[9px] leading-none text-muted-foreground">
+                                                <span>凭据</span><span className="text-center">chat</span><span className="text-center">response</span><span className="text-center">message</span><span className="text-center">image</span><span className="text-center">清除</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                {state.keys.map((channelKey) => {
+                                                    const protocols = state.grants.get(grantKey(modelName, channelKey.name)) ?? 0;
+                                                    return (
+                                                        <div key={channelKey.name} className={`grid grid-cols-[minmax(0,1fr)_repeat(5,1.75rem)] items-center gap-1 ${protocols === 0 ? 'opacity-45' : ''}`}>
+                                                            <span className="min-w-0 truncate text-xs text-muted-foreground">{channelKey.name}</span>
+                                                            <GrantCells state={state} setState={setState} models={[modelName]} keyNames={[channelKey.name]} remove={protocols !== 0 ? () => removeGrant(modelName, channelKey.name) : undefined} icon={Trash2} tip={t('grantRemove')} />
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="hidden md:flex items-center gap-1 px-3 py-2">
                                     <Checkbox checked={selectedModelSet.has(modelName)} onCheckedChange={(checked) => toggleModelSelection(modelName, checked === true)} aria-label={t('modelSelect', { model: modelName })} />
@@ -384,17 +441,12 @@ export function FormGrants({ state, setState, channelId }: {
                                         <span className="text-sm truncate">{modelName}</span>
                                         {isAllKeys && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{granted}/{keyNames.length}</span>}
                                     </button>
-                                    <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="h-8 w-32 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
+                                    <select value={targetGroupValue(modelName)} onChange={(event) => changeModelGroup(modelName, event.target.value)} aria-label={t('modelGroupFor', { model: modelName })} className="theme-select h-8 w-32 shrink-0 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus:border-input focus:ring-0">
                                         <option value="">{t('modelGroupUnmatched')}</option>
                                         {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
                                         <option value="0">{t('modelGroupNone')}</option>
                                     </select>
-                                    <IconButton
-                                        onClick={() => handleProbe([modelName])}
-                                        disabled={!channelId || probingModels.has(modelName)}
-                                        className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`}
-                                        tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}
-                                    >
+                                    <IconButton onClick={() => handleProbe([modelName])} disabled={!channelId || probingModels.has(modelName)} className={`size-8 shrink-0 ${mark ? (mark.ok ? 'text-emerald-500' : 'text-destructive') : ''}`} tip={mark ? (mark.ok ? t('modelProbePassed', { ms: mark.latency_ms }) : t('modelProbeFailed')) : t('modelProbeOne')}>
                                         {probingModels.has(modelName) ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
                                     </IconButton>
                                     <GrantCells state={state} setState={setState} models={[modelName]} keyNames={isAllKeys ? keyNames : [selectedKey]} remove={isAllKeys ? () => removeModel(modelName) : () => removeGrant(modelName, selectedKey)} icon={Trash2} tip={isAllKeys ? t('modelRemove') : t('grantRemove')} />

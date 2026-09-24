@@ -1,10 +1,42 @@
 package update
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestUpdateCoreRejectsConcurrentRun(t *testing.T) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+
+	if err := UpdateCore(); err == nil || !strings.Contains(err.Error(), "update already in progress") {
+		t.Fatalf("expected concurrent update rejection, got %v", err)
+	}
+}
+
+func TestCopyWithIdleTimeoutStopsStalledDownload(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	go func() {
+		_, _ = writer.Write([]byte("partial"))
+		time.Sleep(100 * time.Millisecond)
+		_ = writer.Close()
+	}()
+
+	var dst bytes.Buffer
+	_, err := copyWithIdleTimeout(&dst, reader, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "download idle timeout") {
+		t.Fatalf("expected idle timeout, got %v", err)
+	}
+	if dst.String() != "partial" {
+		t.Fatalf("expected partial data to be preserved for diagnostics, got %q", dst.String())
+	}
+}
 
 func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
