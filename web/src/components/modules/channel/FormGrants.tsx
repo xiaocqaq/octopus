@@ -399,7 +399,10 @@ export function FormGrants({ state, setState, channelId, ensureSaved }: {
 
     return (
         <div className="relative flex flex-col gap-3 h-full min-h-0">
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* 宽屏下这一排必须单行: 计数从 0/139 变 139/139 会多出一个字符的宽度,
+                一旦允许换行, 整排图标会被挤到第二行, 表单凭空长高一层。窄屏仍换行,
+                图标行自带 w-full, 本就该独占一行。 */}
+            <div className="flex flex-wrap md:flex-nowrap items-center gap-2 shrink-0">
                 <ThemeSelect
                     className="min-w-0 flex-1 md:w-36 md:flex-none"
                     value={selectedKey}
@@ -429,7 +432,8 @@ export function FormGrants({ state, setState, channelId, ensureSaved }: {
                     <IconButton onClick={() => handleProbe(selectedVisibleModels)} disabled={selectedVisibleModels.length === 0 || probeModels.isPending} className="size-8 shrink-0" tip={t('modelProbeSelected')}>
                         {probeModels.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <HeartPulse className="size-3.5" />}
                     </IconButton>
-                    <span className="ml-auto shrink-0 px-1 text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
+                    {/* 计数占固定宽度: 位数变化只改数字本身, 不去挤旁边的搜索框。 */}
+                    <span className="ml-auto shrink-0 px-1 min-w-12 text-right text-[11px] text-muted-foreground tabular-nums">{selectedVisibleModels.length}/{visibleModels.length}</span>
                 </div>
             </div>
 
