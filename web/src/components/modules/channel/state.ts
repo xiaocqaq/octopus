@@ -27,6 +27,22 @@ export function grantKey(modelName: string, keyName: string) {
     return `${modelName}\0${keyName}`;
 }
 
+// probeTargetKeys 给出一次「刷新模型」应当探测的凭据名。
+// keyName 非空表示模型页选定了单个凭据, 只探它; 为空表示「全部凭据」模式,
+// 此时必须逐个凭据都探一遍: 只探第一个的话, 新拉到的模型只会挂在第一个凭据上,
+// 后续「分组」就只会带进一个 key —— 多凭据渠道下表现为"同一个模型只分了一个凭据进组"。
+// 没填 Key 的凭据跳过, 避免发空请求。
+export function probeTargetKeys(keys: { name: string; key: string }[], keyName: string) {
+    if (keyName) return [keyName];
+    return keys.filter((k) => k.key.trim() !== '').map((k) => k.name);
+}
+
+// addModelGrantKeys 给出「新增模型」应当补授权的凭据名。
+// 与探测同一口径: 全部凭据模式下要覆盖全部凭据, 单选模式下只给选中的那个。
+export function addModelGrantKeys(keyNames: string[], isAllKeys: boolean, selectedKey: string) {
+    return isAllKeys ? keyNames : [selectedKey];
+}
+
 export const emptyFormState: ChannelFormState = {
     name: '',
     dialect: 'generic',

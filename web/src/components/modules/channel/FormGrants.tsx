@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/common/IconButton';
 import { useModelProbe } from './probe';
-import { grantKey, type ChannelFormState } from './state';
+import { addModelGrantKeys, grantKey, type ChannelFormState } from './state';
 
 type SelectOption = { value: string; label: string };
 
@@ -167,7 +167,9 @@ export function FormGrants({ state, setState, channelId, ensureSaved }: {
 
     const keyNames = state.keys.map((k) => k.name);
     const isAllKeys = selectedKey === ALL_KEYS;
-    const activeKey = isAllKeys ? (keyNames[0] || '') : selectedKey;
+    // 全部凭据模式下新增模型要覆盖全部凭据, 而非仅第一个: 只写第一个的话, 该模型的其余凭据没有授权,
+    // 后续「分组」就只会带进一个 key。刷新按凭据逐个探测(见 probe.ts)。
+    const writableKeys = addModelGrantKeys(keyNames, isAllKeys, selectedKey);
     const visibleModels = useMemo(() => {
         const source = isAllKeys
             ? state.models
@@ -236,11 +238,12 @@ export function FormGrants({ state, setState, channelId, ensureSaved }: {
 
     const addModel = () => {
         const name = newModelName.trim();
-        if (!name || state.models.includes(name) || !activeKey) return;
-        let protocols = 0;
-        for (const modelName of state.models) protocols |= state.grants.get(grantKey(modelName, activeKey)) ?? 0;
+        if (!name || state.models.includes(name) || writableKeys.length === 0) return;
         const grants = new Map(state.grants);
-        grants.set(grantKey(name, activeKey), protocols || Protocol.OpenAIResponse);
+        for (const keyName of writableKeys) {
+            const mapKey = grantKey(name, keyName);
+            grants.set(mapKey, (grants.get(mapKey) ?? 0) || Protocol.OpenAIResponse);
+        }
         setState({ ...state, models: [...state.models, name], grants });
         setNewModelName('');
         setSearchTerm('');
@@ -420,7 +423,7 @@ export function FormGrants({ state, setState, channelId, ensureSaved }: {
                     <IconButton onClick={() => setAddDialogOpen(true)} className="size-8 shrink-0" tip={t('modelAdd')}>
                         <Plus className="size-3.5" />
                     </IconButton>
-                    <IconButton onClick={() => probe(state, setState, activeKey)} disabled={pendingKey !== null || !state.base_url.trim()} className="size-8 shrink-0" tip={t('modelRefresh')}>
+                    <IconButton onClick={() => probe(state, setState, isAllKeys ? '' : selectedKey)} disabled={pendingKey !== null || !state.base_url.trim()} className="size-8 shrink-0" tip={t('modelRefresh')}>
                         <RefreshCw className={`size-3.5 ${pendingKey !== null ? 'animate-spin' : ''}`} />
                     </IconButton>
                     <span className="mx-1 h-5 w-px shrink-0 bg-border" />
