@@ -33,7 +33,7 @@
 直接运行
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 bestrui/octopus
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/xiaocqaq/octopus:latest
 ```
 
 或者使用 docker compose 运行

@@ -1,6 +1,6 @@
 services:
   octopus:
-    image: bestrui/octopus
+    image: ghcr.io/xiaocqaq/octopus:latest
     ports:
        - '8080:8080'
     volumes:      
