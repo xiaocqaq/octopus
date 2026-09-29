@@ -36,7 +36,11 @@ export function CreateDialogContent() {
     };
 
     return (
-        <MorphingDialogDescription>
+        // 这一层必须自己就是可收缩的 flex 列: 弹窗高度被 max-h 卡住后, 它是 flex 子项,
+        // 而 flex 子项默认 min-height:auto 会拒绝缩到内容高度以下, 于是表单把底部的提交按钮顶出弹窗,
+        // 再被外层的 overflow-hidden 裁掉 —— 表现就是"保存按钮不见了"。
+        // 同时它也得是 flex 容器, 否则 ProbeForm 上的 flex-1 / min-h-0 全落空, 表单内部那层滚动根本不成立。
+        <MorphingDialogDescription className="flex min-h-0 flex-1 flex-col">
             <ProbeForm
                 submitText={t('submit')}
                 submittingText={t('submitting')}

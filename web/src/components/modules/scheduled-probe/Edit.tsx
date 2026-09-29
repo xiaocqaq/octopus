@@ -39,7 +39,9 @@ export function EditDialogContent({ initial }: EditDialogContentProps) {
     };
 
     return (
-        <MorphingDialogDescription>
+        // 与新建弹窗同样的两层约束: 自己可收缩(min-h-0 flex-1), 且自己是 flex 容器,
+        // 否则表单撑高后会把提交按钮顶出弹窗、被外层 overflow-hidden 裁掉。
+        <MorphingDialogDescription className="flex min-h-0 flex-1 flex-col">
             <ProbeForm
                 initial={{
                     name: initial.name,
