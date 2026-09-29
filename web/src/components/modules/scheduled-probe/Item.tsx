@@ -131,11 +131,13 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                             </MorphingDialogTrigger>
                         </IconButton>
                         <MorphingDialogContainer>
+                            {/* 与新建弹窗同一套宽度写法: 不显式给宽度, 弹窗会缩到内容宽度而塌成窄缝。
+                                标题加 shrink-0: 它和下面可滚动的表单同处一列, 不加就会被表单压扁。 */}
                             <MorphingDialogContent
                                 dismissOnClickOutside={false}
-                                className="flex max-h-[calc(100vh-2rem)] w-fit max-w-full flex-col overflow-hidden rounded-3xl bg-card px-6 py-4 text-card-foreground"
+                                className="relative flex h-[calc(100dvh-2rem)] w-screen max-w-full flex-col overflow-hidden rounded-3xl bg-card px-4 py-3 text-card-foreground md:h-auto md:max-h-[calc(100vh-2rem)] md:max-w-2xl md:px-6 md:py-4"
                             >
-                                <MorphingDialogTitle>{t('editTitle', { name: probe.name })}</MorphingDialogTitle>
+                                <MorphingDialogTitle className="shrink-0">{t('editTitle', { name: probe.name })}</MorphingDialogTitle>
                                 <EditDialogContent initial={probe} />
                             </MorphingDialogContent>
                         </MorphingDialogContainer>

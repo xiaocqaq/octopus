@@ -29,9 +29,12 @@ export function ScheduledProbeActions() {
                     <Plus className="size-4 transition-colors duration-300" />
                 </MorphingDialogTrigger>
                 <MorphingDialogContainer>
+                    {/* 宽度必须显式给: 弹窗是居中 flex 容器里的子项, 不给宽度就收缩到内容宽度,
+                        而表单里的输入框全是 flex-1、本身不产生宽度需求, 于是整只弹窗塌成一条窄缝。
+                        与分组页编辑弹窗同一套写法, 只是本表单字段少, 2xl 就够, max-w-full 兜住窄屏。 */}
                     <MorphingDialogContent
                         dismissOnClickOutside={false}
-                        className="flex max-h-[calc(100vh-2rem)] w-fit max-w-full flex-col overflow-hidden rounded-3xl bg-card px-6 py-4 text-card-foreground"
+                        className="relative flex h-[calc(100dvh-2rem)] w-screen max-w-full flex-col overflow-hidden rounded-3xl bg-card px-4 py-3 text-card-foreground md:h-auto md:max-h-[calc(100vh-2rem)] md:max-w-2xl md:px-6 md:py-4"
                     >
                         <CreateDialogContent />
                     </MorphingDialogContent>
