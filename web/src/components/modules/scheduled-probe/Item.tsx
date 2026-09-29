@@ -1,23 +1,21 @@
 import { useState } from 'react';
-import { HeartCrack, HeartPulse, Pencil, RotateCcw, Trash2, X, Zap } from 'lucide-react';
+import { Pencil, RotateCcw, Trash2, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
     useDeleteScheduledProbe,
-    useProbeGrantNow,
     useProbeScheduledNow,
-    useSetScheduledProbeCredential,
     useUpdateScheduledProbe,
     type ScheduledProbe,
     type ScheduledProbeInput,
-    type ScheduledProbeRow,
 } from '@/api/scheduled-probe';
 import { Switch } from '@/components/ui/switch';
 import { IconButton } from '@/components/common/IconButton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { getModelIcon } from '@/lib/model-icons';
 import { cn } from '@/lib/utils';
-import { describeProbedAt, describeWindow } from './format';
+import { describeWindow } from './format';
+import { RowList } from './RowList';
 import {
     MorphingDialog,
     MorphingDialogContainer,
@@ -226,110 +224,5 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                 </div>
             )}
         </article>
-    );
-}
-
-// RowList 逐行列出各条凭据。一行 = 一条凭据，行尾的闪电只测这一条、× 只删这一条。
-function RowList({ probeId, rows }: { probeId: number; rows: ScheduledProbeRow[] }) {
-    const t = useTranslations('scheduledProbe');
-    if (rows.length === 0) {
-        return <p className="px-1 py-2 text-xs text-muted-foreground/70">{t('noTarget')}</p>;
-    }
-
-    return (
-        <ul className="flex flex-col gap-1">
-            {rows.map((row, index) => (
-                <Row key={row.grant_id > 0 ? row.grant_id : `empty-${index}`} probeId={probeId} row={row} />
-            ))}
-        </ul>
-    );
-}
-
-// Row 渲染一条凭据：左侧是「渠道名/凭据名」(大字)、中间是结论、右侧是只测这一条的闪电与只删这一条的 ×。
-function Row({ probeId, row }: { probeId: number; row: ScheduledProbeRow }) {
-    const t = useTranslations('scheduledProbe');
-    const probeGrant = useProbeGrantNow();
-    const setCredential = useSetScheduledProbeCredential();
-    const hasGrant = row.grant_id > 0;
-    const label = row.key_name || `#${row.grant_id}`;
-
-    const handleProbe = () => {
-        probeGrant.mutate(row.grant_id, {
-            onSuccess: () => toast.success(t('toast.probeDone')),
-            onError: (error) => toast.error(error.message),
-        });
-    };
-
-    // 删除不再确认: 这一行小, 确认框比行本身还大, 而卡片底部的「全部恢复」已经兜住了误删。
-    // 粒度是「这条凭据」而不是「这个 (渠道, 模型) 目标」——同一目标下别的凭据行不受影响。
-    const handleRemove = () => {
-        setCredential.mutate(
-            {
-                id: probeId,
-                channelId: row.channel_id,
-                modelName: row.model_name,
-                keyName: row.key_name,
-                excluded: true,
-            },
-            {
-                onSuccess: () => toast.success(t('toast.credentialRemoved')),
-                onError: (error) => toast.error(error.message),
-            },
-        );
-    };
-
-    return (
-        <li className="flex items-center gap-1.5 rounded-lg border border-border/60 px-1.5 py-1">
-            {/* 渠道名與凭据名字体更大: 它们回答"这条通道、这把钥匙"，是扫列表时第一眼要看的。
-                模型名只在卡片标题出现, 行里不重复；同个任务挂多模型时才补在 tooltip，别把主视觉打散。 */}
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <span className="min-w-0 flex-1 truncate text-sm">
-                        <span className="text-foreground">{row.channel_name || `#${row.channel_id}`}</span>
-                        <span className="text-muted-foreground/50">/</span>
-                        <span className="text-foreground">{label}</span>
-                    </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={10} align="start">
-                    {`${row.channel_name || `#${row.channel_id}`} / ${label}`}
-                    {row.model_name ? ` · ${row.model_name}` : ''}
-                </TooltipContent>
-            </Tooltip>
-
-            {row.probed && (
-                <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                    {row.ok ? (
-                        <HeartPulse className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-                    ) : (
-                        <HeartCrack className="size-3.5 text-rose-600 dark:text-rose-400" />
-                    )}
-                    <span className="tabular-nums">{row.latency_ms}ms</span>
-                    <span className="text-muted-foreground/60">{describeProbedAt(row.probed_at, t)}</span>
-                </span>
-            )}
-
-            {/* 行尾的闪电只测这一条凭据: 点击它的意图是"我想看清这条钥匙通不通"，
-                而不是把整个任务都拧起来一起测。 */}
-            <IconButton
-                onClick={handleProbe}
-                disabled={!hasGrant || probeGrant.isPending}
-                tip={hasGrant ? t('probeThis') : t('noCredential')}
-                className="size-6"
-            >
-                <Zap className={cn('size-3', probeGrant.isPending && 'animate-pulse')} />
-            </IconButton>
-
-            {/* 行尾的 × 只删这一条凭据: 与闪电同一粒度 —— 眼睛盯着的就是这一行, 手上的动作也该只作用于这一行。
-                悬停变红是它唯一的提示, 删除本身不再弹确认, 误删由卡片底部的「全部恢复」兜底。 */}
-            <IconButton
-                onClick={handleRemove}
-                disabled={!hasGrant || setCredential.isPending}
-                tip={hasGrant ? t('removeCredential') : t('noCredential')}
-                aria-label={t('removeCredential')}
-                className="size-6 hover:text-destructive"
-            >
-                <X className="size-3" />
-            </IconButton>
-        </li>
     );
 }

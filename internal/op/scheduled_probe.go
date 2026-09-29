@@ -91,6 +91,106 @@ func ScheduledProbeGrantIDs(target model.ScheduledProbeTarget) []int {
 	return ids
 }
 
+// ScheduledProbeCredit 是轮转里的一条可测凭据: 属于哪个目标、是哪条授权。
+//
+// 轮转按凭据而不是按目标走: 要让"每条凭据每「间隔」各测一次"成立, 就得把目标与凭据两层摊平成一圈,
+// 每一拍走一格。两级取模给不出统一的周期 —— 凭据数不同的目标会得到相差数倍的间隔,
+// 同一个任务里有的 90 分钟一轮、有的 30 分钟一轮, 配置的那个数字就谁也对应不上。
+type ScheduledProbeCredit struct {
+	Target  model.ScheduledProbeTarget
+	GrantID int
+	KeyName string
+}
+
+// CreditKey 生成凭据在顺序表里的键。
+// 用不可见字符分隔三个字段: 模型名与凭据名都可能含冒号斜杠之类的字符,
+// 拿可见分隔符拼串时 "1" + "23" 与 "12" + "3" 这类组合会撞成同一个键。
+func CreditKey(channelID int, modelName, keyName string) string {
+	return fmt.Sprintf("%d\x00%s\x00%s", channelID, modelName, keyName)
+}
+
+// ScheduledProbeCredits 返回该任务的全部可测凭据, 顺序即界面上的行顺序, 也是轮转顺序。
+//
+// 界面与调度共用这一个函数, 是为了让"拖到最前的那条会最先被测"这件事成立:
+// 两边各排一次序, 迟早会分岔成两份不一样的顺序, 届时界面上的次序就成了纯粹的装饰。
+func ScheduledProbeCredits(probe model.ScheduledProbe) []ScheduledProbeCredit {
+	credits := make([]ScheduledProbeCredit, 0, len(probe.Targets))
+	for _, target := range probe.Targets {
+		for _, grantID := range ScheduledProbeGrantIDs(target) {
+			credits = append(credits, ScheduledProbeCredit{
+				Target:  target,
+				GrantID: grantID,
+				KeyName: GrantKeyName(grantID),
+			})
+		}
+	}
+	return sortCreditsByOrder(credits, probe.CreditOrder)
+}
+
+// sortCreditsByOrder 把用户拖出来的顺序套到凭据列表上。
+// 列过的按记录的位置排在前, 没列过的一律接在后面并保持原有相对顺序(靠稳定排序保证)。
+func sortCreditsByOrder(credits []ScheduledProbeCredit, order []string) []ScheduledProbeCredit {
+	if len(order) == 0 {
+		return credits
+	}
+	rank := make(map[string]int, len(order))
+	for index, key := range order {
+		// 只认第一次出现的位置: 记录里万一有重复项, 也不该让同一条凭据一会儿靠前一会儿靠后。
+		if _, exists := rank[key]; !exists {
+			rank[key] = index
+		}
+	}
+
+	sorted := append([]ScheduledProbeCredit(nil), credits...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left, leftListed := rank[creditKeyOf(sorted[i])]
+		right, rightListed := rank[creditKeyOf(sorted[j])]
+		if leftListed != rightListed {
+			return leftListed
+		}
+		if !leftListed {
+			return false
+		}
+		return left < right
+	})
+	return sorted
+}
+
+// creditKeyOf 取一条凭据的顺序键。
+func creditKeyOf(credit ScheduledProbeCredit) string {
+	return CreditKey(credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName)
+}
+
+// ScheduledProbeCreditOrderSet 以提交的顺序整体替换该任务的凭据顺序, 并立即刷新缓存。
+//
+// 整体替换而不是增量维护: 界面送来的是它此刻看得见的那几行, 那就是一个完整的顺序答案;
+// 记录里已经消失的项留着也不会被读到(读的时候只认此刻存在的凭据), 不必在删凭据时回头清理这张表。
+func ScheduledProbeCreditOrderSet(id int, keys []string, ctx context.Context) (model.ScheduledProbe, error) {
+	probe, ok := scheduledProbeCache.Get(id)
+	if !ok {
+		return model.ScheduledProbe{}, fmt.Errorf("scheduled probe not found")
+	}
+
+	seen := make(map[string]bool, len(keys))
+	order := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		order = append(order, key)
+	}
+
+	probe.CreditOrder = order
+	// Omit("Targets") 后再 Save: Save 默认会连带保存关联, 那会把目标整份重写一遍,
+	// 而这里只想改一个字段; 同时 Save 会走字段的序列化器, 顺序表才能正确落成 JSON。
+	if err := db.GetDB().WithContext(ctx).Omit("Targets").Save(&probe).Error; err != nil {
+		return model.ScheduledProbe{}, fmt.Errorf("failed to update scheduled probe credit order: %w", err)
+	}
+	scheduledProbeCache.Set(id, probe)
+	return probe, nil
+}
+
 // GrantKeyName 取授权所用凭据的名称, 用于展示"这条结论是哪条凭据测出来的"。
 //
 // 直读缓存而不走 ChannelGrantGet: 那个函数会因为凭据被停用而返回错误, 可"凭据被停用"

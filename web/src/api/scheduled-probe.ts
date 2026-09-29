@@ -178,3 +178,26 @@ export function useSetScheduledProbeCredential() {
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }
+
+// ScheduledProbeOrderInput 是拖动排序后的提交形状：按界面上的先后依次给出凭据。
+export type ScheduledProbeOrderInput = {
+    id: number;
+    credits: { channel_id: number; model_name: string; key_name: string }[];
+};
+
+// useSetScheduledProbeOrder 记下用户拖出来的行顺序。
+//
+// 这个顺序不只是好看：后端按同一份顺序轮转，拖到最前的那条就是下一拍最先被测的那条。
+// 所以拖完必须回传服务端——只改本地渲染等于给用户一个假的次序。
+export function useSetScheduledProbeOrder() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (data: ScheduledProbeOrderInput) =>
+            apiRequest<ScheduledProbe>(`/api/v1/scheduled-probe/order/${data.id}`, {
+                method: 'POST',
+                body: { credits: data.credits },
+            }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}

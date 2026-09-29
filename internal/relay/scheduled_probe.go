@@ -18,10 +18,14 @@ import (
 // 每一拍只做几次内存判断, 一天 8640 次唤醒的代价可以忽略。
 const ScheduledProbeTickInterval = 10 * time.Second
 
-// scheduledProbeJitterMillis 是探测时刻的抖动幅度(±30 秒), 固定不可配。
+// scheduledProbeJitterMillis 是探测时刻的抖动幅度上限(±30 秒), 固定不可配。
 // 抖动是为了避免多条任务长期挤在同一秒打上游 —— 默认间隔都是 10 分钟, 创建时间接近的任务会一直同步。
 // 幅度固定而不做成配置项: 用户要的只是"别挤在一起", 一个常量就够, 多一个配置就多一处要解释的地方。
 const scheduledProbeJitterMillis = 30_000
+
+// scheduledProbeJitterPeriodDivisor 是抖动相对周期的上限倍数: 实际抖动不超过 周期 ÷ 4。
+// 均摊之后周期可能只有几十秒, 此时固定的 ±30 秒足以盖过周期本身, 故按周期收敛。
+const scheduledProbeJitterPeriodDivisor = 4
 
 // 抖动散列的两个乘数。
 const (
@@ -34,7 +38,7 @@ const (
 // 落库反而要面对"停机期间积欠的探测要不要补"这种没有正确答案的问题。
 type scheduledProbeState struct {
 	nextDueAt   int64  // 允许探测的最早时刻, Unix 毫秒。
-	grantCursor int    // 该任务内部轮转到的授权下标。
+	creditCursor int    // 该任务内部轮转到的凭据下标(扁平凭据列表上的位置)。
 	round       uint64 // 已完成轮数, 参与抖动计算, 使每一轮的偏移都不同。
 }
 
@@ -135,50 +139,43 @@ func scheduledProbeDue(id int, now time.Time) bool {
 	return !ok || now.UnixMilli() >= state.nextDueAt
 }
 
-// runScheduledProbe 探测一条任务的一个目标的一条授权, 并推进它的调度进度。
+// runScheduledProbe 探测这条任务的下一条凭据, 并推进它的调度进度。
 //
-// 目标与授权两级轮转: 目标的序号取 cursor % 目标数, 授权取 (cursor / 目标数) % 该目标的凭据数。
-// 这样每一拍目标就往前走一格(而不是等一轮凭据走完才换目标), 用户看到的正是"几个模型依次被测";
-// 同一个目标的凭据则隔一轮换一条 —— 两级都要走到, 又不能用同一个模数把两级绑死。
+// 轮转是扁平的: 把"目标 → 凭据"两层摊平成一圈, 每一拍走一格(见 op.ScheduledProbeCredits)。
+// 之所以不再按目标分两级走, 是因为配置的间隔要表达"每条凭据各测一次"这个周期:
+// 两级取模会让凭据数不同的目标拿到相差数倍的周期(同一个任务里 3 条凭据的目标 90 分钟一轮、
+// 1 条凭据的 30 分钟一轮), 用户配的那个数字就谁也对应不上。摊平之后每条凭据的周期
+// 一律等于 间隔 ÷ 凭据数, 整齐且可预期, 界面上拖出来的顺序也才真的等于轮转顺序。
 func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
-	if len(target.Targets) == 0 {
-		// 没有目标(理论上创建时已拦下, 但渠道改动后可能落到这里): 这不是"通道不通", 不该落失败结论,
-		// 只把下一次探测推后, 等用户把配置改回来。
+	credits := op.ScheduledProbeCredits(target)
+	if len(credits) == 0 {
+		// 没有可测凭据(理论上创建时已拦下, 但渠道改动、凭据被停用、或被逐行删空后可能落到这里):
+		// 这不是"通道不通", 不该落失败结论, 只把下一次探测推后, 等用户把配置改回来。
 		advanceScheduledProbe(target, now, false)
 		return
 	}
 
-	cursor := scheduledProbeGrantCursor(target.ID)
-	item := target.Targets[cursor%len(target.Targets)]
-
-	grantIDs := op.ScheduledProbeGrantIDs(item)
-	if len(grantIDs) == 0 {
-		// 该目标当下没有可测的凭据(渠道或凭据被停用, 模型已被移除): 同上, 推后而不是落失败结论。
-		advanceScheduledProbe(target, now, false)
-		return
-	}
-
-	grantID := grantIDs[(cursor/len(target.Targets))%len(grantIDs)]
+	credit := credits[scheduledProbeCreditCursor(target.ID)%len(credits)]
 	// 非流式: 定时测活只问"这条通道此刻能不能出结果", 非流式响应体最短, 也不会占着上游连接等首字节;
 	// 界面上那个徽标只看成败, 与流式与否无关。
-	result := ProbeScheduledGrant(context.Background(), grantID, false)
+	result := ProbeScheduledGrant(context.Background(), credit.GrantID, false)
 	if result.OK {
-		log.Debugf("scheduled probe ok: task=%d channel=%d model=%s grant=%d latency=%dms",
-			target.ID, item.ChannelID, item.ModelName, grantID, result.LatencyMS)
+		log.Debugf("scheduled probe ok: task=%d channel=%d model=%s key=%s grant=%d latency=%dms",
+			target.ID, credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName, credit.GrantID, result.LatencyMS)
 	} else {
-		log.Warnf("scheduled probe failed: task=%d channel=%d model=%s grant=%d latency=%dms message=%s",
-			target.ID, item.ChannelID, item.ModelName, grantID, result.LatencyMS, result.Message)
+		log.Warnf("scheduled probe failed: task=%d channel=%d model=%s key=%s grant=%d latency=%dms message=%s",
+			target.ID, credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName, credit.GrantID, result.LatencyMS, result.Message)
 	}
 	advanceScheduledProbe(target, now, true)
 }
 
-// scheduledProbeGrantCursor 返回该任务轮转到的授权下标; 无记录时为 0。
-func scheduledProbeGrantCursor(id int) int {
+// scheduledProbeCreditCursor 返回该任务轮转到的凭据下标; 无记录时为 0。
+func scheduledProbeCreditCursor(id int) int {
 	scheduledProbeMu.Lock()
 	defer scheduledProbeMu.Unlock()
 
 	if state := scheduledProbeStates[id]; state != nil {
-		return state.grantCursor
+		return state.creditCursor
 	}
 	return 0
 }
@@ -187,7 +184,7 @@ func scheduledProbeGrantCursor(id int) int {
 //
 // 以这一拍开始的时刻为基准, 而不是探测结束的时刻: 单次探测可能耗时数十秒, 按结束时刻累加会让
 // 配置的 10 分钟被实际耗时拖成 11 分钟, 间隔配置也就不再等于真实节奏。
-func advanceScheduledProbe(target model.ScheduledProbe, now time.Time, grantAdvanced bool) {
+func advanceScheduledProbe(target model.ScheduledProbe, now time.Time, creditAdvanced bool) {
 	scheduledProbeMu.Lock()
 	defer scheduledProbeMu.Unlock()
 
@@ -196,23 +193,61 @@ func advanceScheduledProbe(target model.ScheduledProbe, now time.Time, grantAdva
 		state = &scheduledProbeState{}
 		scheduledProbeStates[target.ID] = state
 	}
-	if grantAdvanced {
-		state.grantCursor++
+	if creditAdvanced {
+		state.creditCursor++
 	}
 	state.round++
-	interval := time.Duration(target.IntervalMinutes) * time.Minute
-	state.nextDueAt = now.UnixMilli() + (interval + scheduledProbeJitter(target.ID, state.round)).Milliseconds()
+	period := scheduledProbePeriod(target)
+	state.nextDueAt = now.UnixMilli() + (period + scheduledProbeJitter(period, target.ID, state.round)).Milliseconds()
 	lastProbedID = target.ID
 }
 
-// scheduledProbeJitter 给出该任务这一轮的抖动偏移, 落在 ±30 秒之间。
+// scheduledProbePeriod 返回这条任务两次探测之间该隔多久。
+//
+// 用户配的「间隔」是"每条凭据各测一次"的周期, 而每一拍只打一条上游, 于是拍的间隔要按凭据数均摊:
+// 不摊的话, 6 条凭据的任务配 10 分钟, 每一条要等 60 分钟才轮到一次 ——
+// 配置上的数字与用户的理解差出一个凭据数的倍数, 这正是"为什么不是每个模型按设定时间测一次"的由来。
+//
+// 摊到比调度节拍还短时按节拍兜底: 再密也不可能比调度器跑得更快, 写一个更小的值只会让
+// nextDueAt 永远落在过去、每一拍都"到点", 白白多算一轮。
+func scheduledProbePeriod(target model.ScheduledProbe) time.Duration {
+	interval := time.Duration(target.IntervalMinutes) * time.Minute
+	return scheduledProbeAmortizedPeriod(interval, len(op.ScheduledProbeCredits(target)))
+}
+
+// scheduledProbeAmortizedPeriod 把"每轮"的间隔均摊到 total 条凭据上。
+// 单列成纯函数是为了能直接验证这段除法与兜底, 不必先搭出一整套渠道缓存。
+func scheduledProbeAmortizedPeriod(interval time.Duration, total int) time.Duration {
+	if total <= 1 {
+		return interval
+	}
+
+	period := interval / time.Duration(total)
+	if period < ScheduledProbeTickInterval {
+		return ScheduledProbeTickInterval
+	}
+	return period
+}
+
+// scheduledProbeJitter 给出该任务这一轮的抖动偏移, 落在 ±30 秒之间, 但不大于周期的四分之一。
+//
 // 用任务主键与轮数做散列而不是取全局随机数: 抖动只需要"每条任务、每一轮都不同"来错开上游流量,
 // 而确定性让同一条任务的节奏可复现, 排查"它为什么总在这个点测"时不必再去猜随机数。
-func scheduledProbeJitter(id int, round uint64) time.Duration {
+//
+// 按周期收敛: 固定 ±30 秒在 10 分钟一拍时只占 5%, 而周期被均摊到几十秒之后就成了能盖过周期本身的
+// 噪声 —— 抖动是为了把各条任务错开, 不是为了把它们各自的节奏打乱。
+func scheduledProbeJitter(period time.Duration, id int, round uint64) time.Duration {
 	span := uint64(2*scheduledProbeJitterMillis + 1)
 	hashed := uint64(id)*scheduledProbeHashID + round*scheduledProbeHashRound
 	offset := int64(hashed%span) - scheduledProbeJitterMillis
-	return time.Duration(offset) * time.Millisecond
+	jitter := time.Duration(offset) * time.Millisecond
+
+	if limit := period / scheduledProbeJitterPeriodDivisor; jitter > limit {
+		return limit
+	} else if jitter < -limit {
+		return -limit
+	}
+	return jitter
 }
 
 // probeLandedHook 是"测活结论已落点"的通知钩子, 由处理器包在 init 时注册。

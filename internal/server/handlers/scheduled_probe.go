@@ -44,6 +44,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/credential/:id", http.MethodPost).
 				Handle(setScheduledProbeCredential),
+		).
+		AddRoute(
+			router.NewRoute("/order/:id", http.MethodPost).
+				Handle(setScheduledProbeOrder),
 		)
 
 	// 定时测活跑在后台, 没有请求上下文可以捎带事件; 结论落点后由这里补推一次分组事件,
@@ -81,46 +85,6 @@ func scheduledProbeViews() []model.ScheduledProbeView {
 // 也点不到那一行的手动测试按钮 —— 而排查时唯一有用的粒度就是单条凭据。
 //
 // 没有结论的凭据同样出行(probed 为假): 少了它, 用户第一次就无从发起测活。
-func probeRows(probe model.ScheduledProbeView) []model.ScheduledProbeRow {
-	rows := make([]model.ScheduledProbeRow, 0, len(probe.Targets))
-	for _, target := range probe.Targets {
-		grantIDs := op.ScheduledProbeGrantIDs(target)
-		results := relay.ScheduledProbeResults(grantIDs)
-		channelName := op.ChannelNameOf(target.ChannelID)
-
-		if len(grantIDs) == 0 {
-			// 该目标当下没有可测凭据: 仍出一行占位, grant_id 为 0。
-			// 界面据 grant_id 为 0 把那一行的手动测试按钮置灰并说明原因 ——
-			// 整条目标凭空消失, 用户只会以为是自己没配上。
-			rows = append(rows, model.ScheduledProbeRow{
-				ChannelID:   target.ChannelID,
-				ChannelName: channelName,
-				ModelName:   target.ModelName,
-			})
-			continue
-		}
-
-		for _, grantID := range grantIDs {
-			row := model.ScheduledProbeRow{
-				GrantID:     grantID,
-				ChannelID:   target.ChannelID,
-				ChannelName: channelName,
-				ModelName:   target.ModelName,
-				KeyName:     op.GrantKeyName(grantID),
-			}
-			if result, ok := results[grantID]; ok {
-				row.Probed = true
-				row.OK = result.OK
-				row.LatencyMS = result.LatencyMS
-				row.Message = result.Message
-				row.ProbedAt = result.ProbedAt
-			}
-			rows = append(rows, row)
-		}
-	}
-	return rows
-}
-
 // probeScheduledNow 立即把一条任务的全部目标与凭据测一遍, 返回逐条结论。
 // 结论同时落进路由状态与凭据结论表, 但这里仍需返回给调用方: 手动触发要的是即时反馈,
 // 等下一次列表轮询才看到结果, 用户会以为按钮没生效。
@@ -156,36 +120,6 @@ func probeGrantNow(c *gin.Context) {
 	}
 	result := relay.ProbeGrantNow(c.Request.Context(), grantID)
 	resp.Success(c, result)
-}
-
-// probeRowsOf 把刚测出的结论整理成与列表同形状的行, 让前端可以直接就地更新那一行。
-// 复用行的形状而不是另造一个响应: 前端拿到之后要做的正是"用新结论替换旧行",
-// 形状一致就不必写第二套更新逻辑。
-func probeRowsOf(probe model.ScheduledProbe, results []relay.ProbeResult) []model.ScheduledProbeRow {
-	rows := make([]model.ScheduledProbeRow, 0, len(results))
-	for _, result := range results {
-		row := model.ScheduledProbeRow{
-			GrantID:   result.ItemID,
-			KeyName:   op.GrantKeyName(result.ItemID),
-			Probed:    true,
-			OK:        result.OK,
-			LatencyMS: result.LatencyMS,
-			Message:   result.Message,
-			ProbedAt:  result.ProbedAt,
-		}
-		for _, target := range probe.Targets {
-			for _, grantID := range op.ScheduledProbeGrantIDs(target) {
-				if grantID != result.ItemID {
-					continue
-				}
-				row.ChannelID = target.ChannelID
-				row.ChannelName = op.ChannelNameOf(target.ChannelID)
-				row.ModelName = target.ModelName
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows
 }
 
 func createScheduledProbe(c *gin.Context) {
@@ -232,6 +166,12 @@ func deleteScheduledProbe(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
 		return
 	}
+	// 删之前先取出它监控过哪些凭据: 结论表按授权主键索引, 任务一删就再也推不出这些主键了。
+	// 结论不设有效期, 不主动丢掉的话, 这些凭据会永远挂着最后一次的绿或红 ——
+	// 而"这条通道还通不通"已经没有人再负责回答了。
+	if probe, ok := op.ScheduledProbeGet(id); ok {
+		relay.ForgetScheduledProbeResults(creditGrantIDs(op.ScheduledProbeCredits(probe)))
+	}
 	if err := op.ScheduledProbeDelete(id, c.Request.Context()); err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -274,6 +214,54 @@ func setScheduledProbeCredential(c *gin.Context) {
 	}
 	// 可测凭据的集合变了, 旧的轮转进度便不再对应任何一条真实凭据; 丢掉它, 让下一拍按新集合重排。
 	// 与配置更新的处理保持一致: 配置动了就不该再按旧节奏走。
+	relay.ResetScheduledProbe(id)
+	view := model.ScheduledProbeView{ScheduledProbe: probe}
+	view.Rows = probeRows(view)
+	resp.Success(c, view)
+}
+
+// scheduledProbeCreditRef 定位一条凭据: 渠道 + 模型 + 凭据名。
+// 与行内隐藏用同一套定位方式, 界面不必为排序另算一份标识。
+type scheduledProbeCreditRef struct {
+	ChannelID int    `json:"channel_id" binding:"required"` // 凭据所属的渠道。
+	ModelName string `json:"model_name" binding:"required"` // 凭据所属的模型目标。
+	KeyName   string `json:"key_name"`                      // 凭据名称; 空串是合法名称, 对应界面上的 #<授权ID>。
+}
+
+// scheduledProbeOrderRequest 是拖动排序后的提交: 按界面上的先后依次给出凭据。
+//
+// 收定位三元组而不是服务端内部的顺序键: 顺序键里的分隔符是实现细节,
+// 让它漏进接口就等于把它固化成契约, 以后换一种拼法都成了破坏性变更。
+type scheduledProbeOrderRequest struct {
+	Credits []scheduledProbeCreditRef `json:"credits" binding:"required,min=1,dive"`
+}
+
+// setScheduledProbeOrder 记下用户拖出来的行顺序, 并把该任务最新的行列表回给界面。
+//
+// 整体替换而不是增量维护: 界面送来的是它此刻看得见的全部行, 那本就是一个完整的顺序答案。
+func setScheduledProbeOrder(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	var req scheduledProbeOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	keys := make([]string, 0, len(req.Credits))
+	for _, credit := range req.Credits {
+		keys = append(keys, op.CreditKey(credit.ChannelID, credit.ModelName, credit.KeyName))
+	}
+	probe, err := op.ScheduledProbeCreditOrderSet(id, keys, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 顺序即轮转顺序, 故顺序一变进度也得丢: 不丢的话游标还停在上一次的下标上,
+	// 用户把某条拖到最前, 下一拍测的却是别的一条 —— 拖动看起来没生效。
 	relay.ResetScheduledProbe(id)
 	view := model.ScheduledProbeView{ScheduledProbe: probe}
 	view.Rows = probeRows(view)

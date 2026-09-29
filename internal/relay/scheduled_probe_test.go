@@ -53,7 +53,7 @@ func TestScheduledProbeJitterWithinRange(t *testing.T) {
 	seen := make(map[time.Duration]bool)
 	for id := 1; id <= 64; id++ {
 		for round := uint64(0); round < 8; round++ {
-			jitter := scheduledProbeJitter(id, round)
+			jitter := scheduledProbeJitter(probeInterval, id, round)
 			if jitter > scheduledProbeJitterMillis*time.Millisecond || jitter < -scheduledProbeJitterMillis*time.Millisecond {
 				t.Fatalf("任务 %d 第 %d 轮的抖动 %v 超出 ±30s", id, round, jitter)
 			}
@@ -62,6 +62,45 @@ func TestScheduledProbeJitterWithinRange(t *testing.T) {
 	}
 	if len(seen) < 8 {
 		t.Fatalf("抖动取值过于集中, 只有 %d 种", len(seen))
+	}
+}
+
+// TestScheduledProbeJitterShrinksWithPeriod 周期被均摊到几十秒之后, 抖动不该大到盖过周期本身。
+// 固定 ±30 秒在 10 分钟一拍时只占 5%, 而在 40 秒一拍时能到 75% —— 那就不是错开流量而是打乱节奏了。
+func TestScheduledProbeJitterShrinksWithPeriod(t *testing.T) {
+	period := 40 * time.Second
+	limit := period / scheduledProbeJitterPeriodDivisor
+
+	for id := 1; id <= 64; id++ {
+		for round := uint64(0); round < 8; round++ {
+			jitter := scheduledProbeJitter(period, id, round)
+			if jitter > limit || jitter < -limit {
+				t.Fatalf("周期 %v 时任务 %d 第 %d 轮的抖动 %v 超出 ±%v", period, id, round, jitter, limit)
+			}
+		}
+	}
+}
+
+// TestScheduledProbeAmortizesIntervalAcrossCredits 配的间隔是"每条凭据各测一次"的周期, 要按凭据数均摊。
+// 不均摊的话, 6 条凭据配 10 分钟会让每条凭据 60 分钟才轮到一次 —— 配置上的数字与用户的理解差一个倍数。
+func TestScheduledProbeAmortizesIntervalAcrossCredits(t *testing.T) {
+	cases := []struct {
+		name     string
+		interval time.Duration
+		total    int
+		want     time.Duration
+	}{
+		{"单条凭据不摊", 10 * time.Minute, 1, 10 * time.Minute},
+		{"没有凭据时按原间隔推后", 10 * time.Minute, 0, 10 * time.Minute},
+		{"6 条凭据摊成 100 秒", 10 * time.Minute, 6, 100 * time.Second},
+		{"摊到比节拍还短时按节拍兜底", time.Minute, 30, ScheduledProbeTickInterval},
+		{"恰好等于节拍时不兜底", 100 * time.Second, 10, ScheduledProbeTickInterval},
+	}
+
+	for _, item := range cases {
+		if got := scheduledProbeAmortizedPeriod(item.interval, item.total); got != item.want {
+			t.Fatalf("%s: expected %v, actual %v", item.name, item.want, got)
+		}
 	}
 }
 
@@ -181,37 +220,39 @@ func TestScheduledProbeNoTargets(t *testing.T) {
 	}
 }
 
-// TestScheduledProbeRotatesAcrossTargets 一条任务挂了多个目标时, 每一拍的目标应该依次轮转。
-// 只测第一个目标等于其余目标永远不被监控, 而用户把它们放进同一个任务就是要一起看。
-func TestScheduledProbeRotatesAcrossTargets(t *testing.T) {
+// TestScheduledProbeRotatesAcrossCredits 轮转是扁平的: 每一拍照着凭据列表往前走一格。
+//
+// "每一拍都往前走"是这套轮转的根 —— 不前进就会反复测同一条凭据, 其余凭据永远轮不到。
+// 具体轮到哪一条由 op.ScheduledProbeCredits 定序(与界面上的行顺序同源), 那里单独测;
+// 这里只守"游标步步前进、不跳格也不回头"这一件事。
+func TestScheduledProbeRotatesAcrossCredits(t *testing.T) {
 	resetScheduledProbeScheduler()
-	probe := dueProbeWithTargets(1,
-		model.ScheduledProbeTarget{ID: 1, ProbeID: 1, ChannelID: 1, ModelName: "m-a"},
-		model.ScheduledProbeTarget{ID: 2, ProbeID: 1, ChannelID: 1, ModelName: "m-b"},
-		model.ScheduledProbeTarget{ID: 3, ProbeID: 1, ChannelID: 1, ModelName: "m-c"},
-	)
+	const probeID = 1
 
-	// 直接推演"这一拍会挑中哪个目标", 不发起真实上游调用。
-	// 目标序号与 runScheduledProbe 里的取法保持一致: cursor % 目标数。
 	seen := make([]int, 0, 6)
 	for round := 0; round < 6; round++ {
-		cursor := scheduledProbeGrantCursor(probe.ID)
-		seen = append(seen, cursor%len(probe.Targets))
-		scheduledProbeMu.Lock()
-		state := scheduledProbeStates[probe.ID]
-		if state == nil {
-			state = &scheduledProbeState{}
-			scheduledProbeStates[probe.ID] = state
-		}
-		state.grantCursor++
-		scheduledProbeMu.Unlock()
+		seen = append(seen, scheduledProbeCreditCursor(probeID))
+		advanceScheduledProbe(dueProbe(probeID), time.Now(), true)
 	}
 
-	want := []int{0, 1, 2, 0, 1, 2}
+	want := []int{0, 1, 2, 3, 4, 5}
 	for i, expected := range want {
 		if seen[i] != expected {
-			t.Fatalf("第 %d 拍应轮到第 %d 个目标, 却得到 %d (序列 %v)", i+1, expected, seen[i], seen)
+			t.Fatalf("第 %d 拍应轮到第 %d 条凭据, 却得到 %d (序列 %v)", i+1, expected, seen[i], seen)
 		}
+	}
+}
+
+// TestScheduledProbeKeepsCursorWhenNothingProbed 没有可测凭据时不该推进游标。
+// 那种情况什么都没测, 推进游标等于凭空跳过一条凭据 —— 用户会看到某条凭据永远不被测。
+func TestScheduledProbeKeepsCursorWhenNothingProbed(t *testing.T) {
+	resetScheduledProbeScheduler()
+	probe := dueProbe(1)
+
+	advanceScheduledProbe(probe, time.Now(), false)
+
+	if cursor := scheduledProbeCreditCursor(probe.ID); cursor != 0 {
+		t.Fatalf("expected 游标停在原处 0, actual %d", cursor)
 	}
 }
 

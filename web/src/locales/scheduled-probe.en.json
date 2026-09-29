@@ -26,6 +26,7 @@
     "probeFailed": "Failed",
     "noTarget": "No targets configured",
     "removeCredential": "Stop monitoring this credential",
+    "dragToSort": "Drag to change probe order",
     "excludedCount": "{count} credentials hidden",
     "restoreAll": "Restore all",
     "window": {
@@ -70,7 +71,7 @@
         "selectedCount": "{count} selected",
         "modelCount": "{count} models",
         "interval": "Interval (minutes)",
-        "intervalHint": "Each round probes only one credential; multiple targets and credentials rotate in order. The actual interval carries ±30s jitter to avoid hitting upstream all at once.",
+        "intervalHint": "How long one full round takes: every credential is probed once per interval. The interval is divided across the credentials so only one upstream call is made at a time. Each probe is offset by a small jitter (up to ±30s, and never more than a quarter of the interval) so separate tasks do not hit upstream together.",
         "window": "Probe window",
         "windowHint": "Pick no weekday to probe all day; with weekdays selected, probing happens only inside the window and is skipped outside it.",
         "startHour": "Start hour",

@@ -26,6 +26,7 @@
     "probeFailed": "失败",
     "noTarget": "暂无监控目标",
     "removeCredential": "不再监控这条凭据",
+    "dragToSort": "拖动可调整测活顺序",
     "excludedCount": "已隐藏 {count} 条凭据",
     "restoreAll": "全部恢复",
     "window": {
@@ -70,7 +71,7 @@
         "selectedCount": "已选 {count} 项",
         "modelCount": "{count} 个模型",
         "interval": "间隔（分钟）",
-        "intervalHint": "到点后每轮只测一条凭据，多目标与多凭据按顺序轮转；实际间隔会带 ±30 秒的随机抖动，避免同时打上游。",
+        "intervalHint": "每条凭据各测一次所需的周期。这个间隔会按凭据条数均摊开，保证一次只打一条上游，不会同时涌出一批请求；实际时刻还带一点随机抖动（最多 ±30 秒，且不超过间隔的四分之一），避免多条任务挤在一起。",
         "window": "测活时段",
         "windowHint": "不选星期即全天可测；选了星期则只在所选星期的时段内测活，时段之外自动跳过。",
         "startHour": "开始整点",

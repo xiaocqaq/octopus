@@ -34,38 +34,63 @@ func TestScheduledProbeResultRecordedByGrant(t *testing.T) {
 	}
 }
 
-// TestScheduledProbeResultExpiry 验证过期结论读出来就等于不存在, 与分组侧 freshProbes 同一口径。
-// 结论有效期只有 10 分钟, 拿几小时前的快照当现状看比没有结论更糟。
-func TestScheduledProbeResultExpiry(t *testing.T) {
+// TestScheduledProbeResultSurvivesUntilNextProbe 结论不按时效消失, 只被下一次结论覆盖。
+//
+// 这条契约改过一次: 原先跟分组侧一样只有 10 分钟有效期, 但定时测活是"一拍只测一条凭据",
+// 6 条凭据的任务配 10 分钟间隔, 每条要等 60 分钟才轮到一次 —— 徽标有 50 分钟是空白,
+// 看起来像监控根本没在跑。界面照实显示结论产生的时刻, 该不该采信由看的人判断。
+func TestScheduledProbeResultSurvivesUntilNextProbe(t *testing.T) {
 	scheduledProbeResultMu.Lock()
 	scheduledProbeResults = make(map[int]ProbeResult)
 	scheduledProbeResultMu.Unlock()
 
-	expired := time.Now().Add(-2 * probeResultTTL).UnixMilli()
-	recordScheduledProbeResult(21, ProbeResult{ItemID: 21, OK: true, ProbedAt: expired})
+	stale := time.Now().Add(-24 * time.Hour).UnixMilli()
+	recordScheduledProbeResult(21, ProbeResult{ItemID: 21, OK: true, ProbedAt: stale})
 
-	if results := ScheduledProbeResults([]int{21}); len(results) != 0 {
-		t.Fatalf("expected expired result to be hidden, actual %+v", results)
+	results := ScheduledProbeResults([]int{21})
+	if len(results) != 1 || results[21].ProbedAt != stale {
+		t.Fatalf("expected 一天前的结论照旧可见, actual %+v", results)
 	}
 }
 
-// TestScheduledProbeResultPrunesExpired 验证写入路径顺手清理旧结论, 使这张表收敛在有效期内的条数。
-func TestScheduledProbeResultPrunesExpired(t *testing.T) {
+// TestScheduledProbeResultOverwrittenByNext 下一次结论要顶掉上一次, 包括由通变不通。
+// 只留旧结论同样不行: 监控的意义就在于把"现在不通了"及时摆在脸上。
+func TestScheduledProbeResultOverwrittenByNext(t *testing.T) {
 	scheduledProbeResultMu.Lock()
 	scheduledProbeResults = make(map[int]ProbeResult)
 	scheduledProbeResultMu.Unlock()
 
-	expired := time.Now().Add(-2 * probeResultTTL).UnixMilli()
-	recordScheduledProbeResult(31, ProbeResult{ItemID: 31, OK: true, ProbedAt: expired})
-	recordScheduledProbeResult(32, ProbeResult{ItemID: 32, OK: true, ProbedAt: time.Now().UnixMilli()})
+	recordScheduledProbeResult(31, ProbeResult{ItemID: 31, OK: true, LatencyMS: 12, ProbedAt: time.Now().UnixMilli()})
+	recordScheduledProbeResult(31, ProbeResult{ItemID: 31, OK: false, Message: "upstream down", ProbedAt: time.Now().UnixMilli()})
 
-	scheduledProbeResultMu.Lock()
-	defer scheduledProbeResultMu.Unlock()
-	if _, ok := scheduledProbeResults[31]; ok {
-		t.Fatal("expected the expired entry to be pruned on write")
+	results := ScheduledProbeResults([]int{31})
+	if len(results) != 1 {
+		t.Fatalf("expected 一条凭据只留一份结论, actual %+v", results)
 	}
-	if _, ok := scheduledProbeResults[32]; !ok {
-		t.Fatal("expected the fresh entry to survive")
+	if results[31].OK || results[31].Message != "upstream down" {
+		t.Fatalf("expected 后一次结论覆盖前一次, actual %+v", results[31])
+	}
+}
+
+// TestForgetScheduledProbeResults 任务被删掉时要主动丢掉这些结论。
+// 结论不设有效期之后, 没人再测的凭据会永远挂着最后一次的绿或红,
+// 而"这条通道还通不通"已经没有人负责回答了 —— 留着比空着更容易误导。
+func TestForgetScheduledProbeResults(t *testing.T) {
+	scheduledProbeResultMu.Lock()
+	scheduledProbeResults = make(map[int]ProbeResult)
+	scheduledProbeResultMu.Unlock()
+
+	now := time.Now().UnixMilli()
+	recordScheduledProbeResult(51, ProbeResult{ItemID: 51, OK: true, ProbedAt: now})
+	recordScheduledProbeResult(52, ProbeResult{ItemID: 52, OK: true, ProbedAt: now})
+
+	ForgetScheduledProbeResults([]int{51})
+
+	if results := ScheduledProbeResults([]int{51}); len(results) != 0 {
+		t.Fatalf("expected 被遗忘的凭据不再有结论, actual %+v", results)
+	}
+	if results := ScheduledProbeResults([]int{52}); len(results) != 1 {
+		t.Fatalf("expected 别的凭据不受牵连, actual %+v", results)
 	}
 }
 

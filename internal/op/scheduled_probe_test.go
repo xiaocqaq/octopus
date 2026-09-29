@@ -113,6 +113,139 @@ func TestExcludeKeyDoesNotDuplicateRepeatedAdds(t *testing.T) {
 	}
 }
 
+// seedSharedKeyCreditCaches 造一个渠道、两个模型、两条共用凭据构成的四条授权。
+// 不建库只灌缓存: 这一组用例问的是"顺序怎么排", 走库只会让测试变慢而不多验证任何东西。
+func seedSharedKeyCreditCaches(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		channelCache.Clear()
+		channelKeyCache.Clear()
+		channelModelCache.Clear()
+		channelGrantCache.Clear()
+	}
+	t.Cleanup(clear)
+	clear()
+
+	channelCache.Set(2, model.Channel{ID: 2, ChannelConfig: model.ChannelConfig{Name: "Demo", Enabled: true}})
+	for index, name := range []string{"k-1", "k-2"} {
+		keyID := 30 + index
+		channelKeyCache.Set(keyID, model.ChannelKey{
+			ID:               keyID,
+			ChannelID:        2,
+			ChannelKeyConfig: model.ChannelKeyConfig{Name: name, Enabled: true},
+		})
+	}
+	channelModelCache.Set(20, model.ChannelModel{ID: 20, ChannelID: 2, Name: "m-a"})
+	channelModelCache.Set(21, model.ChannelModel{ID: 21, ChannelID: 2, Name: "m-b"})
+	channelGrantCache.Set(40, model.ChannelGrant{ID: 40, ChannelModelID: 20, ChannelKeyID: 30})
+	channelGrantCache.Set(41, model.ChannelGrant{ID: 41, ChannelModelID: 20, ChannelKeyID: 31})
+	channelGrantCache.Set(42, model.ChannelGrant{ID: 42, ChannelModelID: 21, ChannelKeyID: 30})
+	channelGrantCache.Set(43, model.ChannelGrant{ID: 43, ChannelModelID: 21, ChannelKeyID: 31})
+}
+
+// creditGrantIDsOf 把凭据列表压成授权主键序列, 便于用一行断言写出期望顺序。
+func creditGrantIDsOf(credits []ScheduledProbeCredit) []int {
+	grantIDs := make([]int, 0, len(credits))
+	for _, credit := range credits {
+		grantIDs = append(grantIDs, credit.GrantID)
+	}
+	return grantIDs
+}
+
+func sameInts(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// twoModelProbe 造一条挂了 m-a、m-b 两个目标的任务。
+func twoModelProbe() model.ScheduledProbe {
+	return model.ScheduledProbe{Targets: []model.ScheduledProbeTarget{
+		{ChannelID: 2, ModelName: "m-a"},
+		{ChannelID: 2, ModelName: "m-b"},
+	}}
+}
+
+// 默认顺序是"先按目标, 目标内按凭据名"。这份顺序同时是界面上的行顺序与轮转顺序,
+// 所以它必须确定且可复现 —— 两个入口各排一次, 迟早会分岔成两份不一样的顺序。
+func TestScheduledProbeCreditsFlattensTargetsThenKeys(t *testing.T) {
+	seedSharedKeyCreditCaches(t)
+
+	actual := creditGrantIDsOf(ScheduledProbeCredits(twoModelProbe()))
+
+	if expected := []int{40, 41, 42, 43}; !sameInts(expected, actual) {
+		t.Fatalf("expected %v, actual %v", expected, actual)
+	}
+}
+
+// 拖到最前的那条要真的排到最前: 它就是下一拍会被测的那条。
+func TestScheduledProbeCreditsAppliesUserOrder(t *testing.T) {
+	seedSharedKeyCreditCaches(t)
+	probe := twoModelProbe()
+	probe.CreditOrder = []string{CreditKey(2, "m-b", "k-2")}
+
+	actual := creditGrantIDsOf(ScheduledProbeCredits(probe))
+
+	// 列过的排最前, 其余保持默认顺序跟在后面。
+	if expected := []int{43, 40, 41, 42}; !sameInts(expected, actual) {
+		t.Fatalf("expected %v, actual %v", expected, actual)
+	}
+}
+
+// 用户后来新增的凭据不在顺序表里, 应当接在末尾而不是消失或插到最前。
+func TestScheduledProbeCreditsAppendsUnlistedAtTheEnd(t *testing.T) {
+	seedSharedKeyCreditCaches(t)
+	probe := twoModelProbe()
+	probe.CreditOrder = []string{CreditKey(2, "m-b", "k-1")}
+
+	actual := creditGrantIDsOf(ScheduledProbeCredits(probe))
+
+	if expected := []int{42, 40, 41, 43}; !sameInts(expected, actual) {
+		t.Fatalf("expected %v, actual %v", expected, actual)
+	}
+}
+
+// 顺序表里的项已经消失(凭据被删、渠道被改)时不该影响出结果 ——
+// 那些记录留着不清理是有意为之, 读的时候只认此刻还存在的凭据。
+func TestScheduledProbeCreditsIgnoresStaleOrderEntries(t *testing.T) {
+	seedSharedKeyCreditCaches(t)
+	probe := twoModelProbe()
+	probe.CreditOrder = []string{
+		CreditKey(2, "已经不存在的模型", "k-9"),
+		CreditKey(2, "m-b", "k-2"),
+		CreditKey(999, "m-a", "k-1"),
+	}
+
+	actual := creditGrantIDsOf(ScheduledProbeCredits(probe))
+
+	if expected := []int{43, 40, 41, 42}; !sameInts(expected, actual) {
+		t.Fatalf("expected %v, actual %v", expected, actual)
+	}
+}
+
+// 被逐行删掉的凭据先按排除项出局, 顺序表里就算列着它也不该把它带回来。
+func TestScheduledProbeCreditsDropsExcludedEvenIfListedInOrder(t *testing.T) {
+	seedSharedKeyCreditCaches(t)
+	probe := model.ScheduledProbe{
+		Targets: []model.ScheduledProbeTarget{
+			{ChannelID: 2, ModelName: "m-a", ExcludedKeys: []string{"k-1"}},
+			{ChannelID: 2, ModelName: "m-b"},
+		},
+		CreditOrder: []string{CreditKey(2, "m-a", "k-1"), CreditKey(2, "m-b", "k-2")},
+	}
+
+	actual := creditGrantIDsOf(ScheduledProbeCredits(probe))
+
+	if expected := []int{43, 41, 42}; !sameInts(expected, actual) {
+		t.Fatalf("expected %v, actual %v", expected, actual)
+	}
+}
 // 空名称是合法凭据名(界面上显示成 #<授权ID>), 隐藏它不能变成"什么都不做"。
 func TestExcludeKeyTreatsEmptyNameAsARealKey(t *testing.T) {
 	keys := excludeKey(nil, "", true)

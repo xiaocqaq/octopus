@@ -26,6 +26,7 @@
     "probeFailed": "失敗",
     "noTarget": "暫無監控目標",
     "removeCredential": "不再監控這條憑據",
+    "dragToSort": "拖動可調整測活順序",
     "excludedCount": "已隱藏 {count} 條憑據",
     "restoreAll": "全部恢復",
     "window": {
@@ -70,7 +71,7 @@
         "selectedCount": "已選 {count} 項",
         "modelCount": "{count} 個模型",
         "interval": "間隔（分鐘）",
-        "intervalHint": "到點後每輪只測一條憑證，多目標與多憑證按順序輪轉；實際間隔會帶 ±30 秒的隨機抖動，避免同時打上游。",
+        "intervalHint": "每條憑據各測一次所需的週期。這個間隔會按憑據條數均攤開，保證一次只打一條上游，不會同時湧出一批請求；實際時刻還帶一點隨機抖動（最多 ±30 秒，且不超過間隔的四分之一），避免多條任務擠在一起。",
         "window": "測活時段",
         "windowHint": "不選星期即全天可測；選了星期則只在所選星期的時段內測活，時段之外自動跳過。",
         "startHour": "開始整點",

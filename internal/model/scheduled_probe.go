@@ -55,6 +55,16 @@ type ScheduledProbe struct {
 	// Targets 是该任务要监控的目标集合。读取顺序即轮转顺序, 见 op.ScheduledProbeTargets 的定序说明。
 	// 级联删除: 任务没了, 它挂的目标不该留在库里成为孤儿行。
 	Targets []ScheduledProbeTarget `json:"targets" gorm:"foreignKey:ProbeID;constraint:OnDelete:CASCADE"`
+
+	// CreditOrder 是用户拖出来的凭据顺序, 每一项形如 "渠道ID\x00模型名\x00凭据名"。
+	//
+	// 顺序按凭据记而不是按目标记: 轮转是扁平的(每一拍测下一条凭据), 界面上也是一行一条,
+	// 两者必须读同一份顺序 —— 否则"把这条拖到最前"在界面上成立、在调度里却不成立。
+	//
+	// 没列进来的凭据排在列过的之后, 并保持默认顺序(目标主键、凭据名):
+	// 用户后来新增的目标或凭据会自然接在末尾, 不必回头再拖一次; 记录里已经消失的项留着也无害 ——
+	// 读的时候只认此刻仍然存在的那些, 不必在删除凭据时回头维护这张表。
+	CreditOrder []string `json:"credit_order" gorm:"serializer:json"`
 }
 
 // ScheduledProbeTarget 是任务下的一个被监控目标: 某个渠道下的某个模型。
