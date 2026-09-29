@@ -27,21 +27,19 @@ const (
 	ScheduledProbeDefaultIntervalMinutes = 10
 )
 
-// ScheduledProbe 是一条定时测活任务: 按固定间隔对指定渠道下的指定模型打一次真实上游请求。
+// ScheduledProbe 是一条定时测活任务: 一个自定义名字下面挂若干个被监控的目标。
 //
-// 任务只记 (渠道, 模型), 不记凭据。同一模型在同一渠道下可能挂多条凭据(授权), 那是"怎么转发"的细节,
-// 而用户要盯的是"这个渠道的这个模型此刻还活着吗"。多条凭据由调度器按轮转逐次探测, 一拍只测一条授权:
-// 测活打的是真实上游, 一拍把全部凭据一起打会在上游留下一次突发流量, 结论也不再是同一时刻的快照。
+// 任务与目标分两张表: 用户要的是"把几个模型放在一个标题下统一看",
+// 而"测哪一条"的最小单位是 (渠道, 模型) —— 一个任务挂多个目标是常态,
+// 把目标塞进任务的列里就得为一个任务存 N 行重复的间隔与时段配置。
 //
-// 时间窗留空(星期掩码为 0)表示不限制; 填了掩码才按窗口跳过窗口之外的时间。
+// 名字由用户自定, 通常就是模型名; 不拿目标反推名字: 一个任务挂了三个模型时,
+// 界面上需要一个能概括它们的称呼, 而这个称呼只有用户知道该怎么起。
 type ScheduledProbe struct {
-	ID        int `json:"id" gorm:"primaryKey"`             // 任务主键。
-	ChannelID int `json:"channel_id" gorm:"not null;index"` // 被监控的渠道 ID。
-	// ModelName 是被监控的上游模型名称, 必须属于 ChannelID 指向的渠道; 归属关系在提交时校验。
-	// 存名称而不是渠道模型主键: 渠道页整体替换模型集合时会重建主键, 按名称存的任务不会因此失效。
-	ModelName       string `json:"model_name" gorm:"not null"`
-	IntervalMinutes int    `json:"interval_minutes" gorm:"not null;default:10"` // 两次探测之间的间隔分钟数。
-	Enabled         bool   `json:"enabled" gorm:"not null;default:true"`        // 是否参与调度; 停用后不再探测, 配置保留。
+	ID   int    `json:"id" gorm:"primaryKey"`                  // 任务主键。
+	Name string `json:"name" gorm:"not null;default:''"`       // 任务的自定义名字, 界面上通常就是模型名。
+	IntervalMinutes int `json:"interval_minutes" gorm:"not null;default:10"` // 两次探测之间的间隔分钟数。
+	Enabled         bool `json:"enabled" gorm:"not null;default:true"`       // 是否参与调度; 停用后不再探测, 配置保留。
 	// Weekdays 是时间窗的星期掩码, 0 表示不限制星期(全天可测)。
 	Weekdays int `json:"weekdays" gorm:"not null;default:0"`
 	// StartHour 与 EndHour 是时间窗的起止整点(0-23), 只在 Weekdays 非 0 时有意义。
@@ -53,6 +51,24 @@ type ScheduledProbe struct {
 	// 不用默认的秒级: 前端按毫秒渲染, 秒级会在界面上显示成 1970 年附近的时刻。
 	CreatedAt int64 `json:"created_at" gorm:"autoCreateTime:milli"`
 	UpdatedAt int64 `json:"updated_at" gorm:"autoUpdateTime:milli"`
+
+	// Targets 是该任务要监控的目标集合。读取顺序即轮转顺序, 见 op.ScheduledProbeTargets 的定序说明。
+	// 级联删除: 任务没了, 它挂的目标不该留在库里成为孤儿行。
+	Targets []ScheduledProbeTarget `json:"targets" gorm:"foreignKey:ProbeID;constraint:OnDelete:CASCADE"`
+}
+
+// ScheduledProbeTarget 是任务下的一个被监控目标: 某个渠道下的某个模型。
+//
+// 只记 (渠道, 模型), 不记凭据。同一模型在同一渠道下可能挂多条凭据(授权), 那是"怎么转发"的细节,
+// 而用户要盯的是"这个渠道的这个模型此刻还活着吗"。多条凭据由调度器按轮转逐次探测, 一拍只测一条授权:
+// 测活打的是真实上游, 一拍把全部凭据一起打会在上游留下一次突发流量, 结论也不再是同一时刻的快照。
+//
+// 模型存名称而不是渠道模型主键: 渠道页整体替换模型集合时会重建主键, 按名称存的目标不会因此失效。
+type ScheduledProbeTarget struct {
+	ID        int    `json:"id" gorm:"primaryKey"`                     // 目标主键。
+	ProbeID   int    `json:"probe_id" gorm:"not null;index"`           // 所属任务 ID。
+	ChannelID int    `json:"channel_id" gorm:"not null"`               // 被监控的渠道 ID。
+	ModelName string `json:"model_name" gorm:"not null"`               // 被监控的上游模型名称, 必须属于该渠道。
 }
 
 // WindowOpen 判断给定时刻是否落在该任务的时间窗内。
@@ -97,22 +113,52 @@ func (probe ScheduledProbe) crossMidnightOpen(day, hour int) bool {
 	return hour < probe.EndHour && probe.hasWeekday((day+6)%7)
 }
 
+// ScheduledProbeRow 是界面上的一行, 对应一条渠道凭据。
+//
+// 按凭据而不是按目标出行: 一个目标可能挂着多条凭据, 只出一行就没法逐条看结论、也没法逐条手动测;
+// 而"哪条凭据不通"恰恰是排查时唯一有用的粒度。
+//
+// 结论字段就地平铺而不嵌套一个可空结构: 前端要判断的是"这一行有没有结论",
+// 一个 probed 布尔比一个空对象少一层判空, 少一层判空就少一处可能写错的地方。
+type ScheduledProbeRow struct {
+	GrantID     int    `json:"grant_id"`     // 渠道授权主键, 手动测试按它发起。
+	ChannelID   int    `json:"channel_id"`   // 所属渠道 ID。
+	ChannelName string `json:"channel_name"` // 渠道名称; 渠道已删除时为空。
+	ModelName   string `json:"model_name"`   // 目标模型名称。
+	KeyName     string `json:"key_name"`     // 该授权所用凭据的名称。
+	Probed      bool   `json:"probed"`       // 是否有仍在有效期内的结论; 为假时下面的字段全部无意义。
+	OK          bool   `json:"ok"`           // 该凭据本轮是否调通。
+	LatencyMS   int64  `json:"latency_ms"`   // 从发起到收到有效响应的耗时毫秒数。
+	Message     string `json:"message"`      // 成功时为空, 失败时为上游错误正文或本地配置错误。
+	ProbedAt    int64  `json:"probed_at"`    // 结论产生时间, Unix 毫秒。
+}
+
 // ScheduledProbeView 是定时测活任务的列表项: 任务配置加两处现算的展示字段。
-// 这两个字段都随渠道配置变动, 不落库: 存下来就得在每次渠道改动后跟着刷新一遍。
+// 这些字段都随渠道配置与探测进展变动, 不落库: 存下来就得在每次渠道改动、每次探测后跟着刷新一遍。
 type ScheduledProbeView struct {
 	ScheduledProbe
-	ChannelName string `json:"channel_name"` // 渠道名称; 渠道已删除时为空, 界面据此显示主键。
-	GrantCount  int    `json:"grant_count"`  // 当前可轮转的授权条数; 0 表示这条任务此刻没有可测的凭据。
+	// Rows 是各条凭据的当前状态, 也是界面上一行一条的渲染依据。
+	// 尚无结论的凭据同样出行(probed 为假): 不给它出行, 用户就点不到那一行的手动测试按钮,
+	// 第一次测活也就无从发起 —— 那正是最需要这个按钮的时候。
+	Rows []ScheduledProbeRow `json:"rows"`
+}
+
+// ScheduledProbeTargetRequest 提交一个被监控目标。
+type ScheduledProbeTargetRequest struct {
+	ChannelID int    `json:"channel_id" binding:"required"` // 被监控的渠道。
+	ModelName string `json:"model_name" binding:"required"` // 被监控的模型, 必须属于该渠道。
 }
 
 // ScheduledProbeRequest 是创建与更新共用的提交形状。
 // 定时测活字段少且一次整体提交, 无需另建更新类型; 主键走路径, 不进请求体。
 type ScheduledProbeRequest struct {
-	ChannelID       int    `json:"channel_id" binding:"required"`                      // 被监控的渠道。
-	ModelName       string `json:"model_name" binding:"required"`                      // 被监控的模型, 必须属于该渠道。
-	IntervalMinutes int    `json:"interval_minutes" binding:"required,min=1,max=1440"` // 探测间隔分钟数。
-	Enabled         bool   `json:"enabled"`                                            // 是否启用; 创建时忽略该字段, 新建任务一律先启用。
-	Weekdays        int    `json:"weekdays" binding:"min=0,max=127"`                   // 时间窗星期掩码, 0 表示不限制。
-	StartHour       int    `json:"start_hour" binding:"min=0,max=23"`                  // 时间窗起始整点。
-	EndHour         int    `json:"end_hour" binding:"min=0,max=23"`                    // 时间窗结束整点。
+	Name string `json:"name" binding:"required"` // 任务的自定义名字, 界面上通常就是模型名。
+	// Targets 整体替换: 目标集合是一次编辑里定稿的, 逐个增删要额外定义"没传的目标算不算删除"。
+	// dive 让校验下沉到每个元素: 少一个渠道 ID 也能定位到是哪一个目标写错了。
+	Targets         []ScheduledProbeTargetRequest `json:"targets" binding:"required,min=1,dive"`
+	IntervalMinutes int                           `json:"interval_minutes" binding:"required,min=1,max=1440"` // 探测间隔分钟数。
+	Enabled         bool                          `json:"enabled"`                                            // 是否启用; 创建时忽略该字段, 新建任务一律先启用。
+	Weekdays        int                           `json:"weekdays" binding:"min=0,max=127"`                   // 时间窗星期掩码, 0 表示不限制。
+	StartHour       int                           `json:"start_hour" binding:"min=0,max=23"`                  // 时间窗起始整点。
+	EndHour         int                           `json:"end_hour" binding:"min=0,max=23"`                    // 时间窗结束整点。
 }

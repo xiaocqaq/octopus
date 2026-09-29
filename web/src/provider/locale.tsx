@@ -5,7 +5,7 @@ import { useSettingStore, type Locale } from '@/stores/setting';
 import zh_hansMessages from '@/locales/zh_hans.json';
 import zh_hantMessages from '@/locales/zh_hant.json';
 import enMessages from '@/locales/en.json';
-// 定时测活的文案单独成文件: 这几个键值属于一个独立功能, 混进那三个动辄数百行的大文件里
+// 模型监控的文案单独成文件: 这几个键值属于一个独立功能, 混进那三个动辄数百行的大文件里
 // 既容易在合并上游时冲突, 也看不出它们是一套。
 import scheduledProbeZhHans from '@/locales/scheduled-probe.zh_hans.json';
 import scheduledProbeZhHant from '@/locales/scheduled-probe.zh_hant.json';

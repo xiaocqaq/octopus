@@ -1,13 +1,35 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from './client';
 
-// ScheduledProbe 是「定时测活」的一条任务：按固定间隔轮流探测指定渠道下的指定模型。
-// 顺序由后端按创建先后维护（轮转），前端不参与排序，故这里也不带任何权重字段。
+// ScheduledProbeRow 是卡片里的一行，对应一条渠道凭据（渠道名 + 凭据名）。
+// 按凭据出行而不是按目标：一个目标可能挂多条凭据，只出一行就既看不到「哪条不通」，
+// 也点不到那一行的手动测试按钮，而排查时唯一有用的粒度就是单条凭据。
+export type ScheduledProbeRow = {
+    grant_id: number; // 手动测试按它发起；为 0 表示该目标当下没有可测凭据。
+    channel_id: number;
+    channel_name: string;
+    model_name: string;
+    key_name: string;
+    // probed 为假表示还没有仍在有效期内的结论，此时下面几个字段都无意义。
+    probed: boolean;
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    probed_at: number;
+};
+
+// ScheduledProbeTarget 是一个被监控目标：某个渠道下的某个模型。
+export type ScheduledProbeTarget = {
+    channel_id: number;
+    model_name: string;
+};
+
+// ScheduledProbe 是「模型监控」的一条任务：一个自定义名字下面挂若干被监控目标。
+// 名字通常就是模型名，但不拿目标反推：一个任务挂了多个模型时，需要一个能概括它们的称呼。
 export type ScheduledProbe = {
     id: number;
-    channel_id: number;
-    channel_name: string; // 后端补上的渠道名，列表直接展示，无需再拉渠道列表。
-    model_name: string;
+    name: string;
+    targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
     // weekdays 是星期掩码（周一为第 0 位，周日为第 6 位），0 表示不限星期。
@@ -15,8 +37,8 @@ export type ScheduledProbe = {
     weekdays: number;
     start_hour: number;
     end_hour: number;
-    // grant_count 是该渠道模型当前可探的授权数（凭据数）；为 0 说明渠道或凭据被停用，测活会空转。
-    grant_count: number;
+    // rows 是各条凭据的当前状态，也是卡片上一行一条的渲染依据；无结论的凭据同样出行。
+    rows: ScheduledProbeRow[];
     created_at: number;
     updated_at: number;
 };
@@ -39,8 +61,8 @@ export const SCHEDULED_PROBE_HOURS = Array.from({ length: 24 }, (_, hour) => hou
 
 // ScheduledProbeInput 是创建与更新共用的提交体，读写同构。
 export type ScheduledProbeInput = {
-    channel_id: number;
-    model_name: string;
+    name: string;
+    targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
     weekdays: number;
@@ -48,18 +70,18 @@ export type ScheduledProbeInput = {
     end_hour: number;
 };
 
-// scheduledProbeListQueryOptions 供页面查询与启动预取共享定时测活列表定义。
+// scheduledProbeListQueryOptions 供页面查询与启动预取共享模型监控列表定义。
 export const scheduledProbeListQueryOptions = queryOptions({
     queryKey: ['scheduled-probes', 'list'],
     queryFn: () => apiRequest<ScheduledProbe[]>('/api/v1/scheduled-probe/list'),
 });
 
-// useScheduledProbeList 读取全部定时测活任务。
+// useScheduledProbeList 读取全部模型监控任务。
 export function useScheduledProbeList() {
     return useQuery(scheduledProbeListQueryOptions);
 }
 
-// useCreateScheduledProbe 新建一条定时测活任务。
+// useCreateScheduledProbe 新建一条模型监控任务。
 // 后端在写入后立即唤醒调度器，故这里只需失效列表：无需重启即生效是后端的职责。
 export function useCreateScheduledProbe() {
     const queryClient = useQueryClient();
@@ -89,6 +111,31 @@ export function useDeleteScheduledProbe() {
     return useMutation({
         mutationFn: (id: number) =>
             apiRequest<null>(`/api/v1/scheduled-probe/delete/${id}`, { method: 'DELETE' }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// useProbeScheduledNow 把一条任务的全部目标与凭据测一遍。
+// 必须传一个空对象当 body 而不是省略它：省略后 apiRequest 不会设 Content-Type，
+// 而后端的 RequireJSON 会以 415 拒绝任何不带 application/json 的 POST —— 这个按钮就会永远点不动。
+export function useProbeScheduledNow() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (id: number) =>
+            apiRequest<ScheduledProbeRow[]>(`/api/v1/scheduled-probe/probe/${id}`, { method: 'POST', body: {} }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// useProbeGrantNow 只测一条凭据，供卡片里那一行末尾的闪电按钮使用。
+// 同样必须带 body，理由同上。
+export function useProbeGrantNow() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (grantId: number) =>
+            apiRequest<unknown>(`/api/v1/scheduled-probe/probe-grant/${grantId}`, { method: 'POST', body: {} }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }

@@ -45,7 +45,7 @@
         "model": "Price",
         "log": "Log",
         "setting": "Setting",
-        "probe": "Model Probe"
+        "probe": "Model Monitor"
     },
     "toolbar": {
         "hideChannelName": "Blur channel names",

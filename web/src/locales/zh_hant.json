@@ -45,7 +45,7 @@
         "model": "價格",
         "log": "日誌",
         "setting": "設定",
-        "probe": "定時測活"
+        "probe": "模型監控"
     },
     "toolbar": {
         "hideChannelName": "模糊渠道名稱",

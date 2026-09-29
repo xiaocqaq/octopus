@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -134,26 +135,39 @@ func scheduledProbeDue(id int, now time.Time) bool {
 	return !ok || now.UnixMilli() >= state.nextDueAt
 }
 
-// runScheduledProbe 探测一条任务的一条授权, 并推进它的调度进度。
+// runScheduledProbe 探测一条任务的一个目标的一条授权, 并推进它的调度进度。
+//
+// 目标与授权两级轮转: 目标的序号取 cursor % 目标数, 授权取 (cursor / 目标数) % 该目标的凭据数。
+// 这样每一拍目标就往前走一格(而不是等一轮凭据走完才换目标), 用户看到的正是"几个模型依次被测";
+// 同一个目标的凭据则隔一轮换一条 —— 两级都要走到, 又不能用同一个模数把两级绑死。
 func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
-	grantIDs := op.ScheduledProbeGrantIDs(target.ChannelID, target.ModelName)
-	if len(grantIDs) == 0 {
-		// 没有可测的授权(渠道或凭据被停用, 模型已被移除): 这不是"通道不通", 不该落一条失败结论,
+	if len(target.Targets) == 0 {
+		// 没有目标(理论上创建时已拦下, 但渠道改动后可能落到这里): 这不是"通道不通", 不该落失败结论,
 		// 只把下一次探测推后, 等用户把配置改回来。
 		advanceScheduledProbe(target, now, false)
 		return
 	}
 
-	grantID := grantIDs[scheduledProbeGrantCursor(target.ID)%len(grantIDs)]
+	cursor := scheduledProbeGrantCursor(target.ID)
+	item := target.Targets[cursor%len(target.Targets)]
+
+	grantIDs := op.ScheduledProbeGrantIDs(item.ChannelID, item.ModelName)
+	if len(grantIDs) == 0 {
+		// 该目标当下没有可测的凭据(渠道或凭据被停用, 模型已被移除): 同上, 推后而不是落失败结论。
+		advanceScheduledProbe(target, now, false)
+		return
+	}
+
+	grantID := grantIDs[(cursor/len(target.Targets))%len(grantIDs)]
 	// 非流式: 定时测活只问"这条通道此刻能不能出结果", 非流式响应体最短, 也不会占着上游连接等首字节;
 	// 界面上那个徽标只看成败, 与流式与否无关。
 	result := ProbeScheduledGrant(context.Background(), grantID, false)
 	if result.OK {
 		log.Debugf("scheduled probe ok: task=%d channel=%d model=%s grant=%d latency=%dms",
-			target.ID, target.ChannelID, target.ModelName, grantID, result.LatencyMS)
+			target.ID, item.ChannelID, item.ModelName, grantID, result.LatencyMS)
 	} else {
 		log.Warnf("scheduled probe failed: task=%d channel=%d model=%s grant=%d latency=%dms message=%s",
-			target.ID, target.ChannelID, target.ModelName, grantID, result.LatencyMS, result.Message)
+			target.ID, item.ChannelID, item.ModelName, grantID, result.LatencyMS, result.Message)
 	}
 	advanceScheduledProbe(target, now, true)
 }
@@ -225,8 +239,40 @@ func notifyProbeLanded(groupIDs []int) {
 // 用户也就无从知道这条任务到底测出了什么 —— 监控的可见形态就是这个徽标。
 func ProbeScheduledGrant(ctx context.Context, grantID int, streaming bool) ProbeResult {
 	result := ProbeChannelGrant(ctx, grantID, streaming)
+	// 先按凭据记一份: 任务测的是 (渠道, 模型), 它可能压根没被任何分组引用,
+	// 那份结论只落进分组就等于没记, 界面上也就看不到这条任务到底测出了什么。
+	recordScheduledProbeResult(grantID, result)
 	notifyProbeLanded(landScheduledProbe(grantID, result))
 	return result
+}
+
+// ProbeScheduledNow 立即探测一条任务的全部目标与全部凭据, 供界面上的"立刻测一次"使用。
+//
+// 与调度器的差别只在触发来源与范围: 调度器一拍只测一个组合(FIFO 轮转, 避免在上游留下突发流量),
+// 而手动触发是用户的明确意图, 他要的是"现在就把这条任务弄清楚", 只测其中一条反而会让人以为是坏的 ——
+// 全部组合一次测完, 但也因此不做并发, 逐条串行, 免得一次点击就在上游打出一串并发请求。
+//
+// 探测结论照常落点(recordScheduledProbeResult + landScheduledProbe), 与定时探测完全同一条路径:
+// 手动测出来的结论与定时测出来的结论本就该是同一件事, 不该有两套口径。
+func ProbeScheduledNow(ctx context.Context, probe model.ScheduledProbe) ([]ProbeResult, error) {
+	results := make([]ProbeResult, 0, len(probe.Targets))
+	for _, target := range probe.Targets {
+		for _, grantID := range op.ScheduledProbeGrantIDs(target.ChannelID, target.ModelName) {
+			// 与定时探测同一取舍: 非流式只问"能不能出结果", 响应体最短, 也不占着上游连接等首字节。
+			results = append(results, ProbeScheduledGrant(ctx, grantID, false))
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no available credential for this probe")
+	}
+	return results, nil
+}
+
+// ProbeGrantNow 立即探测单条渠道凭据, 供界面上一行末尾的闪电按钮使用。
+// 与按任务触发分开: 那一行代表的就是这一条凭据, 点它却把整批都测一遍,
+// 既多打了上游, 也让"我点的是这一行"这个意图落空。
+func ProbeGrantNow(ctx context.Context, grantID int) ProbeResult {
+	return ProbeScheduledGrant(ctx, grantID, false)
 }
 
 // landScheduledProbe 把结论落到引用该授权的每个分组成员上, 返回需要处理器补推事件的分组 ID。

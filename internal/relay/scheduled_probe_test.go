@@ -17,9 +17,20 @@ func resetScheduledProbeScheduler() {
 	lastProbedID = 0
 }
 
-// dueProbe 造一条已到点(无进度记录即视为到点)的任务。
+// dueProbe 造一条已到点(无进度记录即视为到点)的任务, 带一个目标。
 func dueProbe(id int) model.ScheduledProbe {
-	return model.ScheduledProbe{ID: id, ChannelID: 1, ModelName: "m", IntervalMinutes: 10, Enabled: true}
+	return model.ScheduledProbe{
+		ID:              id,
+		Name:            "probe",
+		IntervalMinutes: 10,
+		Enabled:         true,
+		Targets:         []model.ScheduledProbeTarget{{ID: id, ProbeID: id, ChannelID: 1, ModelName: "m"}},
+	}
+}
+
+// dueProbeWithTargets 造一条挂了多个目标的任务, 用于验证两级轮转。
+func dueProbeWithTargets(id int, targets ...model.ScheduledProbeTarget) model.ScheduledProbe {
+	return model.ScheduledProbe{ID: id, Name: "probe", IntervalMinutes: 10, Enabled: true, Targets: targets}
 }
 
 // probeInterval 是用例里的探测间隔; 与 dueProbe 一致, 便于按间隔推演每一拍的时刻。
@@ -168,6 +179,54 @@ func TestScheduledProbeNoTargets(t *testing.T) {
 	if _, ok := nextScheduledProbe(nil, time.Now()); ok {
 		t.Fatalf("没有任务时不该选中任何一条")
 	}
+}
+
+// TestScheduledProbeRotatesAcrossTargets 一条任务挂了多个目标时, 每一拍的目标应该依次轮转。
+// 只测第一个目标等于其余目标永远不被监控, 而用户把它们放进同一个任务就是要一起看。
+func TestScheduledProbeRotatesAcrossTargets(t *testing.T) {
+	resetScheduledProbeScheduler()
+	probe := dueProbeWithTargets(1,
+		model.ScheduledProbeTarget{ID: 1, ProbeID: 1, ChannelID: 1, ModelName: "m-a"},
+		model.ScheduledProbeTarget{ID: 2, ProbeID: 1, ChannelID: 1, ModelName: "m-b"},
+		model.ScheduledProbeTarget{ID: 3, ProbeID: 1, ChannelID: 1, ModelName: "m-c"},
+	)
+
+	// 直接推演"这一拍会挑中哪个目标", 不发起真实上游调用。
+	// 目标序号与 runScheduledProbe 里的取法保持一致: cursor % 目标数。
+	seen := make([]int, 0, 6)
+	for round := 0; round < 6; round++ {
+		cursor := scheduledProbeGrantCursor(probe.ID)
+		seen = append(seen, cursor%len(probe.Targets))
+		scheduledProbeMu.Lock()
+		state := scheduledProbeStates[probe.ID]
+		if state == nil {
+			state = &scheduledProbeState{}
+			scheduledProbeStates[probe.ID] = state
+		}
+		state.grantCursor++
+		scheduledProbeMu.Unlock()
+	}
+
+	want := []int{0, 1, 2, 0, 1, 2}
+	for i, expected := range want {
+		if seen[i] != expected {
+			t.Fatalf("第 %d 拍应轮到第 %d 个目标, 却得到 %d (序列 %v)", i+1, expected, seen[i], seen)
+		}
+	}
+}
+
+// TestScheduledProbeFallsBackWithoutTargets 没有目标的任务不该 panic, 只把进度推后。
+// 创建时已拦下空目标, 但渠道改动后任务可能落到这个状态, 那时调度器仍要能安全跳过它。
+func TestScheduledProbeFallsBackWithoutTargets(t *testing.T) {
+	resetScheduledProbeScheduler()
+	probe := dueProbeWithTargets(1)
+	runScheduledProbe(probe, time.Now())
+
+	if !scheduledProbeDue(1, time.Now()) {
+		// 已推进过进度, 说明确实走完了 advance 分支而不是在半路 panic。
+		return
+	}
+	t.Fatal("空目标任务应把下一次探测推后")
 }
 
 // TestApplyProbeCooldownOnFailure 定时测活失败即按分组配置冷却, 人工测活失败不冷却。

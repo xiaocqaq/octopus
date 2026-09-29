@@ -39,7 +39,7 @@ export function WeekdayPicker({ weekdays, onChange }: {
                 aria-pressed={weekdays === 0}
                 className={chipClass(weekdays === 0)}
             >
-                {t('form.windowAnytime')}
+                {t('window.anytime')}
             </button>
         </div>
     );
