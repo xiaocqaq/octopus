@@ -249,6 +249,19 @@ export function useChannelStatsByPeriod(days: number, enabled = true) {
 }
 
 /**
+ * channelDetailQueryOptions 是单个渠道完整配置的查询定义。
+ * 抽成函数是为了让"一次取多个渠道"也能复用同一个缓存键：模型监控要按已选渠道批量取模型列表，
+ * 键写在两处，早晚会一边改了另一边读不到缓存。
+ */
+export function channelDetailQueryOptions(id: number) {
+    return queryOptions({
+        queryKey: ['channels', 'detail', id],
+        queryFn: () => apiRequest<ChannelDetail>(`/api/v1/channel/detail/${id}`),
+        refetchOnMount: 'always' as const,
+    });
+}
+
+/**
  * 获取单个渠道完整配置 Hook, 供编辑表单打开时读取; id 为空时不发请求。
  * 不随统计一并取回: 整份配置带着路径、代理与凭据明文, 只有正在编辑的那一个渠道用得上。
  *
@@ -257,10 +270,8 @@ export function useChannelStatsByPeriod(days: number, enabled = true) {
  */
 export function useChannelDetail(id?: number) {
     return useQuery({
-        queryKey: ['channels', 'detail', id],
-        queryFn: () => apiRequest<ChannelDetail>(`/api/v1/channel/detail/${id}`),
+        ...channelDetailQueryOptions(id ?? 0),
         enabled: id !== undefined,
-        refetchOnMount: 'always',
     });
 }
 

@@ -32,13 +32,10 @@ type SearchMultiSelectProps = {
     emptyText: string;
     disabled?: boolean;
     id?: string;
-    // selectAllLabel 为空时不显示"全选"：单选的场景（如只选渠道）不需要它。
+    // selectAllLabel / clearLabel 为空时对应按钮不显示。全选只作用于当前筛选出的可见项，
+    // 于是"搜 DeepSeek 再点全选"就是"把 DeepSeek 的模型一次选上"，这正是批量录入最常用的路径。
     selectAllLabel?: string;
     clearLabel?: string;
-    // single 为真时退化成单选：选中即替换并关闭面板。
-    // 目标行里的渠道与模型各只能有一个，若仍按多选走，用户点第二项会变成两项都选中，
-    // 而调用方只能默默取最后一个 —— 界面上显示两个、提交的却是一个，这种不一致最难排查。
-    single?: boolean;
 };
 
 // matchesQuery 判断一个备选项是否命中搜索词。
@@ -61,7 +58,6 @@ export function SearchMultiSelect({
     id,
     selectAllLabel,
     clearLabel,
-    single = false,
 }: SearchMultiSelectProps) {
     const t = useTranslations('scheduledProbe');
     const [open, setOpen] = useState(false);
@@ -75,12 +71,6 @@ export function SearchMultiSelect({
     const selectedSet = useMemo(() => new Set(selected), [selected]);
 
     const toggle = (value: string) => {
-        if (single) {
-            // 再点一次已选项视为取消：没有这条，用户选错了就没办法清空，只能换一个值。
-            onChange(selectedSet.has(value) ? [] : [value]);
-            setOpen(false);
-            return;
-        }
         onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
     };
 
