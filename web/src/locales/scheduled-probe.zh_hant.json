@@ -48,6 +48,7 @@
         "targetsHint": "每條「渠道 + 模型」組合算一個目標；不同渠道的同名模型各算一個。",
         "targetCount": "將監控 {count} 個目標",
         "targetsEmpty": "選好渠道與模型後，這裡列出最終目標。",
+        "targetsExpanded": "原任務有 {before} 個目標，按目前選擇會變成 {after} 個。",
         "channel": "渠道",
         "channelHint": "可多選；一個模型若被多個渠道提供，會和每個擁有它的渠道各配成一個目標。",
         "channelPlaceholder": "選擇渠道",

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatHour } from './format';
 import { WeekdayPicker } from './WeekdayPicker';
 import { SearchMultiSelect, type SearchOption } from './SearchMultiSelect';
-import { distinct, expandTargets } from './targets';
+import { distinct, expandTargets, sameTargetSet } from './targets';
 
 // ProbeFormValues 是这张表单的产出，与后端的提交体同形状（主键除外）。
 export type ProbeFormValues = {
@@ -163,6 +163,13 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                     <Field>
                         <FieldLabel>{t('form.targets')}</FieldLabel>
                         <TargetPreview targets={targets} nameOf={channelNameOf} />
+                        {/* 编辑旧任务时目标会按"渠道 × 模型"重新展开，可能与存下来的那几条不同：
+                            这种情况必须明说，否则用户只是点开看一眼再保存，任务就悄悄多了几条。 */}
+                        {initial !== undefined && !sameTargetSet(initial.targets, targets) && (
+                            <p className="text-xs text-amber-500">
+                                {t('form.targetsExpanded', { before: initial.targets.length, after: targets.length })}
+                            </p>
+                        )}
                         <FieldDescription>{t('form.targetsHint')}</FieldDescription>
                     </Field>
 

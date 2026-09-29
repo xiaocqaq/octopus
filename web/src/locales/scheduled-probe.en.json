@@ -48,6 +48,7 @@
         "targetsHint": "Each channel + model pair is one target; the same model under different channels counts separately.",
         "targetCount": "{count} targets will be monitored",
         "targetsEmpty": "Pick channels and models to see the resulting targets.",
+        "targetsExpanded": "The task had {before} targets; the current selection makes {after}.",
         "channel": "Channel",
         "channelHint": "Multi-select. A model offered by several channels becomes one target per channel.",
         "channelPlaceholder": "Select channels",

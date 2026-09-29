@@ -1,5 +1,18 @@
 import type { ScheduledProbeTarget } from '@/api/scheduled-probe';
 
+// targetKey 是一条目标的身份，形状与后端去重用的键一致（渠道 + 模型）。
+export function targetKey(target: ScheduledProbeTarget): string {
+    return `${target.channel_id}\u0000${target.model_name}`;
+}
+
+// sameTargetSet 比较两组目标是否等价，只问集合不问顺序：顺序会被展开逻辑重排，
+// 但"还是那几条"与"多出来几条"必须分得清 —— 编辑旧任务时正是靠它发现目标被撑大了。
+export function sameTargetSet(left: ScheduledProbeTarget[], right: ScheduledProbeTarget[]): boolean {
+    if (left.length !== right.length) return false;
+    const keys = new Set(left.map(targetKey));
+    return right.every((target) => keys.has(targetKey(target)));
+}
+
 // distinct 去掉重复值，保留首次出现的顺序：编辑态由既存目标反推渠道与模型时，
 // 同一渠道或同一模型会出现很多次，而用户勾选时的顺序是有意义的（预览按它排）。
 export function distinct<T>(values: T[]): T[] {
