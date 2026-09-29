@@ -25,6 +25,9 @@
     "probeOk": "通过 · {ms}ms",
     "probeFailed": "失败",
     "noTarget": "暂无监控目标",
+    "removeCredential": "不再监控这条凭据",
+    "excludedCount": "已隐藏 {count} 条凭据",
+    "restoreAll": "全部恢复",
     "window": {
         "anytime": "不限时段",
         "everyday": "每天",
@@ -84,6 +87,8 @@
         "deleted": "已删除模型监控任务",
         "probeDone": "测活完成",
         "probeFailed": "测活未通过：{message}",
-        "probePartialFailed": "另有 {count} 条未通过"
+        "probePartialFailed": "另有 {count} 条未通过",
+        "credentialRemoved": "已停止监控这条凭据",
+        "credentialRestored": "已恢复全部凭据"
     }
 }

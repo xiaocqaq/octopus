@@ -22,6 +22,13 @@ export type ScheduledProbeRow = {
 export type ScheduledProbeTarget = {
     channel_id: number;
     model_name: string;
+    // excluded_keys 是该目标下被逐行删掉、不再监控的凭据名。
+    //
+    // 这个字段刻意可选，而且提交时「不传」与「传空数组」是两种意思：
+    // 不传（undefined）表示这次提交不涉及排除项，后端沿用既有值——编辑表单只知道 (渠道, 模型)，
+    // 走的正是这条路，所以编辑一次任务不会让删掉的凭据集体复活；
+    // 传 [] 才是清空排除项，卡片里的「全部恢复」发的就是它。
+    excluded_keys?: string[];
 };
 
 // ScheduledProbe 是「模型监控」的一条任务：一个自定义名字下面挂若干被监控目标。
@@ -136,6 +143,38 @@ export function useProbeGrantNow() {
     return useMutation({
         mutationFn: (grantId: number) =>
             apiRequest<unknown>(`/api/v1/scheduled-probe/probe-grant/${grantId}`, { method: 'POST', body: {} }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// ScheduledProbeCredentialInput 是隐藏/恢复一条凭据的提交形状。
+export type ScheduledProbeCredentialInput = {
+    id: number;
+    channelId: number;
+    modelName: string;
+    keyName: string;
+    // excluded 为真表示不再监控这条凭据，为假表示恢复监控。
+    excluded: boolean;
+};
+
+// useSetScheduledProbeCredential 隐藏或恢复某个目标下的一条凭据，供卡片里那一行末尾的 × 使用。
+//
+// 单独一个接口而不是提交整条任务：那一行只知道自己的渠道、模型与凭据名，走整条提交就得把任务其余字段
+// 也一并回传，一次行内删除会变成一次全量覆盖——用户此刻只想动一行，不该顺带承担覆盖别处的风险。
+export function useSetScheduledProbeCredential() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (data: ScheduledProbeCredentialInput) =>
+            apiRequest<ScheduledProbe>(`/api/v1/scheduled-probe/credential/${data.id}`, {
+                method: 'POST',
+                body: {
+                    channel_id: data.channelId,
+                    model_name: data.modelName,
+                    key_name: data.keyName,
+                    excluded: data.excluded,
+                },
+            }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }

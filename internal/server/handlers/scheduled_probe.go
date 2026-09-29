@@ -40,6 +40,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/probe-grant/:grantID", http.MethodPost).
 				Handle(probeGrantNow),
+		).
+		AddRoute(
+			router.NewRoute("/credential/:id", http.MethodPost).
+				Handle(setScheduledProbeCredential),
 		)
 
 	// 定时测活跑在后台, 没有请求上下文可以捎带事件; 结论落点后由这里补推一次分组事件,
@@ -80,7 +84,7 @@ func scheduledProbeViews() []model.ScheduledProbeView {
 func probeRows(probe model.ScheduledProbeView) []model.ScheduledProbeRow {
 	rows := make([]model.ScheduledProbeRow, 0, len(probe.Targets))
 	for _, target := range probe.Targets {
-		grantIDs := op.ScheduledProbeGrantIDs(target.ChannelID, target.ModelName)
+		grantIDs := op.ScheduledProbeGrantIDs(target)
 		results := relay.ScheduledProbeResults(grantIDs)
 		channelName := op.ChannelNameOf(target.ChannelID)
 
@@ -170,7 +174,7 @@ func probeRowsOf(probe model.ScheduledProbe, results []relay.ProbeResult) []mode
 			ProbedAt:  result.ProbedAt,
 		}
 		for _, target := range probe.Targets {
-			for _, grantID := range op.ScheduledProbeGrantIDs(target.ChannelID, target.ModelName) {
+			for _, grantID := range op.ScheduledProbeGrantIDs(target) {
 				if grantID != result.ItemID {
 					continue
 				}
@@ -234,4 +238,44 @@ func deleteScheduledProbe(c *gin.Context) {
 	}
 	relay.ResetScheduledProbe(id)
 	resp.Success(c, nil)
+}
+
+// scheduledProbeCredentialRequest 是行内隐藏/恢复一条凭据的提交形状。
+//
+// Excluded 刻意不带 required: 它的假值(false)本身就是一个合法取值 —— "恢复"。
+// binding 的 required 会把假值一律判成缺失, 于是"恢复"这条路永远走不通。
+// 字段缺省即按恢复处理; 界面上两个动作都会显式带上它, 不依赖这个兜底。
+type scheduledProbeCredentialRequest struct {
+	ChannelID int    `json:"channel_id" binding:"required"` // 凭据所属的渠道。
+	ModelName string `json:"model_name" binding:"required"` // 凭据所属的模型目标。
+	KeyName   string `json:"key_name"`                      // 凭据名称; 空串是合法名称, 对应界面上的 #<授权ID>。
+	Excluded  bool   `json:"excluded"`                      // 真为隐藏, 假为恢复。
+}
+
+// setScheduledProbeCredential 隐藏或恢复某个目标下的一条凭据, 并把该任务最新的行列表回给界面。
+//
+// 回整份行列表而不是只回一个成功标记: 排除项一变, 该出行的是哪些凭据也跟着变,
+// 而这份结果是服务端按同一套规则算出来的, 调用方就不必自己推算"删掉这条之后还剩几行"。
+func setScheduledProbeCredential(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	var req scheduledProbeCredentialRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	probe, err := op.ScheduledProbeCredentialSet(id, req.ChannelID, req.ModelName, req.KeyName, req.Excluded, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 可测凭据的集合变了, 旧的轮转进度便不再对应任何一条真实凭据; 丢掉它, 让下一拍按新集合重排。
+	// 与配置更新的处理保持一致: 配置动了就不该再按旧节奏走。
+	relay.ResetScheduledProbe(id)
+	view := model.ScheduledProbeView{ScheduledProbe: probe}
+	view.Rows = probeRows(view)
+	resp.Success(c, view)
 }

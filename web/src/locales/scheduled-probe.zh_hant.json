@@ -25,6 +25,9 @@
     "probeOk": "通過 · {ms}ms",
     "probeFailed": "失敗",
     "noTarget": "暫無監控目標",
+    "removeCredential": "不再監控這條憑據",
+    "excludedCount": "已隱藏 {count} 條憑據",
+    "restoreAll": "全部恢復",
     "window": {
         "anytime": "不限時段",
         "everyday": "每天",
@@ -84,6 +87,8 @@
         "deleted": "已刪除模型監控任務",
         "probeDone": "測活完成",
         "probeFailed": "測活未通過：{message}",
-        "probePartialFailed": "另有 {count} 條未通過"
+        "probePartialFailed": "另有 {count} 條未通過",
+        "credentialRemoved": "已停止監控這條憑據",
+        "credentialRestored": "已恢復全部憑據"
     }
 }

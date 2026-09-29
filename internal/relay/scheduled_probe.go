@@ -151,7 +151,7 @@ func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
 	cursor := scheduledProbeGrantCursor(target.ID)
 	item := target.Targets[cursor%len(target.Targets)]
 
-	grantIDs := op.ScheduledProbeGrantIDs(item.ChannelID, item.ModelName)
+	grantIDs := op.ScheduledProbeGrantIDs(item)
 	if len(grantIDs) == 0 {
 		// 该目标当下没有可测的凭据(渠道或凭据被停用, 模型已被移除): 同上, 推后而不是落失败结论。
 		advanceScheduledProbe(target, now, false)
@@ -257,7 +257,7 @@ func ProbeScheduledGrant(ctx context.Context, grantID int, streaming bool) Probe
 func ProbeScheduledNow(ctx context.Context, probe model.ScheduledProbe) ([]ProbeResult, error) {
 	results := make([]ProbeResult, 0, len(probe.Targets))
 	for _, target := range probe.Targets {
-		for _, grantID := range op.ScheduledProbeGrantIDs(target.ChannelID, target.ModelName) {
+		for _, grantID := range op.ScheduledProbeGrantIDs(target) {
 			// 与定时探测同一取舍: 非流式只问"能不能出结果", 响应体最短, 也不占着上游连接等首字节。
 			results = append(results, ProbeScheduledGrant(ctx, grantID, false))
 		}

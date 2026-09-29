@@ -47,15 +47,23 @@ func ScheduledProbeGet(id int) (model.ScheduledProbe, bool) {
 	return scheduledProbeCache.Get(id)
 }
 
-// ScheduledProbeGrantIDs 返回该 (渠道, 模型) 下当前可测的授权主键, 按凭据名称定序。
+// ScheduledProbeGrantIDs 返回该目标下当前可测的授权主键, 按凭据名称定序。
 // 只收渠道与凭据都启用的那些: 停用的凭据连转发都进不去, 拿它去测只会得到一条"凭据已停用"的结论,
 // 那条结论说明的是配置状态而不是通道可用性, 不该占用一次真实上游调用。
 // 定序由凭据名称决定: 缓存遍历顺序随机, 不定序则每一拍轮转到的凭据不可预期, 多凭据的轮转也就没法复现。
-func ScheduledProbeGrantIDs(channelID int, modelName string) []int {
+//
+// 目标里被用户逐行删掉的凭据在这里一并滤掉, 于是轮转不再测它、列表也不再出它 —— 这正是所要的效果:
+// 排除生效的唯一开关就是这一处, 调度器与界面不可能看到两份不同的"可测凭据"。
+func ScheduledProbeGrantIDs(target model.ScheduledProbeTarget) []int {
 	type candidate struct {
 		id      int
 		keyName string
 	}
+	excluded := make(map[string]bool, len(target.ExcludedKeys))
+	for _, keyName := range target.ExcludedKeys {
+		excluded[keyName] = true
+	}
+
 	candidates := make([]candidate, 0, channelGrantCache.Len())
 	for _, grant := range channelGrantCache.GetAll() {
 		channelModel, modelOK := channelModelCache.Get(grant.ChannelModelID)
@@ -63,7 +71,10 @@ func ScheduledProbeGrantIDs(channelID int, modelName string) []int {
 		if !modelOK || !keyOK {
 			continue
 		}
-		if channelModel.ChannelID != channelID || channelModel.Name != modelName {
+		if channelModel.ChannelID != target.ChannelID || channelModel.Name != target.ModelName {
+			continue
+		}
+		if excluded[channelKey.Name] {
 			continue
 		}
 		channel, channelOK := channelCache.Get(channelModel.ChannelID)
@@ -119,7 +130,7 @@ func ScheduledProbeCreate(req model.ScheduledProbeRequest, ctx context.Context) 
 		Weekdays:        req.Weekdays,
 		StartHour:       req.StartHour,
 		EndHour:         req.EndHour,
-		Targets:         targetRowsOf(req.Targets),
+		Targets:         targetRowsOf(req.Targets, nil),
 	}
 	if err := db.GetDB().WithContext(ctx).Create(&probe).Error; err != nil {
 		return model.ScheduledProbe{}, fmt.Errorf("failed to create scheduled probe: %w", err)
@@ -161,7 +172,7 @@ func ScheduledProbeUpdate(id int, req model.ScheduledProbeRequest, ctx context.C
 		if err := tx.Where("probe_id = ?", id).Delete(&model.ScheduledProbeTarget{}).Error; err != nil {
 			return fmt.Errorf("failed to clear scheduled probe targets: %w", err)
 		}
-		targets := targetRowsOf(req.Targets)
+		targets := targetRowsOf(req.Targets, existing.Targets)
 		for i := range targets {
 			targets[i].ProbeID = id
 		}
@@ -184,20 +195,93 @@ func ScheduledProbeUpdate(id int, req model.ScheduledProbeRequest, ctx context.C
 // targetRowsOf 把提交的目标还原成待落库的行, 顺便去掉重复项。
 // 去重在这里而不是靠数据库唯一索引: 界面上多选两个渠道的并集很容易点出重复的 (渠道, 模型),
 // 而那时用户要的是"这些目标", 不是一条约束报错。
-func targetRowsOf(requested []model.ScheduledProbeTargetRequest) []model.ScheduledProbeTarget {
+//
+// existing 是这条任务原有的目标: 请求里没提排除项的目标沿用它既有的排除集合。
+// 更新走的是"先清空再重建", 不沿用的话, 用户每编辑一次任务, 之前逐行删掉的凭据就会全部复活。
+func targetRowsOf(requested []model.ScheduledProbeTargetRequest, existing []model.ScheduledProbeTarget) []model.ScheduledProbeTarget {
+	kept := make(map[string][]string, len(existing))
+	for _, target := range existing {
+		kept[targetKey(target.ChannelID, target.ModelName)] = target.ExcludedKeys
+	}
+
 	targets := make([]model.ScheduledProbeTarget, 0, len(requested))
 	seen := make(map[string]bool, len(requested))
 	for _, item := range requested {
-		// 用 "渠道ID\x00模型名" 做键而不是结构体: 模型名可能含各种字符, 拿不可见字符分隔
-		// 才能保证 (1, "2:3") 与 (12, ":3") 这类组合不会撞成同一个键。
-		key := fmt.Sprintf("%d\x00%s", item.ChannelID, item.ModelName)
+		key := targetKey(item.ChannelID, item.ModelName)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		targets = append(targets, model.ScheduledProbeTarget{ChannelID: item.ChannelID, ModelName: item.ModelName})
+		excluded := item.ExcludedKeys
+		// nil 与空切片在这里分道扬镳: nil 是"这次提交不涉及排除项", 沿用既有值;
+		// 显式空切片才是"清空排除项", 界面上那个「全部恢复」发的就是它。
+		if excluded == nil {
+			excluded = kept[key]
+		}
+		targets = append(targets, model.ScheduledProbeTarget{
+			ChannelID:    item.ChannelID,
+			ModelName:    item.ModelName,
+			ExcludedKeys: excluded,
+		})
 	}
 	return targets
+}
+
+// targetKey 生成目标的去重键。
+// 用 "渠道ID\x00模型名" 而不是结构体: 模型名可能含各种字符, 拿不可见字符分隔
+// 才能保证 (1, "2:3") 与 (12, ":3") 这类组合不会撞成同一个键。
+func targetKey(channelID int, modelName string) string {
+	return fmt.Sprintf("%d\x00%s", channelID, modelName)
+}
+
+// ScheduledProbeCredentialSet 在某个目标下隐藏或恢复一条凭据, 并立即刷新缓存。
+//
+// 单独一个入口而不是让界面提交整条任务: 界面上那一行只知道自己的渠道、模型与凭据名,
+// 整条提交要求它把任务的其余字段也一并回传, 一次行内删除就会变成一次全量覆盖 ——
+// 用户此刻只想动一行, 不该顺带承担覆盖别处的风险。
+func ScheduledProbeCredentialSet(id, channelID int, modelName, keyName string, excluded bool, ctx context.Context) (model.ScheduledProbe, error) {
+	probe, ok := scheduledProbeCache.Get(id)
+	if !ok {
+		return model.ScheduledProbe{}, fmt.Errorf("scheduled probe not found")
+	}
+
+	index := -1
+	for i, target := range probe.Targets {
+		if target.ChannelID == channelID && target.ModelName == modelName {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return model.ScheduledProbe{}, fmt.Errorf("target not found")
+	}
+
+	row := probe.Targets[index]
+	row.ExcludedKeys = excludeKey(row.ExcludedKeys, keyName, excluded)
+	// Save 整行而不是 Update 单个列: 排除集合是靠 serializer 序列化落库的,
+	// 只给列名和一个切片, 序列化不会参与, 驱动也认不出 []string。
+	if err := db.GetDB().WithContext(ctx).Save(&row).Error; err != nil {
+		return model.ScheduledProbe{}, fmt.Errorf("failed to update scheduled probe credential: %w", err)
+	}
+
+	probe.Targets[index] = row
+	scheduledProbeCache.Set(id, probe)
+	return probe, nil
+}
+
+// excludeKey 返回增删了 keyName 之后的排除集合, 不改动传入的切片。
+// 先整体剔除再按需追加: 同一个名字被点两次也不会在库里堆成重复项。
+func excludeKey(keys []string, keyName string, excluded bool) []string {
+	result := make([]string, 0, len(keys)+1)
+	for _, name := range keys {
+		if name != keyName {
+			result = append(result, name)
+		}
+	}
+	if excluded {
+		result = append(result, keyName)
+	}
+	return result
 }
 
 // ScheduledProbeDelete 删除一条定时测活任务。

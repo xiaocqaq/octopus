@@ -69,6 +69,16 @@ type ScheduledProbeTarget struct {
 	ProbeID   int    `json:"probe_id" gorm:"not null;index"`           // 所属任务 ID。
 	ChannelID int    `json:"channel_id" gorm:"not null"`               // 被监控的渠道 ID。
 	ModelName string `json:"model_name" gorm:"not null"`               // 被监控的上游模型名称, 必须属于该渠道。
+	// ExcludedKeys 记录用户在这个目标下逐行删掉的凭据名称。
+	//
+	// 记"排除谁"而不是"只留谁": 空值天然等于"全都要", 新建的任务与从没删过行的任务因此落在同一个默认上;
+	// 而且以后往渠道里加了新凭据, 它会自动进入监控范围, 不必回头再改一遍每条任务。
+	//
+	// 按名称记而不是按授权主键: 渠道一经重新保存, 授权行会被整体重建、主键全变, 按主键记的排除项会集体失效,
+	// 用户删掉的那些行又会自己长回来。名称是用户点那一行时唯一看得见的东西, 也是渠道重存后仍然成立的标识。
+	//
+	// 用 json 序列化而不是另起一张表: 这个集合只随目标整体读写, 从不单独查询, 单独建表只会多一次连接。
+	ExcludedKeys []string `json:"excluded_keys" gorm:"serializer:json"`
 }
 
 // WindowOpen 判断给定时刻是否落在该任务的时间窗内。
@@ -147,6 +157,13 @@ type ScheduledProbeView struct {
 type ScheduledProbeTargetRequest struct {
 	ChannelID int    `json:"channel_id" binding:"required"` // 被监控的渠道。
 	ModelName string `json:"model_name" binding:"required"` // 被监控的模型, 必须属于该渠道。
+	// ExcludedKeys 是该目标下不再监控的凭据名称。
+	//
+	// 用 nil 与空切片区分两种意图, 更新时据此决定保留还是清空:
+	// 字段缺省(nil)表示"这次提交不涉及排除项", 服务端沿用既有值 —— 编辑表单只知道 (渠道, 模型),
+	// 不带这个字段, 若按空值处理, 用户每编辑一次任务, 删过的凭据就会全部复活。
+	// 显式传空数组([])才是"清空排除项", 界面上那个「全部恢复」走的就是这条路径。
+	ExcludedKeys []string `json:"excluded_keys"`
 }
 
 // ScheduledProbeRequest 是创建与更新共用的提交形状。

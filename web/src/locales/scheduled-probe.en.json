@@ -25,6 +25,9 @@
     "probeOk": "Passed · {ms}ms",
     "probeFailed": "Failed",
     "noTarget": "No targets configured",
+    "removeCredential": "Stop monitoring this credential",
+    "excludedCount": "{count} credentials hidden",
+    "restoreAll": "Restore all",
     "window": {
         "anytime": "Any time",
         "everyday": "Every day",
@@ -84,6 +87,8 @@
         "deleted": "Model monitor deleted",
         "probeDone": "Probe finished",
         "probeFailed": "Probe did not pass: {message}",
-        "probePartialFailed": "{count} more did not pass"
+        "probePartialFailed": "{count} more did not pass",
+        "credentialRemoved": "Stopped monitoring this credential",
+        "credentialRestored": "All credentials restored"
     }
 }
