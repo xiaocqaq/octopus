@@ -2,8 +2,8 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.8.2
-// 全部凭据模式下刷新/新增模型覆盖全部凭据: 修复多 key 渠道分组只带进一个凭据。
+// Version v0.13.8.3
+// 新增「定时测活」页: 按渠道+模型登记任务, 进程内定时轮转测活, 失败即冷却, 结论复用分组徽标展示。
 // NOTE: 发布工作流 (.github/workflows/release.yaml) 只在 main.go 变动时触发,
 // 并从上面那行读取版本号打 tag 发 Release。改版本号请只改上面那一行。
 

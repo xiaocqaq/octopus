@@ -137,7 +137,7 @@ func TestSuccessUndoesOneNegativeStep(t *testing.T) {
 }
 
 // TestProbeSuccessUndoesOneNegativeStep 测活通过也抵掉一档负分。
-// 否则测活只能给 5 分钟加权, 那段加权一过期, 底下压着的负分就又露出来了。
+// 否则测活只能给一个结论有效期长度的加权, 那段加权一过期, 底下压着的负分就又露出来了。
 func TestProbeSuccessUndoesOneNegativeStep(t *testing.T) {
 	resetRoutes()
 	group := failoverGroup(0)

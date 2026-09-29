@@ -20,7 +20,7 @@ func routeScore(itemID int) int {
 	return effectiveScore(route, itemID, time.Now().UnixMilli())
 }
 
-// expireProbe 把一条结论的产生时间挪到有效期之外, 便于断言过期行为而不必真等 5 分钟。
+// expireProbe 把一条结论的产生时间挪到有效期之外, 便于断言过期行为而不必真等一个有效期。
 func expireProbe(result ProbeResult) ProbeResult {
 	result.ProbedAt = time.Now().Add(-probeResultTTL - time.Second).UnixMilli()
 	return result
@@ -213,7 +213,7 @@ func TestProbeResultExpiresAfterTTL(t *testing.T) {
 	if _, ok := RouteStateOf(group).Probes[3]; !ok {
 		t.Fatalf("有效期内结论应随状态接口返回")
 	}
-	// 把结论时间拨到有效期之外, 不真等 5 分钟: 判定只看 probed_at。
+	// 把结论时间拨到有效期之外, 不真等一个有效期: 判定只看 probed_at。
 	routes[900].Probes[3] = expireProbe(routes[900].Probes[3])
 
 	if got := routeScore(3); got != 0 {

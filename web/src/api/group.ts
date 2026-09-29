@@ -51,17 +51,19 @@ export interface GroupRuntime {
     // score_at 是每个分数的计时起点（Unix 毫秒）：从该时刻起每过 SCORE_STEP_TTL_MS 就再少一档。
     // 后端只给当前有效的分数，没有条目的成员即无偏移；前端据此把剩下的档位在页面内自己走完。
     score_at: Record<number, number>;
-    // probes 是成员最近一次人工测活（体检）的结论，仅由测活写入。
+    // probes 是成员最近一次测活（体检）的结论，人工测活与定时测活都写在这里。
     // 与 scores 分开：scores 还会被真实调用结果升降，由此界面能区分“这条结论来自我的体检”还是“来自线上调用”。
     // 结论只有 PROBE_RESULT_TTL_MS 的有效期，过期的结论后端不会再返回，前端也不用展示。
     probes: Record<number, GroupProbeResult>;
 }
 
-// PROBE_RESULT_TTL_MS 是一次人工测活结论的有效期，与后端 probeResultTTL（internal/relay/probe.go）必须一致。
+// PROBE_RESULT_TTL_MS 是一次测活结论的有效期，与后端 probeResultTTL（internal/relay/probe.go）必须一致。
 // 两侧各管一段：后端保证“读出来就已经没有过期的结论”（刷新、换设备、新标签页都一致），
 // 前端保证“页面开着不动时，到点那个徽标自己消失”（不依赖后端再推一条消息）。
 // 有效期一过，排名提升与体检徽标一起消失——想看就重新测活。
-export const PROBE_RESULT_TTL_MS = 5 * 60 * 1000;
+// 取 10 分钟而非更短：定时测活的默认间隔就是 10 分钟，短于间隔会让徽标在两次探测之间空窗，
+// 看起来像“没测过”而不是“上一次的结论”。
+export const PROBE_RESULT_TTL_MS = 10 * 60 * 1000;
 
 // PROBE_SCORE_MAX 与 PROBE_VOTE_DOWN 是测活结论对健康分的加权档位，
 // 必须与后端 routeScoreMax / probeVoteDown（internal/relay/route.go、probe.go）保持一致。

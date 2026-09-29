@@ -44,7 +44,8 @@
         "group": "Group",
         "model": "Price",
         "log": "Log",
-        "setting": "Setting"
+        "setting": "Setting",
+        "probe": "Model Probe"
     },
     "toolbar": {
         "hideChannelName": "Blur channel names",

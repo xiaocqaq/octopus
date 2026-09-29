@@ -71,6 +71,9 @@ func InitDB(dbType, dsn string, debug bool) error {
 		&model.StatsChannelModelDaily{},
 		&model.StatsGroup{},
 		&model.StatsGroupDaily{},
+		// 定时测活任务: 建表交给 AutoMigrate, 与其余配置表一致 —— 表结构就是结构体本身,
+		// 无需再写一份版本化迁移把同样的列再描述一遍。
+		&model.ScheduledProbe{},
 		&migrate.MigrationRecord{},
 	); err != nil {
 		return err

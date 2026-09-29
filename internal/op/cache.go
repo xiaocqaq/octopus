@@ -27,6 +27,9 @@ func InitCache() error {
 	if err := statsRefreshCache(ctx); err != nil {
 		return fmt.Errorf("stats refresh cache error: %v", err)
 	}
+	if err := scheduledProbeRefreshCache(ctx); err != nil {
+		return fmt.Errorf("scheduled probe refresh cache error: %v", err)
+	}
 	return nil
 }
 

@@ -1,0 +1,49 @@
+{
+    "empty": "No scheduled probe yet. Use the + button to add one.",
+    "createTitle": "New scheduled probe",
+    "submit": "Create",
+    "submitting": "Creating…",
+    "cancel": "Cancel",
+    "confirmDelete": "Delete",
+    "delete": "Delete",
+    "enable": "Enable scheduled probe",
+    "grantCount": "{count} credentials",
+    "intervalValue": "Every {minutes} min",
+    "weekday": {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "sun": "Sun"
+    },
+    "window": {
+        "anytime": "Any time",
+        "everyday": "Daily",
+        "wholeDay": "all day",
+        "nextDay": "next day"
+    },
+    "form": {
+        "channel": "Channel",
+        "channelPlaceholder": "Select a channel",
+        "model": "Model",
+        "modelPlaceholder": "Select a model",
+        "modelEmpty": "This channel has no model yet. Add one on the channel page first.",
+        "interval": "Interval (minutes)",
+        "intervalHint": "One target is probed per round, rotating in creation order; the actual interval carries a ±30s jitter so upstreams are not hit at the same instant.",
+        "window": "Probe window",
+        "windowAnytime": "Any time",
+        "windowHint": "No weekday selected means always on; otherwise probing happens only inside the chosen weekdays and hours, and is skipped outside them.",
+        "startHour": "Start hour",
+        "endHour": "End hour",
+        "windowSameDay": "The end hour is exclusive; equal hours mean the whole day.",
+        "windowCrossMidnight": "A start later than the end means the window crosses midnight, for example 22:00 to 05:00 next day."
+    },
+    "toast": {
+        "enabled": "Scheduled probe enabled",
+        "disabled": "Scheduled probe disabled",
+        "deleted": "Scheduled probe deleted",
+        "createFailed": "Failed to create the scheduled probe"
+    }
+}

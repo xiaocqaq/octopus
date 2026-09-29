@@ -27,14 +27,17 @@ const probeMaxTokens = 16
 // 既可能触发上游的并发限制, 也会让所有成员在同一瞬间争用同一份配额; 4 条并发足以把等待时间压到可接受。
 const probeConcurrency = 4
 
-// probeResultTTL 是一次人工测活结论的有效期。测活打的是真实上游, 结论只是"那一刻"的快照:
+// probeResultTTL 是一次测活结论的有效期。测活打的是真实上游, 结论只是"那一刻"的快照:
 // 上游的限流, 余额, 网络抖动随时会变, 把几小时前的结论一直挂在界面上, 等于拿旧快照当现状看。
 // 过期后结论既不展示也不参与选路, 要看就重新测活 —— 界面上那个徽标到点自己消失, 就是这条规则的可见形态。
+//
+// 取 10 分钟而不是更短: 定时测活的默认间隔就是 10 分钟, 有效期短于间隔会让徽标在两次探测之间空窗,
+// 界面看起来像"没测过"而不是"上一次的结论"; 与默认间隔对齐, 才让每条任务的结论恰好挂到下一次探测之前。
 //
 // 与前端 PROBE_RESULT_TTL_MS(web/src/api/group.ts) 必须保持一致, 两侧各管一段:
 // 后端保证"读出来就已经没有过期的结论"(刷新, 换设备, 新标签页都一致),
 // 前端保证"页面开着不动时, 到点那个徽标自己消失"(不依赖后端推送)。
-const probeResultTTL = 5 * time.Minute
+const probeResultTTL = 10 * time.Minute
 
 // probeVoteDown 是测活不通过时给健康分的降档幅度。只降一档且不累积: 同一成员只会留一条最新结论,
 // 反复测活失败不会越叠越低 —— "持续故障"的语义由真实调用失败的多次记录与冷却承担, 不靠这里叠数。
@@ -274,29 +277,35 @@ func stringPtr(value string) *string { return &value }
 
 func int64Ptr(value int64) *int64 { return &value }
 
-// recordProbe 把一次测活的结论落进路由状态, 返回给调用方的完整结论(含耗时与消息)。
-//
-// 健康优先的落点不在这里, 而在 probeVote: 测活调通的成员在选路时按满档上浮, 失败的沉一档,
-// 未测活或结论已过期的保持 0 分; orderGroupItems 按"基础分 + 有效期内的测活加权"降序排,
-// 于是"体检合格的排在前面"自然成立, 且不改写人工排定的 Priority(Priority 仍是同分时的次序)。
-//
-// 加权故意不写进 route.Scores: 结论有 5 分钟有效期, 写进表里就还得在到期时回滚,
-// 而回滚必然与真实调用升降的健康分打架(同一张表, 分不清哪一档是谁加的);
-// 现算则到期自然归零, 也不需要在后台跑定时器清理。
-//
-// 与 recordRouteSuccess/Failure 的差别: 测活是人工发起的独立尝试, 不代表"当前路由"调通了,
-// 故一律不动 CurrentItemID 与亲和 —— 那两样属于正在承载客户端请求的那条路由。
+// recordProbe 把一次人工测活的结论落进路由状态, 返回给调用方的完整结论(含耗时与消息)。
+// 失败不冷却: 人工测活是"此刻通不通"的一次快照, 未必是持续故障, 直接冷却会让一次误判把成员关进小黑屋。
+// 定时测活走 landProbe(..., true), 那里失败即按配置冷却 —— 它是持续监控的一环, 语义与一次性体检不同。
 func recordProbe(group model.Group, itemID int, ok bool, message string, latencyMS int64) ProbeResult {
-	result := ProbeResult{
+	return landProbe(group, itemID, ProbeResult{
 		GroupID:   group.ID,
 		ItemID:    itemID,
 		OK:        ok,
 		LatencyMS: latencyMS,
 		Message:   message,
 		ProbedAt:  time.Now().UnixMilli(),
-	}
+	}, false)
+}
 
-	// 手动模式没有选路队列, 健康分不参与决策; 结论仍然记下供界面显示最近一次体检结果。
+// landProbe 把一条测活结论落进分组的路由状态, 返回给调用方的完整结论。
+//
+// 健康优先的落点不在这里, 而在 probeVote: 测活调通的成员在选路时按满档上浮, 失败的沉一档,
+// 未测活或结论已过期的保持 0 分; orderGroupItems 按"基础分 + 有效期内的测活加权"降序排,
+// 于是"体检合格的排在前面"自然成立, 且不改写人工排定的 Priority(Priority 仍是同分时的次序)。
+//
+// 加权故意不写进 route.Scores: 结论有 probeResultTTL 的有效期, 写进表里就还得在到期时回滚,
+// 而回滚必然与真实调用升降的健康分打架(同一张表, 分不清哪一档是谁加的);
+// 现算则到期自然归零, 也不需要在后台跑定时器清理。
+//
+// 与 recordRouteSuccess/Failure 的差别: 测活是独立发起的一次尝试, 不代表"当前路由"调通了,
+// 故一律不动 CurrentItemID 与亲和 —— 那两样属于正在承载客户端请求的那条路由。
+//
+// cooldownOnFailure 是两种调用方唯一的差别: 人工测活(false)失败只沉降不冷却, 定时测活(true)失败即冷却让位。
+func landProbe(group model.Group, itemID int, result ProbeResult, cooldownOnFailure bool) ProbeResult {
 	routeMu.Lock()
 	defer routeMu.Unlock()
 
@@ -313,7 +322,15 @@ func recordProbe(group model.Group, itemID int, ok bool, message string, latency
 		return result
 	}
 
-	if ok {
+	applyProbeLocked(route, group, itemID, result, cooldownOnFailure)
+	route.Probes[itemID] = result
+	publishRouteLocked(route)
+	return result
+}
+
+// applyProbeLocked 按测活结论调整成员的健康分与冷却; 调用方必须持有锁, 并负责写入结论与发布状态。
+func applyProbeLocked(route *RouteState, group model.Group, itemID int, result ProbeResult, cooldownOnFailure bool) {
+	if result.OK {
 		// 调通即解除冷却与强制失败的旧账, 并清零连续成功计数: 该成员已被证明可用, 无需再累计成功轮数。
 		delete(route.Cooldowns, itemID)
 		delete(route.pinnedFailures, itemID)
@@ -322,7 +339,7 @@ func recordProbe(group model.Group, itemID int, ok bool, message string, latency
 			route.ProbeItemID = 0
 		}
 		// 体检通过就抵掉一档负分: 与真实成功同一条规则(见 recordRouteSuccess)。
-		// 少了这一步, 之前因失败沉下去的分会一直压在底下, 而测活给的那点加权只有 5 分钟寿命。
+		// 少了这一步, 之前因失败沉下去的分会一直压在底下, 而测活给的那点加权只有一个结论有效期。
 		if baseScore(route, itemID, result.ProbedAt) < 0 {
 			markScore(route, itemID, result.ProbedAt, 1)
 		} else if route.Scores[itemID] < 0 {
@@ -330,12 +347,23 @@ func recordProbe(group model.Group, itemID int, ok bool, message string, latency
 			delete(route.Scores, itemID)
 			delete(route.ScoreAt, itemID)
 		}
-	} else {
-		// 失败只沉降不分, 也不直接冷却: 测活失败是"此刻不通", 未必是持续故障,
-		// 直接冷却会让一次误判把成员关进小黑屋; 让它在顺序上主动让位给体检合格的成员即可。
-		route.successes[itemID] = 0
+		return
 	}
-	route.Probes[itemID] = result
-	publishRouteLocked(route)
-	return result
+
+	// 失败一律打断连续成功计数。
+	route.successes[itemID] = 0
+	if !cooldownOnFailure {
+		// 人工测活只沉降不分, 也不直接冷却: 让它在顺序上主动让位给体检合格的成员即可。
+		return
+	}
+
+	// 定时测活失败即冷却: 这是用户设的持续监控, 结论就是"这一刻它不通", 继续把它排在选路前面没有依据。
+	// 冷却时长沿用分组自己的配置, 与真实调用失败同一个口径, 不另立一套时长。
+	route.Cooldowns[itemID] = result.ProbedAt + int64(group.RelayConfig.MemberCooldownSeconds)*1000
+	if route.ProbeItemID == itemID {
+		route.ProbeItemID = 0
+	}
+	// 不再叠一档基础负分: 这次失败已经通过有效期内的测活加权(probeVote)让它在选路上沉了一档,
+	// 再压一档等于对同一次失败罚两次, 而基础分在冷却到期后还会继续压着它 ——
+	// 一次瞬时抖动不该留下比冷却时长更久的后果。
 }

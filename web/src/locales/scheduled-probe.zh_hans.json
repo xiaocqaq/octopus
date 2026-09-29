@@ -1,0 +1,49 @@
+{
+    "empty": "还没有定时测活任务，点右上角 + 新建一条。",
+    "createTitle": "新建定时测活",
+    "submit": "创建",
+    "submitting": "创建中…",
+    "cancel": "取消",
+    "confirmDelete": "确认删除",
+    "delete": "删除",
+    "enable": "启用定时测活",
+    "grantCount": "{count} 条凭据",
+    "intervalValue": "每 {minutes} 分钟",
+    "weekday": {
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六",
+        "sun": "周日"
+    },
+    "window": {
+        "anytime": "不限时段",
+        "everyday": "每天",
+        "wholeDay": "整天",
+        "nextDay": "次日"
+    },
+    "form": {
+        "channel": "渠道",
+        "channelPlaceholder": "选择渠道",
+        "model": "模型",
+        "modelPlaceholder": "选择模型",
+        "modelEmpty": "该渠道下没有模型，请先在渠道页添加。",
+        "interval": "间隔（分钟）",
+        "intervalHint": "到点后每轮只测一条目标，多条目标按创建顺序轮转；实际间隔会带 ±30 秒的随机抖动，避免同时打上游。",
+        "window": "测活时段",
+        "windowAnytime": "不限时段",
+        "windowHint": "不选星期即全天可测；选了星期则只在所选星期的时段内测活，时段之外自动跳过。",
+        "startHour": "开始整点",
+        "endHour": "结束整点",
+        "windowSameDay": "结束时刻不含在内；起止相同表示整天。",
+        "windowCrossMidnight": "开始晚于结束表示跨午夜，例如 22:00 到次日 05:00。"
+    },
+    "toast": {
+        "enabled": "已启用定时测活",
+        "disabled": "已停用定时测活",
+        "deleted": "已删除定时测活任务",
+        "createFailed": "创建定时测活失败"
+    }
+}
