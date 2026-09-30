@@ -79,6 +79,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Record build metadata
+        id: metadata
+        # 用无空格的 ISO 格式: 该值经 build-arg 注入 Dockerfile 的 -ldflags,
+        # 含空格会被 go 的 -ldflags 解析切碎, 导致链接器报 usage 而构建失败;
+        # 此格式同时匹配 internal/conf/banner.go formatDate 的 "2006-01-02T15:04:05Z" 布局。
+        run: echo "build-time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
       - name: Update price
         run: python3 scripts/updatePrice.py
 
@@ -104,6 +111,40 @@ jobs:
           prerelease: false
           tag_name: ${{ steps.version.outputs.version }}
 
-      # 此处原有 Docker meta / QEMU / Buildx / 推送镜像等步骤, 本 fork 已移除:
-      # 只发布二进制, 不再需要 Docker Hub 凭据, 每次发版也省下多平台镜像构建的时间。
-      # 与上游合并时若在此处冲突, 保留删除即可。
+      - name: Docker meta
+        id: docker-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.version }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./scripts/dockerfile/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            GITHUB_REPO=https://github.com/${{ github.repository }}
+            BUILD_TIME=${{ steps.metadata.outputs.build-time }}

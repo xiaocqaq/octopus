@@ -1,0 +1,8 @@
+# 构建镜像时无需进入构建上下文的内容。
+# 本仓库的 Dockerfile 在容器内从源码构建前端与后端, 因此排除本地产物可避免:
+# 1) 本地 web/node_modules 覆盖容器内 pnpm 装好的 Linux 依赖, 造成与 CI 结果不一致;
+# 2) 上下文体积过大 (本地 node_modules 约 300MB)。
+.git
+web/node_modules
+build
+data
