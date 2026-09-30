@@ -231,6 +231,7 @@
         },
         "llmPrice": {
             "title": "Model Pricing",
+            "manage": "Manage prices",
             "updateInterval": {
                 "label": "Auto Update Interval (hours)",
                 "placeholder": "Enter interval in hours"

@@ -231,6 +231,7 @@
         },
         "llmPrice": {
             "title": "模型价格",
+            "manage": "价格管理",
             "updateInterval": {
                 "label": "自动更新间隔（小时）",
                 "placeholder": "请输入间隔（小时）"

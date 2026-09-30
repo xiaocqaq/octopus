@@ -1,15 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTranslations } from 'use-intl';
-import { Clock, DatabaseBackup, DollarSign, RefreshCw } from 'lucide-react';
+import { ChevronRight, Clock, DatabaseBackup, DollarSign, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSettingList, useSetSetting, SettingKey } from '@/api/setting';
 import { useRebuildModelPrice, useUpdateModelPrice, useLastUpdateTime } from '@/api/model';
+import { useAppStore } from '@/stores/app';
+import { preloadPage } from '@/lib/page-preload';
 import { toast } from 'sonner';
 
 export function SettingLLMPrice() {
     const t = useTranslations('setting');
+    const setCurrentPage = useAppStore((state) => state.setCurrentPage);
     const { data: settings } = useSettingList();
     const setSetting = useSetSetting();
     const updatePrice = useUpdateModelPrice();
@@ -84,10 +87,26 @@ export function SettingLLMPrice() {
 
     return (
         <div className="rounded-3xl border border-border bg-card p-6 space-y-5">
-            <h2 className="text-lg font-bold text-card-foreground flex items-center gap-2">
-                <DollarSign className="h-5 w-5" />
-                {t('llmPrice.title')}
-            </h2>
+            <div className="flex items-center justify-between gap-4">
+                <h2 className="text-lg font-bold text-card-foreground flex items-center gap-2">
+                    <DollarSign className="h-5 w-5" />
+                    {t('llmPrice.title')}
+                </h2>
+                {/* 价格列表页没有自己的导航按钮了, 入口收在这里:
+                    这张卡片管的是价格的"更新与重建", 逐条改价在列表页, 两者本就是同一件事的两半。 */}
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                        preloadPage('model');
+                        setCurrentPage('model');
+                    }}
+                    className="rounded-xl"
+                >
+                    {t('llmPrice.manage')}
+                    <ChevronRight className="size-4" />
+                </Button>
+            </div>
 
             {/* 更新间隔 */}
             <div className="flex items-center justify-between gap-4">

@@ -14,7 +14,9 @@ export function AppShell({ children, actions }: { children: ReactNode; actions?:
     const direction = useAppStore((state) => state.direction);
     const setCurrentPage = useAppStore((state) => state.setCurrentPage);
     const t = useTranslations('navbar');
-    const activeIndex = NAV_ITEMS.findIndex((route) => route.id === currentPage); // activeIndex 表示选中项在 Dock 中的位置。
+    // 价格页没有自己的导航按钮(主导航固定六个), 它从设置进入, 高亮就归到设置项。
+    // 不这样归一, findIndex 会返回 -1, 指示块会被推到导航栏外。
+    const activeIndex = NAV_ITEMS.findIndex((route) => route.id === (currentPage === 'model' ? 'setting' : currentPage)); // activeIndex 表示选中项在 Dock 中的位置。
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null); // hoveredIndex 表示当前悬浮项的位置。
     const [isNavHovered, setIsNavHovered] = useState(false); // isNavHovered 表示悬浮背景是否显示。
     const hoverIndicatorRef = useRef<HTMLSpanElement>(null); // hoverIndicatorRef 用于在淡入前确认悬浮背景的新位置。
