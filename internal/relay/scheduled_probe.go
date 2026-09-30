@@ -37,9 +37,9 @@ const (
 // 不落库: 进度是"下一次什么时候测"的运行期推算, 重启后从当前时刻重新起算即可;
 // 落库反而要面对"停机期间积欠的探测要不要补"这种没有正确答案的问题。
 type scheduledProbeState struct {
-	nextDueAt   int64  // 允许探测的最早时刻, Unix 毫秒。
+	nextDueAt    int64  // 允许探测的最早时刻, Unix 毫秒。
 	creditCursor int    // 该任务内部轮转到的凭据下标(扁平凭据列表上的位置)。
-	round       uint64 // 已完成轮数, 参与抖动计算, 使每一轮的偏移都不同。
+	round        uint64 // 已完成轮数, 参与抖动计算, 使每一轮的偏移都不同。
 }
 
 var (
@@ -281,26 +281,20 @@ func ProbeScheduledGrant(ctx context.Context, grantID int, streaming bool) Probe
 	return result
 }
 
-// ProbeScheduledNow 立即探测一条任务的全部目标与全部凭据, 供界面上的"立刻测一次"使用。
-//
-// 与调度器的差别只在触发来源与范围: 调度器一拍只测一个组合(FIFO 轮转, 避免在上游留下突发流量),
-// 而手动触发是用户的明确意图, 他要的是"现在就把这条任务弄清楚", 只测其中一条反而会让人以为是坏的 ——
-// 全部组合一次测完, 但也因此不做并发, 逐条串行, 免得一次点击就在上游打出一串并发请求。
-//
-// 探测结论照常落点(recordScheduledProbeResult + landScheduledProbe), 与定时探测完全同一条路径:
-// 手动测出来的结论与定时测出来的结论本就该是同一件事, 不该有两套口径。
+// ProbeScheduledNow 手动测完整任务；定时调度仍然每拍只测一条。
+// 与界面、定时轮转共用凭据顺序；同渠道串行，跨渠道有限并发。
 func ProbeScheduledNow(ctx context.Context, probe model.ScheduledProbe) ([]ProbeResult, error) {
-	results := make([]ProbeResult, 0, len(probe.Targets))
-	for _, target := range probe.Targets {
-		for _, grantID := range op.ScheduledProbeGrantIDs(target) {
-			// 与定时探测同一取舍: 非流式只问"能不能出结果", 响应体最短, 也不占着上游连接等首字节。
-			results = append(results, ProbeScheduledGrant(ctx, grantID, false))
-		}
-	}
-	if len(results) == 0 {
+	credits := op.ScheduledProbeCredits(probe)
+	if len(credits) == 0 {
 		return nil, fmt.Errorf("no available credential for this probe")
 	}
-	return results, nil
+	channelIDs := make([]int, len(credits))
+	for index, credit := range credits {
+		channelIDs[index] = credit.Target.ChannelID
+	}
+	return probeByChannel(channelIDs, func(index int) ProbeResult {
+		return ProbeScheduledGrant(ctx, credits[index].GrantID, false)
+	}), nil
 }
 
 // ProbeGrantNow 立即探测单条渠道凭据, 供界面上一行末尾的闪电按钮使用。

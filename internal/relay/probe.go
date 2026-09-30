@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -26,6 +25,13 @@ const probeMaxTokens = 16
 // probeConcurrency 是一键测活的并发上限。测活要打真实上游, 全部成员一次性并发会同时占用多条连接,
 // 既可能触发上游的并发限制, 也会让所有成员在同一瞬间争用同一份配额; 4 条并发足以把等待时间压到可接受。
 const probeConcurrency = 4
+
+// probeTimeout 是一次探测的**硬上限**。无论分组怎么配置, 超过 45 秒就直接判定为超时失败。
+// 理由: 测活应当快速失败 —— 上游假死会把 120 秒(默认非流式超时)整得没动静,
+// 用户点"立刻测一次"却要等两分钟, 体感远远超出"测活"这个动作该有的范围。
+// 45 秒把"等待"拖到可接受的水平, 同时仍然留出余量应对慢响应(比如大模型首 token)。
+// 取 min(分组配置, 45s): 不会放松已有的更严配置(如 30 秒), 只在默认 120 秒时收紧。
+const probeTimeout = 45 * time.Second
 
 // probeResultTTL 是一次测活结论的有效期。测活打的是真实上游, 结论只是"那一刻"的快照:
 // 上游的限流, 余额, 网络抖动随时会变, 把几小时前的结论一直挂在界面上, 等于拿旧快照当现状看。
@@ -90,10 +96,13 @@ func ProbeItem(ctx context.Context, groupID, itemID int, streaming bool) (ProbeR
 		return recordProbe(group, itemID, false, err.Error(), 0), nil
 	}
 
-	// 超时按与转发同一套配置取值: 非流式等完整响应, 流式等首个事件。
+	// 超时按与转发同一套配置取值, 但不超过 45 秒硬上限: 见 probeTimeout 注释。
 	timeout := time.Duration(group.RelayConfig.MemberNonStreamResponseTimeoutSeconds) * time.Second
 	if streaming {
 		timeout = time.Duration(group.RelayConfig.MemberStreamFirstEventTimeoutSeconds) * time.Second
+	}
+	if timeout > probeTimeout {
+		timeout = probeTimeout
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -139,25 +148,21 @@ func ProbeGroup(ctx context.Context, groupID int, itemIDs []int, streaming bool)
 		return []ProbeResult{}, nil
 	}
 
-	results := make([]ProbeResult, len(targets))
-	var waitGroup sync.WaitGroup
-	slots := make(chan struct{}, probeConcurrency)
-	for i, itemID := range targets {
-		waitGroup.Add(1)
-		go func(index, id int) {
-			defer waitGroup.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			result, err := ProbeItem(ctx, groupID, id, streaming)
-			if err != nil {
-				// 分组本身消失才会走到这里, 同样给出一条结论而不是让整个批量请求失败。
-				result = ProbeResult{GroupID: groupID, ItemID: id, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
-			}
-			results[index] = result
-		}(i, itemID)
+	channelIDs := make([]int, len(targets))
+	for index, itemID := range targets {
+		item := itemOf(group, itemID)
+		if grant, err := op.ChannelGrantGet(item.ChannelGrantID); err == nil {
+			channelIDs[index] = grant.ChannelModel.ChannelID
+		}
 	}
-	waitGroup.Wait()
-	return results, nil
+	return probeByChannel(channelIDs, func(index int) ProbeResult {
+		itemID := targets[index]
+		result, err := ProbeItem(ctx, groupID, itemID, streaming)
+		if err != nil {
+			result = ProbeResult{GroupID: groupID, ItemID: itemID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+		}
+		return result
+	}), nil
 }
 
 // buildProbeRequest 构造一次测活的上游请求。地址与认证取自出站转换器对占位请求的转换结果,
@@ -257,6 +262,9 @@ func ProbeChannelGrant(ctx context.Context, grantID int, streaming bool) ProbeRe
 	timeout := time.Duration(config.MemberNonStreamResponseTimeoutSeconds) * time.Second
 	if streaming {
 		timeout = time.Duration(config.MemberStreamFirstEventTimeoutSeconds) * time.Second
+	}
+	if timeout > probeTimeout {
+		timeout = probeTimeout
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

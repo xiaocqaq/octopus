@@ -1,8 +1,11 @@
-import { useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { channelDetailQueryOptions, useChannelStats } from '@/api/channel';
-import { SCHEDULED_PROBE_DEFAULT_INTERVAL, SCHEDULED_PROBE_HOURS, type ScheduledProbeTarget } from '@/api/scheduled-probe';
+import { useChannelStats } from '@/api/channel';
+import {
+    SCHEDULED_PROBE_DEFAULT_INTERVAL,
+    SCHEDULED_PROBE_HOURS,
+    type ScheduledProbeTarget,
+} from '@/api/scheduled-probe';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,11 +14,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatHour } from './format';
 import { WeekdayPicker } from './WeekdayPicker';
 import { SearchMultiSelect, type SearchOption } from './SearchMultiSelect';
-import { distinct, expandTargets, sameTargetSet } from './targets';
+import { targetFromKey, targetKey } from './targets';
 
 // ProbeFormValues 是这张表单的产出，与后端的提交体同形状（主键除外）。
 export type ProbeFormValues = {
     name: string;
+    // 合并为一条「渠道/模型」选项列表，每条就是一个 (channel_id, model_name)。
     targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
@@ -33,64 +37,53 @@ type ProbeFormProps = {
     onSubmit: (values: ProbeFormValues) => void;
 };
 
-// ProbeForm 是创建与编辑共用的表单：一个自定义名字 + 渠道与模型（各可多选）+ 间隔 + 时段。
+// ProbeForm 是创建与编辑共用的表单：一个自定义名字 + 渠道/模型合并多选 + 间隔 + 时段。
 //
-// 创建与编辑共用一份：两者字段完全相同，分开写就要把"名字、目标展开、间隔校验、时段"这套逻辑维护两遍，
-// 而它们必须保持一致 —— 编辑里少一个字段就会把用户刚配好的值清掉（更新是整体替换）。
+// 合并为一份多选下拉，而非分开的渠道+模型：一个模型可能被多个渠道提供，
+// 拆开的话"渠道 × 模型"是个笛卡尔积，会产出用户没看见的组合；
+// 合成一份「渠道名/模型名」的选项, 勾的是确确实实会监控的那一条。
 export function ProbeForm({ initial, submitText, submittingText, isSubmitting, onCancel, onSubmit }: ProbeFormProps) {
     const t = useTranslations('scheduledProbe');
     const { data: channels } = useChannelStats();
+
+    // 选项列表来源：用 useChannelStats 的 models 来合成, 不用单独查渠道详情 ——
+    // 列表里的 models 本身就是当前生效的模型集合。
+    const targetOptions: SearchOption[] = useMemo(() => {
+        const opts: SearchOption[] = [];
+        channels?.forEach((channel) => {
+            channel.models.forEach((channelModel) => {
+                const modelName = channelModel.model_name;
+                opts.push({
+                    value: `${channel.channel_id}\u0000${modelName}`,
+                    label: `${channel.channel_name}/${modelName}`,
+                    hint: channel.enabled ? undefined : t('form.channelDisabled'),
+                });
+            });
+        });
+        return opts.sort((a, b) => a.label.localeCompare(b.label));
+    }, [channels, t]);
+
+    // 初始回填：把已有目标还原为选项 value 列表。
+    const initialValues = useMemo(
+        () => (initial?.targets ?? []).map((target) => `${target.channel_id}\u0000${target.model_name}`),
+        [initial],
+    );
+
+    const [selected, setSelected] = useState<string[]>(initialValues);
     const [name, setName] = useState(initial?.name ?? '');
-    // 渠道与模型各存一份选择，目标由两者展开而来：用户勾的是渠道和模型，不必一行行手工拼组合。
-    const [channelIds, setChannelIds] = useState<number[]>(() => distinct((initial?.targets ?? []).map((target) => target.channel_id)));
-    const [modelNames, setModelNames] = useState<string[]>(() => distinct((initial?.targets ?? []).map((target) => target.model_name)));
     const [interval, setIntervalValue] = useState(String(initial?.interval_minutes ?? SCHEDULED_PROBE_DEFAULT_INTERVAL));
     const [weekdays, setWeekdays] = useState(initial?.weekdays ?? 0);
     const [startHour, setStartHour] = useState(initial?.start_hour ?? 9);
     const [endHour, setEndHour] = useState(initial?.end_hour ?? 18);
 
-    // 模型下拉的备选来自**已选渠道的全部模型**：一个模型可能被多个渠道提供，故顺手记下"哪些渠道提供它"，
-    // 展开目标时逐个配对，界面上也把来源标出来。
-    // 逐渠道取详情而不是读渠道列表里的模型：列表那份可能落后于刚编辑过的配置，模型列表必须与提交时的校验同源。
-    const detailQueries = useQueries({ queries: channelIds.map((id) => channelDetailQueryOptions(id)) });
-    const modelsOf = new Map<number, string[]>();
-    const providers = new Map<string, number[]>();
-    channelIds.forEach((channelId, index) => {
-        const models = detailQueries[index]?.data?.models;
-        if (!models) return;
-        modelsOf.set(channelId, models);
-        for (const modelName of models) {
-            providers.set(modelName, [...(providers.get(modelName) ?? []), channelId]);
-        }
+    const targets = selected.flatMap((value) => {
+        const target = targetFromKey(value);
+        return target ? [target] : [];
     });
-
-    const channelNameOf = (channelId: number) =>
-        channels?.find((channel) => channel.channel_id === channelId)?.channel_name ?? `#${channelId}`;
-
-    // 只保留仍有渠道提供的模型：取消勾选渠道后，原先选的模型可能已经无处可挂，
-    // 继续以"已选"的样子留在下拉里，用户会以为它还在被监控。
-    const selectedModels = modelNames.filter((modelName) => providers.has(modelName));
-    const targets = expandTargets(channelIds, selectedModels, modelsOf);
 
     const intervalMinutes = Number(interval);
     const intervalValid = Number.isInteger(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 1440;
-    const canSubmit = name.trim() !== '' && targets.length > 0 && intervalValid;
-
-    const channelOptions: SearchOption[] = (channels ?? []).map((channel) => ({
-        value: String(channel.channel_id),
-        label: channel.channel_name,
-        hint: t('form.modelCount', { count: channel.models.length }),
-        keywords: channel.enabled ? '' : t('form.channelDisabled'),
-    }));
-
-    const modelOptions: SearchOption[] = [...providers.entries()]
-        .map(([modelName, owners]) => ({
-            value: modelName,
-            label: modelName,
-            // 只被一个渠道提供就写渠道名，多个则写个数：下拉一行放不下几个渠道名，写全反而把模型名挤没了。
-            hint: owners.length > 1 ? t('form.channelCount', { count: owners.length }) : channelNameOf(owners[0] ?? 0),
-        }))
-        .sort((left, right) => left.value.localeCompare(right.value));
+    const canSubmit = name.trim() !== '' && selected.length > 0 && intervalValid;
 
     const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -109,7 +102,7 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
 
     return (
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-            {/* 表单可能很长，故让字段区自己滚动、按钮固定在底部：
+            {/* 表单可能很长，故让字段区自己滚、按钮固定在底部：
                 否则目标一多，提交按钮就被挤出可视区，用户得先滚到底才能点。 */}
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
                 <FieldGroup className="gap-4">
@@ -125,53 +118,26 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                         <FieldDescription>{t('form.nameHint')}</FieldDescription>
                     </Field>
 
+                    {/* 合成一个多选：渠道与模型各自不再是独立下拉, 而是「渠道名/模型名」的组合选项。 */}
                     <Field>
-                        <FieldLabel htmlFor="scheduled-probe-channels">{t('form.channel')}</FieldLabel>
+                        <FieldLabel htmlFor="scheduled-probe-targets">{t('form.targets')}</FieldLabel>
                         <SearchMultiSelect
-                            id="scheduled-probe-channels"
-                            options={channelOptions}
-                            selected={channelIds.map(String)}
-                            onChange={(values) => setChannelIds(values.map(Number))}
-                            placeholder={t('form.channelPlaceholder')}
-                            searchPlaceholder={t('form.searchChannel')}
-                            emptyText={t('form.channelEmpty')}
+                            id="scheduled-probe-targets"
+                            options={targetOptions}
+                            selected={selected}
+                            onChange={setSelected}
+                            placeholder={t('form.targetPlaceholder')}
+                            searchPlaceholder={t('form.searchTarget')}
+                            emptyText={t('form.targetEmpty')}
                             selectAllLabel={t('form.selectAll')}
                             clearLabel={t('form.clear')}
+                            confirmLabel={t('form.confirm')}
                         />
-                        <FieldDescription>{t('form.channelHint')}</FieldDescription>
+                        <FieldDescription>{t('form.targetHint')}</FieldDescription>
                     </Field>
 
-                    <Field>
-                        <FieldLabel htmlFor="scheduled-probe-models">{t('form.model')}</FieldLabel>
-                        <SearchMultiSelect
-                            id="scheduled-probe-models"
-                            options={modelOptions}
-                            selected={selectedModels}
-                            onChange={setModelNames}
-                            placeholder={t('form.modelPlaceholder')}
-                            searchPlaceholder={t('form.searchModel')}
-                            emptyText={channelIds.length === 0 ? t('form.modelPickChannelFirst') : t('form.modelEmpty')}
-                            // 只在没选渠道时禁用：选了渠道但一个模型都没有时要让用户打得开面板，
-                            // 否则"该渠道没有模型，先去渠道页添加"这句话永远显示不出来。
-                            disabled={channelIds.length === 0}
-                            selectAllLabel={t('form.selectAll')}
-                            clearLabel={t('form.clear')}
-                        />
-                        <FieldDescription>{t('form.modelHint')}</FieldDescription>
-                    </Field>
-
-                    <Field>
-                        <FieldLabel>{t('form.targets')}</FieldLabel>
-                        <TargetPreview targets={targets} nameOf={channelNameOf} />
-                        {/* 编辑旧任务时目标会按"渠道 × 模型"重新展开，可能与存下来的那几条不同：
-                            这种情况必须明说，否则用户只是点开看一眼再保存，任务就悄悄多了几条。 */}
-                        {initial !== undefined && !sameTargetSet(initial.targets, targets) && (
-                            <p className="text-xs text-amber-500">
-                                {t('form.targetsExpanded', { before: initial.targets.length, after: targets.length })}
-                            </p>
-                        )}
-                        <FieldDescription>{t('form.targetsHint')}</FieldDescription>
-                    </Field>
+                    {/* 已选目标预览：每条就是一条真实会被监控的凭据, 一览无遗。 */}
+                    {selected.length > 0 && <TargetPreview targets={targets} channels={channels ?? []} />}
 
                     <Field>
                         <FieldLabel htmlFor="scheduled-probe-interval">{t('form.interval')}</FieldLabel>
@@ -241,15 +207,16 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
     );
 }
 
-// TargetPreview 列出这次提交真正会产生的监控目标。
-// 渠道与模型都是多选，最终目标是"渠道 × 模型"再按各渠道实际提供的模型过滤，
-// 光看两个下拉数不出最后有几条；把结果铺开，用户按下保存之前就能确认自己没多勾。
-function TargetPreview({ targets, nameOf }: { targets: ScheduledProbeTarget[]; nameOf: (channelId: number) => string }) {
+// TargetPreview 列出已选的目标 —— 每一条都是一条真实会被监控的 (渠道, 模型)。
+function TargetPreview({ targets, channels }: { targets: ScheduledProbeTarget[]; channels: { channel_id: number; channel_name: string }[] }) {
     const t = useTranslations('scheduledProbe');
 
     if (targets.length === 0) {
-        return <p className="text-xs text-muted-foreground">{t('form.targetsEmpty')}</p>;
+        return null;
     }
+
+    const channelNameOf = (channelId: number) =>
+        channels.find((channel) => channel.channel_id === channelId)?.channel_name ?? `#${channelId}`;
 
     return (
         <>
@@ -257,11 +224,11 @@ function TargetPreview({ targets, nameOf }: { targets: ScheduledProbeTarget[]; n
             <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto rounded-xl border border-border/60 p-2">
                 {targets.map((target) => (
                     <Badge
-                        key={`${target.channel_id}:${target.model_name}`}
+                        key={targetKey(target)}
                         variant="secondary"
                         className="max-w-full truncate px-1.5 py-0 text-xs font-normal"
                     >
-                        {nameOf(target.channel_id)} / {target.model_name}
+                        {channelNameOf(target.channel_id)} / {target.model_name}
                     </Badge>
                 ))}
             </div>

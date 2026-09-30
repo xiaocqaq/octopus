@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil, RotateCcw, Trash2, Zap } from 'lucide-react';
+import { Pencil, Trash2, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
@@ -59,11 +59,6 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
     const { Icon, className: iconClassName, color: brandColor } = getModelIcon(probe.name);
     // 名字的悬停提示顺带给出间隔与时段: 徽标撤掉之后, 这两项配置总得有个地方能看到。
     const titleHint = `${probe.name} · ${t('intervalValue', { minutes: probe.interval_minutes })} · ${window}`;
-    // 被逐行删掉的凭据总数: 只用来决定卡片底部要不要出那一行恢复入口, 没有排除项时整行不渲染。
-    const excludedCount = probe.targets.reduce(
-        (total, target) => total + (target.excluded_keys?.length ?? 0),
-        0,
-    );
 
     const handleEnableChange = (checked: boolean) => {
         updateProbe.mutate({ ...toInput(probe, checked), id: probe.id }, {
@@ -100,24 +95,6 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
             },
             onError: (error) => toast.error(error.message),
         });
-    };
-
-    // handleRestoreAll 一次性恢复本任务下所有被删掉的凭据。
-    // 行内那个 × 是「点了就删、不再确认」的轻动作, 所以必须留一条一次点击就能整体回退的路;
-    // 只恢复某一条的入口交给编辑弹窗——那里的粒度本来就是整条任务。
-    const handleRestoreAll = () => {
-        updateProbe.mutate(
-            {
-                ...toInput(probe, probe.enabled),
-                id: probe.id,
-                // 显式传空数组才是「清空排除项」: 不带这个字段时后端会沿用既有值, 而这里要的正是清空。
-                targets: probe.targets.map((target) => ({ ...target, excluded_keys: [] })),
-            },
-            {
-                onSuccess: () => toast.success(t('toast.credentialRestored')),
-                onError: (error) => toast.error(error.message),
-            },
-        );
     };
 
     return (
@@ -206,23 +183,6 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
             </div>
 
             <RowList probeId={probe.id} rows={probe.rows} />
-
-            {/* 删掉的凭据不再出行, 界面上就没留下任何痕迹; 这一行把"还剩几条被隐藏"说出来并给一次恢复,
-                否则行内删除会变成一个没有出口的单向动作。没有排除项时整行不渲染, 不占版面。 */}
-            {excludedCount > 0 && (
-                <div className="flex items-center justify-between gap-2 px-1 pt-0.5 text-[11px] text-muted-foreground">
-                    <span>{t('excludedCount', { count: excludedCount })}</span>
-                    <button
-                        type="button"
-                        onClick={handleRestoreAll}
-                        disabled={updateProbe.isPending}
-                        className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium transition-colors hover:bg-muted/40 hover:text-foreground disabled:opacity-50"
-                    >
-                        <RotateCcw className="size-3" />
-                        {t('restoreAll')}
-                    </button>
-                </div>
-            )}
         </article>
     );
 }

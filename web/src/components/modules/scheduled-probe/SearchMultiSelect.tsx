@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 // SearchMultiSelect 是一个可模糊搜索的多选下拉：触发器显示已选摘要，面板里逐项勾选。
@@ -36,6 +37,9 @@ type SearchMultiSelectProps = {
     // 于是"搜 DeepSeek 再点全选"就是"把 DeepSeek 的模型一次选上"，这正是批量录入最常用的路径。
     selectAllLabel?: string;
     clearLabel?: string;
+    // confirmLabel 为空时不显示「完成」按钮。点击后收起面板——在移动端软键盘弹出时,
+    // 点完成下拉框才会收起(键盘消失后 onOpenChange 不一定跟得上), 比点外部区域可靠。
+    confirmLabel?: string;
 };
 
 // matchesQuery 判断一个备选项是否命中搜索词。
@@ -58,6 +62,7 @@ export function SearchMultiSelect({
     id,
     selectAllLabel,
     clearLabel,
+    confirmLabel,
 }: SearchMultiSelectProps) {
     const t = useTranslations('scheduledProbe');
     const [open, setOpen] = useState(false);
@@ -169,8 +174,13 @@ export function SearchMultiSelect({
                     )}
                 </div>
 
-                <div className="border-t border-border px-3 py-1.5 text-right text-xs text-muted-foreground">
-                    {t('form.selectedCount', { count: selected.length })}
+                <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">{t('form.selectedCount', { count: selected.length })}</span>
+                    {confirmLabel && (
+                        <Button type="button" variant="default" size="sm" onClick={() => setOpen(false)} className="h-11 px-3 text-xs font-medium sm:h-7">
+                            {confirmLabel}
+                        </Button>
+                    )}
                 </div>
             </PopoverContent>
         </Popover>

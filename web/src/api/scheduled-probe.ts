@@ -5,7 +5,7 @@ import { apiRequest } from './client';
 // 按凭据出行而不是按目标：一个目标可能挂多条凭据，只出一行就既看不到「哪条不通」，
 // 也点不到那一行的手动测试按钮，而排查时唯一有用的粒度就是单条凭据。
 export type ScheduledProbeRow = {
-    grant_id: number; // 手动测试按它发起；为 0 表示该目标当下没有可测凭据。
+    grant_id: number; // 手动测试按它发起；每行都是真实可测凭据。
     channel_id: number;
     channel_name: string;
     model_name: string;
@@ -22,12 +22,7 @@ export type ScheduledProbeRow = {
 export type ScheduledProbeTarget = {
     channel_id: number;
     model_name: string;
-    // excluded_keys 是该目标下被逐行删掉、不再监控的凭据名。
-    //
-    // 这个字段刻意可选，而且提交时「不传」与「传空数组」是两种意思：
-    // 不传（undefined）表示这次提交不涉及排除项，后端沿用既有值——编辑表单只知道 (渠道, 模型)，
-    // 走的正是这条路，所以编辑一次任务不会让删掉的凭据集体复活；
-    // 传 [] 才是清空排除项，卡片里的「全部恢复」发的就是它。
+    // excluded_keys 是该目标下被逐行删除、不再监控的凭据名。
     excluded_keys?: string[];
 };
 

@@ -244,7 +244,7 @@ function MorphingDialogContent({
     <motion.div
       ref={containerRef}
       layoutId={`dialog-${uniqueId}`}
-      className={cn('overflow-hidden', className)}
+      className={cn('m-auto overflow-hidden', className)}
       style={style}
       role='dialog'
       aria-modal='true'
@@ -288,7 +288,12 @@ function MorphingDialogContainer({ children }: MorphingDialogContainerProps) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           />
-          <div className='fixed inset-0 z-50 flex items-center justify-center'>
+          {/* 居中不能用 items-center: 子项比容器高时, flex 居中会让它向上下两侧等量溢出,
+              顶部被顶出视口且滚不回来 —— 移动端弹窗比可视区高的情形(软键盘弹出、地址栏占位)
+              正好落在这个形态上, 表现就是"上半部分被顶了上去"。
+              改成容器自己可滚动 + 子项 m-auto: 放得下时仍然居中, 放不下时顶部可达。
+              m-auto 落在子项上(见 MorphingDialogContent), 这里不再需要 items-center。 */}
+          <div className='fixed inset-0 z-50 flex overflow-y-auto overscroll-contain p-4'>
             {children}
           </div>
         </>

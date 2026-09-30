@@ -14,15 +14,17 @@ import (
 // 届时界面上的次序就只剩装饰作用。
 
 // probeRows 把一条任务摊成界面上的行, 并带上各条凭据当下的测活结论。
+// 仅摊已有凭据, 不再补占位行: 凭据被删后那条目标就应该从行里消失,
+// 不留"灰掉还能恢复"的痕迹——用户点 × 就是真的删除, 不来回倒腾。
 func probeRows(probe model.ScheduledProbeView) []model.ScheduledProbeRow {
 	credits := op.ScheduledProbeCredits(probe.ScheduledProbe)
 	results := relay.ScheduledProbeResults(creditGrantIDs(credits))
 
-	rows := make([]model.ScheduledProbeRow, 0, len(credits)+len(probe.Targets))
+	rows := make([]model.ScheduledProbeRow, 0, len(credits))
 	for _, credit := range credits {
 		rows = append(rows, withProbeResult(scheduledProbeRowOf(credit), results))
 	}
-	return append(rows, placeholderRows(probe.Targets)...)
+	return rows
 }
 
 // probeRowsOf 把刚测出的结论整理成与列表同形状的行, 让前端可以直接就地更新那一行。
@@ -71,27 +73,6 @@ func withProbeResult(row model.ScheduledProbeRow, results map[int]relay.ProbeRes
 	row.Message = result.Message
 	row.ProbedAt = result.ProbedAt
 	return row
-}
-
-// placeholderRows 为"当下没有可测凭据"的目标补一行占位, grant_id 为 0。
-// 界面据 grant_id 为 0 把那一行的手动测试与删除按钮置灰并说明原因 ——
-// 整条目标凭空消失, 用户只会以为是自己没配上。
-//
-// 这些行排在所有凭据行之后, 而不是插在凭据行之间: 它不对应任何一条凭据,
-// 排不进用户拖出来的那个顺序里, 硬插进去会让拖动后的落位莫名其妙。
-func placeholderRows(targets []model.ScheduledProbeTarget) []model.ScheduledProbeRow {
-	rows := make([]model.ScheduledProbeRow, 0, len(targets))
-	for _, target := range targets {
-		if len(op.ScheduledProbeGrantIDs(target)) > 0 {
-			continue
-		}
-		rows = append(rows, model.ScheduledProbeRow{
-			ChannelID:   target.ChannelID,
-			ChannelName: op.ChannelNameOf(target.ChannelID),
-			ModelName:   target.ModelName,
-		})
-	}
-	return rows
 }
 
 // creditGrantIDs 取出凭据列表里的授权主键, 供一次性批量查结论。

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { LucideIcon } from 'lucide-react';
-import { Home, Radio, Sparkles, FolderTree, Settings, Logs, Activity } from 'lucide-react';
+import { Home, Radio, FolderTree, Settings, Logs, Activity } from 'lucide-react';
 
 // Page 表示应用支持的固定页面集合。
 export type Page = 'home' | 'channel' | 'group' | 'model' | 'probe' | 'log' | 'setting';
@@ -14,8 +14,6 @@ export const NAV_ITEMS: NavItem[] = [
     { id: 'home', label: 'Home', icon: Home },
     { id: 'channel', label: 'Channel', icon: Radio },
     { id: 'group', label: 'Group', icon: FolderTree },
-    { id: 'model', label: 'Model', icon: Sparkles },
-    // 模型监控紧跟在价格之后: 它维护的是"渠道 + 模型"这一对, 放在价格页旁边符合使用动线。
     { id: 'probe', label: 'ModelMonitor', icon: Activity },
     { id: 'log', label: 'Log', icon: Logs },
     { id: 'setting', label: 'Setting', icon: Settings },
@@ -43,6 +41,14 @@ export const useAppStore = create<AppState>()(
         }),
         {
             name: 'nav-storage',
+            merge: (persistedState, currentState) => {
+                const persisted = persistedState as Partial<AppState>;
+                return {
+                    ...currentState,
+                    ...persisted,
+                    currentPage: persisted.currentPage === 'model' ? 'setting' : (persisted.currentPage ?? currentState.currentPage),
+                };
+            },
         }
     )
 );
