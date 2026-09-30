@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import { GroupCard } from './Card';
 import { CreateDialogContent } from './Create';
 import { useRuntimeClock } from './MemberStatus';
-import { useGroupList, PROBE_RESULT_TTL_MS, scoreDeadline } from '@/api/group';
+import { useGroupList, probeDeadline, scoreDeadline } from '@/api/group';
 import { PageActions, usePageActionsStore } from '@/components/common/PageActions';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
 
@@ -85,7 +85,7 @@ export function Group() {
                 // 传 0 会让"结论是否已过期"的比较恒为真, 徽标就永远不消失(实测踩过这个坑)。
                 let deadline = 0;
                 for (const probe of Object.values(group.runtime.probes ?? {})) {
-                    deadline = Math.max(deadline, probe.probed_at + PROBE_RESULT_TTL_MS);
+                    deadline = Math.max(deadline, probeDeadline(probe));
                 }
                 deadline = Math.max(deadline, group.runtime.affinity_until);
                 for (const cooldownUntil of Object.values(group.runtime.cooldowns)) {

@@ -146,6 +146,21 @@ func importDB(c *gin.Context) {
 			return
 		}
 	}
+	// 定时测活任务只做名字与间隔两项校验: 间隔直接驱动调度器的下一次探测时刻,
+	// 手改过的备份带个 0 或负数进来, 会让任务每一拍都被判定到点; 目标引用的渠道与模型
+	// 在导入事务内才落库、此时缓存里还没有, 无法校验, 引用了不存在渠道的目标测活时自然无结论。
+	for i := range dump.ScheduledProbes {
+		dump.ScheduledProbes[i].Name = strings.TrimSpace(dump.ScheduledProbes[i].Name)
+		if dump.ScheduledProbes[i].Name == "" {
+			resp.Error(c, http.StatusBadRequest, "scheduled probe name cannot be empty")
+			return
+		}
+		if dump.ScheduledProbes[i].IntervalMinutes < model.ScheduledProbeMinIntervalMinutes ||
+			dump.ScheduledProbes[i].IntervalMinutes > model.ScheduledProbeMaxIntervalMinutes {
+			resp.Error(c, http.StatusBadRequest, "invalid scheduled probe interval")
+			return
+		}
+	}
 
 	result, err := op.DBImportIncremental(c.Request.Context(), &dump)
 	if err != nil {
@@ -181,7 +196,9 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 		len(dump.StatsDaily) == 0 &&
 		len(dump.StatsHourly) == 0 &&
 		len(dump.StatsTotal) == 0 &&
-		len(dump.StatsAPIKey) == 0 {
+		len(dump.StatsAPIKey) == 0 &&
+		len(dump.ScheduledProbes) == 0 &&
+		len(dump.ScheduledProbeTargets) == 0 {
 		var wrapper struct {
 			Code    int             `json:"code"`
 			Message string          `json:"message"`

@@ -33,12 +33,16 @@ const probeConcurrency = 4
 // 取 min(分组配置, 45s): 不会放松已有的更严配置(如 30 秒), 只在默认 120 秒时收紧。
 const probeTimeout = 45 * time.Second
 
-// probeResultTTL 是一次测活结论的有效期。测活打的是真实上游, 结论只是"那一刻"的快照:
-// 上游的限流, 余额, 网络抖动随时会变, 把几小时前的结论一直挂在界面上, 等于拿旧快照当现状看。
+// probeResultTTL 是**由指令触发的那类测活**的结论有效期, 也是所有没有自带有效期的结论的兜底值。
+// 测活打的是真实上游, 结论只是"那一刻"的快照: 上游的限流, 余额, 网络抖动随时会变,
+// 把几小时前的结论一直挂在界面上, 等于拿旧快照当现状看。
 // 过期后结论既不展示也不参与选路, 要看就重新测活 —— 界面上那个徽标到点自己消失, 就是这条规则的可见形态。
 //
-// 取 10 分钟而不是更短: 定时测活的默认间隔就是 10 分钟, 有效期短于间隔会让徽标在两次探测之间空窗,
-// 界面看起来像"没测过"而不是"上一次的结论"; 与默认间隔对齐, 才让每条任务的结论恰好挂到下一次探测之前。
+// 定时测活不走这个常量: 它的有效期按所属任务的轮转周期算, 随结论发布(见 ProbeResult.ExpiresAt)。
+// 那个周期是用户配出来的数, 与这个默认值没有必然关系 —— 从前拿它当唯一有效期, 配 30 分钟间隔的
+// 任务就会"每 30 分钟里空 20 分钟", 看起来像结论丢了。
+//
+// 取 10 分钟而不是更短: 它是定时测活的默认间隔, 对没配任务的手动测活来说是个不松不紧的兜底。
 //
 // 与前端 PROBE_RESULT_TTL_MS(web/src/api/group.ts) 必须保持一致, 两侧各管一段:
 // 后端保证"读出来就已经没有过期的结论"(刷新, 换设备, 新标签页都一致),
@@ -50,9 +54,16 @@ const probeResultTTL = 10 * time.Minute
 const probeVoteDown = -1
 
 // probeFresh 判断一条测活结论是否仍在有效期内, now 为 Unix 毫秒。
-// 用"产生时间 + 有效期 > now"而不是"now - 产生时间 < 有效期": 前者在系统时钟被往回调时同样成立,
+//
+// 结论自带失效时刻时以它为准(定时测活按任务轮转周期给出), 否则回落到 probeResultTTL。
+// 兜底是必要的: 结论由多个入口写入, 指令触发的那条路没有任务可依, 也就不该硬套某个任务的节奏。
+//
+// 用"失效时刻 > now"而不是"now - 产生时间 < 有效期": 前者在系统时钟被往回调时同样成立,
 // 不会把带未来时间戳的结论误判成过期(节点间时钟不齐或手动对时都会造成这种时间戳)。
 func probeFresh(result ProbeResult, now int64) bool {
+	if result.ExpiresAt > 0 {
+		return result.ExpiresAt > now
+	}
 	return result.ProbedAt+probeResultTTL.Milliseconds() > now
 }
 
@@ -288,15 +299,18 @@ func int64Ptr(value int64) *int64 { return &value }
 // recordProbe 把一次人工测活的结论落进路由状态, 返回给调用方的完整结论(含耗时与消息)。
 // 失败不冷却: 人工测活是"此刻通不通"的一次快照, 未必是持续故障, 直接冷却会让一次误判把成员关进小黑屋。
 // 定时测活走 landProbe(..., true), 那里失败即按配置冷却 —— 它是持续监控的一环, 语义与一次性体检不同。
+//
+// 有效期与定时测活共用同一条规则(见 withProbeExpiry): 有任务在监控这条授权时,
+// 用户手动测出来的结论同样挂到下一轮复测之前, 而不是被一个与本次测试无关的短时限提前收走。
 func recordProbe(group model.Group, itemID int, ok bool, message string, latencyMS int64) ProbeResult {
-	return landProbe(group, itemID, ProbeResult{
+	return landProbe(group, itemID, withProbeExpiry(ProbeResult{
 		GroupID:   group.ID,
 		ItemID:    itemID,
 		OK:        ok,
 		LatencyMS: latencyMS,
 		Message:   message,
 		ProbedAt:  time.Now().UnixMilli(),
-	}, false)
+	}, itemOf(group, itemID).ChannelGrantID), false)
 }
 
 // landProbe 把一条测活结论落进分组的路由状态, 返回给调用方的完整结论。

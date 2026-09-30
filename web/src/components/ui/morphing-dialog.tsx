@@ -205,7 +205,13 @@ function MorphingDialogContent({
       if (focusableElements && focusableElements.length > 0) {
         firstFocusableElementRef.current = focusableElements[0] as HTMLElement;
         lastFocusableElementRef.current = focusableElements[focusableElements.length - 1] as HTMLElement;
-        (focusableElements[0] as HTMLElement).focus();
+        // 自动聚焦只在精确指针设备上做。触屏上把焦点交给第一个输入框会立刻顶出软键盘:
+        // 用户还没碰任何字段, 可视区就被键盘吃掉一半, 而弹窗是按视口高度定位的,
+        // 于是它被挤到可视区之外, 表现就是"上半部分被顶了上去"。
+        // 键盘用户仍有落点 —— Tab 会从弹窗容器内的第一个可聚焦元素开始。
+        if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+          (focusableElements[0] as HTMLElement).focus();
+        }
       }
     } else {
       document.body.classList.remove('overflow-hidden');

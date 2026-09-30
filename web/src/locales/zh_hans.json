@@ -317,7 +317,12 @@
             "deleted": "删除成功",
             "probeFailed": "测活请求失败",
             "probeAllOk": "{count} 个成员全部通过体检",
-            "probeAllPartial": "{ok} 个通过，{failed} 个不通"
+            "probeAllPartial": "{ok} 个通过，{failed} 个不通",
+            "monitorCreated": "已为「{name}」开启模型监控，共 {count} 个目标",
+            "monitorMerged": "「{name}」已并入 {count} 个新目标",
+            "monitorNarrowed": "已按分组收窄「{name}」的监控范围，{count} 个目标不再多测凭据",
+            "monitorExists": "「{name}」已在模型监控中，没有新目标可加",
+            "monitorFailed": "开启模型监控失败"
         },
         "create": {
             "submit": "创建",
@@ -340,7 +345,10 @@
             "probeOk": "上次测活通过，耗时 {ms}ms",
             "probeFailed": "上次测活失败：{message}",
             "probeUnknownError": "未知错误",
-            "probeValidFor": "结论 {minutes} 分钟内有效，过期后需重新测活"
+            "probeValidFor": "结论 {minutes} 分钟内有效，过期后需重新测活",
+            "monitorHint": "开启模型监控：把本组模型加到「模型监控」，用默认配置定时测活",
+            "monitor": "开启模型监控",
+            "monitorOnHint": "本组已在模型监控中，点击可补齐新增的模型"
         },
         "detail": {
             "actions": {

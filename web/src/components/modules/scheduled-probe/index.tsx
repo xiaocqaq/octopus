@@ -66,10 +66,11 @@ export function ScheduledProbe() {
         <VirtualizedGrid
             items={items}
             layout="grid"
-            // 一行放 3~4 个: 卡片头撤掉间隔徽标后, 每张卡只需要容纳"标题 + 几行凭据",
-            // 宽屏下排到 4 列仍看得清每行的渠道名/凭据名, 一屏能扫到的任务数却翻了一倍。
-            // md(768) 起就上 3 列而不等 lg: 这一档宽度已能让"渠道名/凭据名 + 结论"完整显示。
-            columns={{ default: 1, sm: 2, md: 3, xl: 4 }}
+            // 一行 3 个(宽屏): 用户要的是一屏多扫几条任务, 卡片的完整列宽让给数量。
+            // 代价是卡片变窄后行内文字必然放不下, 故行内的截断规则另行安排 ——
+            // 渠道名与凭据名优先保留, 模型名最后显示、也最先被省略(见 RowList)。
+            // 960(lg) 起 3 列而不是更早: 再窄下去连"渠道/凭据"两段都保不住, 省略号会吞掉身份信息。
+            columns={{ default: 1, sm: 2, lg: 3 }}
             // 卡片头一行 + 两条凭据行的高度; 实际高度由 VirtualizedGrid 自行测量。
             estimateItemHeight={156}
             getItemKey={(probe) => `scheduled-probe-${probe.id}`}

@@ -317,7 +317,12 @@
             "deleted": "Deleted successfully",
             "probeFailed": "Health check failed",
             "probeAllOk": "All {count} members passed",
-            "probeAllPartial": "{ok} passed, {failed} unreachable"
+            "probeAllPartial": "{ok} passed, {failed} unreachable",
+            "monitorCreated": "Model monitoring enabled for \"{name}\" with {count} targets",
+            "monitorMerged": "Added {count} new targets to \"{name}\"",
+            "monitorNarrowed": "Narrowed monitoring for \"{name}\": {count} targets no longer probe unused keys",
+            "monitorExists": "\"{name}\" is already monitored; no new targets to add",
+            "monitorFailed": "Could not enable model monitoring"
         },
         "create": {
             "submit": "Create",
@@ -340,7 +345,10 @@
             "probeOk": "Last check passed in {ms}ms",
             "probeFailed": "Last check failed: {message}",
             "probeUnknownError": "unknown error",
-            "probeValidFor": "Valid for {minutes} minutes — check again afterwards"
+            "probeValidFor": "Valid for {minutes} minutes — check again afterwards",
+            "monitorHint": "Enable model monitoring: add this group's models to Model Monitor with default settings",
+            "monitor": "Enable model monitoring",
+            "monitorOnHint": "This group is already monitored; click to add any newly added models"
         },
         "detail": {
             "actions": {

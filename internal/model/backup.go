@@ -18,6 +18,10 @@ type DBDump struct {
 	APIKeys       []APIKey       `json:"api_keys,omitempty"`       // API Key 数据。
 	Settings      []Setting      `json:"settings,omitempty"`       // 系统设置数据。
 
+	// 定时测活任务与目标单独成表导出, 与分组/分组成员同一口径; 旧备份没有该字段时按空导入。
+	ScheduledProbes       []ScheduledProbe       `json:"scheduled_probes,omitempty"`
+	ScheduledProbeTargets []ScheduledProbeTarget `json:"scheduled_probe_targets,omitempty"`
+
 	StatsTotal  []StatsTotal  `json:"stats_total,omitempty"`
 	StatsDaily  []StatsDaily  `json:"stats_daily,omitempty"`
 	StatsHourly []StatsHourly `json:"stats_hourly,omitempty"`

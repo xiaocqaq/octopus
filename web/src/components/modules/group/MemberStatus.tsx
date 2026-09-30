@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, CircleCheck, HeartCrack, HeartPulse, Pin } from 'lu
 import { useTranslations } from 'use-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { PROBE_RESULT_TTL_MS, SCORE_STEP_TTL_MS, activeScore, probeScoreVote, scoreDeadline, type Group, type GroupProbeResult } from '@/api/group';
+import { SCORE_STEP_TTL_MS, activeScore, probeDeadline, probeScoreVote, scoreDeadline, type Group, type GroupProbeResult } from '@/api/group';
 
 // MemberStatusProps 描述成员的冷却和亲和状态。
 interface MemberStatusProps {
@@ -25,7 +25,7 @@ export function useRuntimeClock(source?: Group | Group[]) {
         // 少了这一项，页面开着不动时徽标会一直挂着，直到某次重新拉取数据才消失。
         for (const probe of Object.values(group.runtime.probes ?? {})) {
             enabled = true;
-            lastDeadline = Math.max(lastDeadline, probe.probed_at + PROBE_RESULT_TTL_MS);
+            lastDeadline = Math.max(lastDeadline, probeDeadline(probe));
         }
         if (group.mode !== 'failover') continue;
         enabled = true;
@@ -65,12 +65,13 @@ export function useRuntimeClock(source?: Group | Group[]) {
 }
 
 // freshProbe 取该成员仍在有效期内的体检结论：过期的结论一律当没有，要看就重新测活。
+// 有效期以结论自带的 expires_at 为准（定时测活按任务轮转周期给出），缺失时回落到兜底值。
 // 后端读出来时已经滤过一遍（刷新、换设备都一致），这里再滤一次是为了页面开着不动时到点自己消失。
 export function freshProbe(group: Group, itemId: number | undefined, now: number): GroupProbeResult | undefined {
     if (itemId === undefined) return undefined;
     const probe = group.runtime.probes?.[itemId];
     if (!probe) return undefined;
-    return now < probe.probed_at + PROBE_RESULT_TTL_MS ? probe : undefined;
+    return now < probeDeadline(probe) ? probe : undefined;
 }
 
 // MemberStatus 展示成员的强制标记、体检结论、健康分偏移、冷却、亲和倒计时或当前使用圆点。
@@ -136,7 +137,7 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
     );
 }
 
-// ProbeMark 标出该成员最近一次人工测活的结论: 只用一颗心 —— 通过是绿心, 失败是红心裂。
+// ProbeMark 标出该成员最近一次测活的结论: 只用一颗心 —— 通过是绿心, 失败是红心裂。
 // 耗时与错误正文一律放进悬停提示: 徽标里多写几个字符("6792ms")就会把成员行里的
 // "渠道 · 凭据"整段副标题挤没, 而成员名与渠道名才是这一行要传达的主信息(实测截图里那行副标题直接消失)。
 // 与 RankMark 并列而非互斥: 测活通过会在结论有效期内把健康分抬到满档, 两者一起看才明白这次排名上升是体检带来的。
@@ -146,7 +147,9 @@ function ProbeMark({ probe }: { probe: GroupProbeResult }) {
     const conclusion = probe.ok
         ? t('probeOk', { ms: probe.latency_ms })
         : t('probeFailed', { message: probe.message || t('probeUnknownError') });
-    const title = `${conclusion} · ${t('probeValidFor', { minutes: PROBE_RESULT_TTL_MS / 60_000 })}`;
+    // 有效期由结论自带: 定时测活按所属任务的轮转周期算, 各不相同, 故就着这条结论现算而不是读常量。
+    const validMinutes = Math.max(1, Math.round((probeDeadline(probe) - probe.probed_at) / 60_000));
+    const title = `${conclusion} · ${t('probeValidFor', { minutes: validMinutes })}`;
 
     return (
         <Badge

@@ -146,7 +146,7 @@ type ScheduledProbeRow struct {
 	ChannelName string `json:"channel_name"` // 渠道名称; 渠道已删除时为空。
 	ModelName   string `json:"model_name"`   // 目标模型名称。
 	KeyName     string `json:"key_name"`     // 该授权所用凭据的名称。
-	Probed      bool   `json:"probed"`       // 是否有仍在有效期内的结论; 为假时下面的字段全部无意义。
+	Probed      bool   `json:"probed"`       // 是否已有结论; 结论不设有效期, 只会被下一次测活覆盖, 为假时下面的字段全部无意义。
 	OK          bool   `json:"ok"`           // 该凭据本轮是否调通。
 	LatencyMS   int64  `json:"latency_ms"`   // 从发起到收到有效响应的耗时毫秒数。
 	Message     string `json:"message"`      // 成功时为空, 失败时为上游错误正文或本地配置错误。

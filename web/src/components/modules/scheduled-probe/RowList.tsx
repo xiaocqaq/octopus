@@ -169,19 +169,28 @@ function Row({ probeId, row, dnd }: { probeId: number; row: ScheduledProbeRow; d
                 </span>
             )}
 
-            {/* 渠道名與凭据名字体更大: 它们回答"这条通道、这把钥匙"，是扫列表时第一眼要看的。
-                模型名只在卡片标题出现, 行里不重复；同个任务挂多模型时才补在 tooltip，别把主视觉打散。 */}
+            {/* 三段并排: 渠道名 / 凭据名 / 模型名。
+                卡片排到 3 列后宽度有限, 三段的取舍必须明确: 渠道名与凭据名是"哪条通道的哪把钥匙",
+                是这一行的身份, 用 shrink-0 保住; 模型名最长、也最容易从上下文推回来, 由它单独承担省略号。
+                三段都靠外层 overflow-hidden 兜底: 万一渠道名本身就超长, 至少边界是干净的而不是溢出到结论上。
+                完整文本始终在悬停提示里, 截断只影响扫视, 不影响核对。 */}
             <Tooltip>
                 <TooltipTrigger asChild>
-                    <span className="min-w-0 flex-1 truncate text-sm">
-                        <span className="text-foreground">{row.channel_name || `#${row.channel_id}`}</span>
-                        <span className="text-muted-foreground/50">/</span>
-                        <span className="text-foreground">{label}</span>
+                    <span className="flex min-w-0 flex-1 items-center overflow-hidden text-sm">
+                        <span className="shrink-0 text-foreground">{row.channel_name || `#${row.channel_id}`}</span>
+                        <span className="shrink-0 text-muted-foreground/50">/</span>
+                        <span className="shrink-0 text-foreground">{label}</span>
+                        {row.model_name && (
+                            <>
+                                <span className="shrink-0 text-muted-foreground/50">/</span>
+                                <span className="min-w-0 truncate text-muted-foreground">{row.model_name}</span>
+                            </>
+                        )}
                     </span>
                 </TooltipTrigger>
                 <TooltipContent side="top" sideOffset={10} align="start">
                     {`${row.channel_name || `#${row.channel_id}`} / ${label}`}
-                    {row.model_name ? ` · ${row.model_name}` : ''}
+                    {row.model_name ? ` / ${row.model_name}` : ''}
                 </TooltipContent>
             </Tooltip>
 

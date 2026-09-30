@@ -31,8 +31,8 @@ type RouteState struct {
 	ScoreAt map[int]int64 `json:"score_at"`
 	// Probes 是成员 ID 对应的最近一次人工测活结论, 供界面展示"体检结果"。
 	// 与 Scores 分开保存: Scores 还会被真实调用结果升降, 而 Probes 只由人工测活写入,
-	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。结论只有 probeResultTTL 的有效期,
-	// 过期即视为没有结论(既不展示也不参与选路), 要看就重新测活。
+	// 界面据此区分"这条结论来自我的体检"还是"来自线上调用"。结论各有各的有效期
+	// (见 ProbeResult.ExpiresAt), 过期即视为没有结论(既不展示也不参与选路), 要看就重新测活。
 	Probes map[int]ProbeResult `json:"probes"`
 
 	affinityArmed bool        // 当前路由下一次成功后是否开始亲和, 仅故障切换后为真。
@@ -52,6 +52,13 @@ type ProbeResult struct {
 	LatencyMS int64  `json:"latency_ms"` // 从发起到收到有效响应的耗时毫秒数; 失败时为耗时直到报错。
 	Message   string `json:"message"`    // 成功时为空, 失败时为上游错误正文或本地配置错误。
 	ProbedAt  int64  `json:"probed_at"`  // 结论产生时间, Unix 毫秒。
+	// ExpiresAt 是这条结论失效的时刻(Unix 毫秒), 由产出它的那次测活决定: 定时测活按所属任务的
+	// 轮转周期算(下一轮复测之前一直有效), 人工测活用 probeResultTTL 兜底。
+	//
+	// 结论自带有效期而不是统一取一个常量: 同一个常量既当"徽标能挂多久"又当"多久算陈旧",
+	// 只有配置的间隔恰好等于它时才成立 —— 间隔一改就成了"配 30 分钟、徽标只挂 10 分钟",
+	// 界面看起来就是结论丢了。随结论发布也让前端不必再猜这个值。
+	ExpiresAt int64 `json:"expires_at"`
 }
 
 // routeScoreMax 是健康分相对配置优先级的最大偏移, 每一档相当于越过一个成员的位置。

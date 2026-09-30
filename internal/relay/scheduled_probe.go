@@ -27,6 +27,9 @@ const scheduledProbeJitterMillis = 30_000
 // 均摊之后周期可能只有几十秒, 此时固定的 ±30 秒足以盖过周期本身, 故按周期收敛。
 const scheduledProbeJitterPeriodDivisor = 4
 
+// scheduledProbeCycleUnit 是轮转周期与结论有效期的取值粒度: 掐到秒, 抹掉均摊除法的亚微秒余数。
+const scheduledProbeCycleUnit = time.Second
+
 // 抖动散列的两个乘数。
 const (
 	scheduledProbeHashID    = 2654435761 // 黄金比例散列乘数, 把相邻的任务主键打散到不同档位。
@@ -229,6 +232,90 @@ func scheduledProbeAmortizedPeriod(interval time.Duration, total int) time.Durat
 	return period
 }
 
+// scheduledProbeCycle 返回轮转一圈的时间, 也就是同一条凭据两次复测之间该隔多久。
+//
+// 一拍只测一条凭据, 一圈要走完凭据数十拍, 故它等于"均摊周期 × 凭据数"; 在周期没被节拍兜底时
+// 恰好等于用户配置的间隔 —— 用户配的那个数字表达的就是这个意思(见 scheduledProbePeriod)。
+//
+// 掐到秒: 均摊的整数除法会留下亚微秒的余数(30 分钟 ÷ 7 再 × 7 差 6 纳秒), 而有效期本就是秒级的
+// 粗量。抹掉这点余数让"轮转一圈 == 配置的间隔"这条等式真的成立, 免得有效期里出现一个差几纳秒的怪值。
+// 四舍五入而不是截断: 截断会把那点余数放大成整整一秒(29m59s), 舍入则回到用户配的那个数。
+func scheduledProbeCycle(interval time.Duration, total int) time.Duration {
+	if total <= 0 {
+		return 0
+	}
+	cycle := scheduledProbeAmortizedPeriod(interval, total) * time.Duration(total)
+	return (cycle + scheduledProbeCycleUnit/2) / scheduledProbeCycleUnit * scheduledProbeCycleUnit
+}
+
+// scheduledProbeValidity 把一圈的时间换算成"结论该挂多久": 在周期之外再加一段余量。
+//
+// 余量补两件事: 每一拍的抖动会沿着一圈累计(单拍不超过周期的四分之一, 走完一圈合计不超过 cycle/4),
+// 以及探测本身最长要 probeTimeout 才出结论。少了这段余量, 徽标会在下一次复测落下来之前先空掉 ——
+// 那正是"测出来的结果丢了"的成因。
+//
+// 单列成纯函数是为了能直接验证这段加法, 不必先搭出一整套渠道缓存。
+func scheduledProbeValidity(cycle time.Duration) time.Duration {
+	if cycle <= 0 {
+		return 0
+	}
+	return cycle + cycle/scheduledProbeJitterPeriodDivisor + probeTimeout
+}
+
+// scheduledProbeGrantValidity 返回一条结论该挂多久: 监控该授权的任务里最长的那个轮转周期加余量。
+// 没有任何**启用中的**任务监控它时返回 0, 由读侧回落到默认有效期。
+//
+// 取最长的那个周期: 同一条授权可能被多条任务监控, 结论却只有一条 —— 按最短的那条算,
+// 长间隔任务的结论会在它自己的下一轮到来之前先消失, 这正是"结果丢了"的成因。
+//
+// 只看启用中的任务: 停用的任务不会再复测, 也就不会有"下一次覆盖"。为它续期等于让一条
+// 永远等不到替换的结论一直挂着, 那比提前消失更容易误导。
+func scheduledProbeGrantValidity(grantID int) time.Duration {
+	longest := time.Duration(0)
+	for _, probe := range op.ScheduledProbeList() {
+		if !probe.Enabled {
+			continue
+		}
+		// 走与调度、界面同一个凭据列表(见 op.ScheduledProbeCredits): 被用户逐行删掉的凭据不在里面,
+		// 它也就不该再为这条授权上的结论续期。
+		credits := op.ScheduledProbeCredits(probe.ScheduledProbe)
+		if !creditsCoverGrant(credits, grantID) {
+			continue
+		}
+		cycle := scheduledProbeCycle(time.Duration(probe.IntervalMinutes)*time.Minute, len(credits))
+		if validity := scheduledProbeValidity(cycle); validity > longest {
+			longest = validity
+		}
+	}
+	return longest
+}
+
+// creditsCoverGrant 判断这批凭据里是否有这条授权。
+func creditsCoverGrant(credits []op.ScheduledProbeCredit, grantID int) bool {
+	for _, credit := range credits {
+		if credit.GrantID == grantID {
+			return true
+		}
+	}
+	return false
+}
+
+// withProbeExpiry 给一条结论定下失效时刻: 有任务在监控这条授权就按任务的轮转周期算,
+// 让它正好挂到下一轮复测(或下一次手动测试)把它覆盖之前; 没有任务监控就留 0, 由读侧兜底。
+//
+// 手动测试与定时测活共用这一条规则: 用户手动测出来的结论同样代表"这条通道此刻通不通",
+// 它该活多久取决于有没有人接着测, 而不取决于这次是谁点的按钮 ——
+// 若手动测试只按一个写死的短时限算, 用户自己点的结果反而比定时测的更早消失。
+func withProbeExpiry(result ProbeResult, grantID int) ProbeResult {
+	if result.ExpiresAt > 0 {
+		return result
+	}
+	if validity := scheduledProbeGrantValidity(grantID); validity > 0 {
+		result.ExpiresAt = result.ProbedAt + validity.Milliseconds()
+	}
+	return result
+}
+
 // scheduledProbeJitter 给出该任务这一轮的抖动偏移, 落在 ±30 秒之间, 但不大于周期的四分之一。
 //
 // 用任务主键与轮数做散列而不是取全局随机数: 抖动只需要"每条任务、每一轮都不同"来错开上游流量,
@@ -273,7 +360,7 @@ func notifyProbeLanded(groupIDs []int) {
 // 定时测活是持续监控, 结论必须落进分组路由状态, 否则界面上的体检徽标不会有任何变化,
 // 用户也就无从知道这条任务到底测出了什么 —— 监控的可见形态就是这个徽标。
 func ProbeScheduledGrant(ctx context.Context, grantID int, streaming bool) ProbeResult {
-	result := ProbeChannelGrant(ctx, grantID, streaming)
+	result := withProbeExpiry(ProbeChannelGrant(ctx, grantID, streaming), grantID)
 	// 先按凭据记一份: 任务测的是 (渠道, 模型), 它可能压根没被任何分组引用,
 	// 那份结论只落进分组就等于没记, 界面上也就看不到这条任务到底测出了什么。
 	recordScheduledProbeResult(grantID, result)

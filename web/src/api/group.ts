@@ -57,13 +57,21 @@ export interface GroupRuntime {
     probes: Record<number, GroupProbeResult>;
 }
 
-// PROBE_RESULT_TTL_MS 是一次测活结论的有效期，与后端 probeResultTTL（internal/relay/probe.go）必须一致。
+// PROBE_RESULT_TTL_MS 是没有自带有效期的测活结论所用的兜底有效期，与后端 probeResultTTL（internal/relay/probe.go）一致。
+// 指令触发的那类测活（分组页上手动点的那次）没有任务可依，就用它。
 // 两侧各管一段：后端保证“读出来就已经没有过期的结论”（刷新、换设备、新标签页都一致），
 // 前端保证“页面开着不动时，到点那个徽标自己消失”（不依赖后端再推一条消息）。
-// 有效期一过，排名提升与体检徽标一起消失——想看就重新测活。
-// 取 10 分钟而非更短：模型监控的默认间隔就是 10 分钟，短于间隔会让徽标在两次探测之间空窗，
-// 看起来像“没测过”而不是“上一次的结论”。
+//
+// 定时测活的结论不走这个常量：它带着 expires_at（按所属任务的轮转周期算），
+// 因为那个周期是用户配出来的数，与这个默认值没有必然关系。
 export const PROBE_RESULT_TTL_MS = 10 * 60 * 1000;
+
+// probeDeadline 返回一条测活结论失效的时刻（Unix 毫秒）。
+// 结论自带 expires_at 时以它为准；没有（指令触发的手动测活，或旧数据）则回落到兜底有效期。
+// 后端与前端必须用同一条规则算出同一个时刻，否则会出现“后端已滤掉、前端还挂着”这种两侧打架的显示。
+export function probeDeadline(probe: GroupProbeResult): number {
+    return probe.expires_at > 0 ? probe.expires_at : probe.probed_at + PROBE_RESULT_TTL_MS;
+}
 
 // PROBE_SCORE_MAX 与 PROBE_VOTE_DOWN 是测活结论对健康分的加权档位，
 // 必须与后端 routeScoreMax / probeVoteDown（internal/relay/route.go、probe.go）保持一致。
@@ -98,7 +106,7 @@ export function scoreDeadline(score: number, at: number): number {
     return at + Math.abs(score) * SCORE_STEP_TTL_MS;
 }
 
-// GroupProbeResult 是一次人工测活的结论。
+// GroupProbeResult 是一次测活（体检）的结论。
 export interface GroupProbeResult {
     group_id: number;
     item_id: number;
@@ -106,6 +114,9 @@ export interface GroupProbeResult {
     latency_ms: number;
     message: string; // 成功时为空，失败时为上游错误正文或本地配置错误。
     probed_at: number; // 结论产生时间，Unix 毫秒。
+    // expires_at 是结论失效的时刻（Unix 毫秒）：定时测活按所属任务的轮转周期给出，
+    // 指令触发的手动测活为 0，由 PROBE_RESULT_TTL_MS 兜底（见 probeDeadline）。
+    expires_at: number;
 }
 
 // Group 是客户端模型名称对应的渠道分组。

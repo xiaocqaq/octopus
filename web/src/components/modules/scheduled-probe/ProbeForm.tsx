@@ -2,11 +2,13 @@ import { useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { useChannelStats } from '@/api/channel';
 import {
+    SCHEDULED_PROBE_DEFAULT_END_HOUR,
     SCHEDULED_PROBE_DEFAULT_INTERVAL,
+    SCHEDULED_PROBE_DEFAULT_START_HOUR,
+    SCHEDULED_PROBE_DEFAULT_WEEKDAYS,
     SCHEDULED_PROBE_HOURS,
     type ScheduledProbeTarget,
 } from '@/api/scheduled-probe';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
@@ -14,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatHour } from './format';
 import { WeekdayPicker } from './WeekdayPicker';
 import { SearchMultiSelect, type SearchOption } from './SearchMultiSelect';
-import { targetFromKey, targetKey } from './targets';
+import { targetFromKey } from './targets';
 
 // ProbeFormValues 是这张表单的产出，与后端的提交体同形状（主键除外）。
 export type ProbeFormValues = {
@@ -72,9 +74,9 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
     const [selected, setSelected] = useState<string[]>(initialValues);
     const [name, setName] = useState(initial?.name ?? '');
     const [interval, setIntervalValue] = useState(String(initial?.interval_minutes ?? SCHEDULED_PROBE_DEFAULT_INTERVAL));
-    const [weekdays, setWeekdays] = useState(initial?.weekdays ?? 0);
-    const [startHour, setStartHour] = useState(initial?.start_hour ?? 9);
-    const [endHour, setEndHour] = useState(initial?.end_hour ?? 18);
+    const [weekdays, setWeekdays] = useState(initial?.weekdays ?? SCHEDULED_PROBE_DEFAULT_WEEKDAYS);
+    const [startHour, setStartHour] = useState(initial?.start_hour ?? SCHEDULED_PROBE_DEFAULT_START_HOUR);
+    const [endHour, setEndHour] = useState(initial?.end_hour ?? SCHEDULED_PROBE_DEFAULT_END_HOUR);
 
     const targets = selected.flatMap((value) => {
         const target = targetFromKey(value);
@@ -135,9 +137,6 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                         />
                         <FieldDescription>{t('form.targetHint')}</FieldDescription>
                     </Field>
-
-                    {/* 已选目标预览：每条就是一条真实会被监控的凭据, 一览无遗。 */}
-                    {selected.length > 0 && <TargetPreview targets={targets} channels={channels ?? []} />}
 
                     <Field>
                         <FieldLabel htmlFor="scheduled-probe-interval">{t('form.interval')}</FieldLabel>
@@ -204,34 +203,5 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                 </Button>
             </div>
         </form>
-    );
-}
-
-// TargetPreview 列出已选的目标 —— 每一条都是一条真实会被监控的 (渠道, 模型)。
-function TargetPreview({ targets, channels }: { targets: ScheduledProbeTarget[]; channels: { channel_id: number; channel_name: string }[] }) {
-    const t = useTranslations('scheduledProbe');
-
-    if (targets.length === 0) {
-        return null;
-    }
-
-    const channelNameOf = (channelId: number) =>
-        channels.find((channel) => channel.channel_id === channelId)?.channel_name ?? `#${channelId}`;
-
-    return (
-        <>
-            <p className="text-xs text-muted-foreground">{t('form.targetCount', { count: targets.length })}</p>
-            <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto rounded-xl border border-border/60 p-2">
-                {targets.map((target) => (
-                    <Badge
-                        key={targetKey(target)}
-                        variant="secondary"
-                        className="max-w-full truncate px-1.5 py-0 text-xs font-normal"
-                    >
-                        {channelNameOf(target.channel_id)} / {target.model_name}
-                    </Badge>
-                ))}
-            </div>
-        </>
     );
 }

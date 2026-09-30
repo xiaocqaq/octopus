@@ -157,16 +157,26 @@ export function VirtualizedGrid<T>({
                             if (hasFooterRow && virtualRow.index === itemRowCount) {
                                 return (
                                     <div
-                                        key={virtualRow.key}
-                                        data-index={virtualRow.index}
-                                        ref={rowVirtualizer.measureElement}
-                                        className="absolute left-0 top-0 w-full"
-                                        style={{
-                                            transform: `translateY(${virtualRow.start}px)`,
-                                        }}
-                                    >
-                                        {footer}
-                                    </div>
+                                    key={virtualRow.key}
+                                    data-index={virtualRow.index}
+                                    ref={rowVirtualizer.measureElement}
+                                    className="absolute left-0 top-0 w-full"
+                                    // 用 top 而不是 transform: translateY 定位。
+                                    //
+                                    // transform 会让这个行容器成为 position: fixed 后代的包含块。
+                                    // @hello-pangea/dnd 拖动时把行设成 position: fixed, 并按视口坐标算出 left/top;
+                                    // 一旦包含块变成了行容器, 那份视口坐标会被叠加在行自身的偏移上 ——
+                                    // 实测拖动中的行 left 从 266 变成 543, 整整偏出一个卡片宽度, 看起来就是"拖起来就异位"。
+                                    // 换成 top 定位后这个行容器不再建立包含块, 拖拽项才按视口坐标落位。
+                                    //
+                                    // 代价是滚动时触发的是布局而非合成。此处每屏不过十余张卡, 用正确性换这点开销是划算的;
+                                    // 若将来列表规模大到需要 transform 合成, 应改为把拖拽层渲染到 body 上, 而不是把 transform 加回来。
+                                    style={{
+                                        top: `${virtualRow.start}px`,
+                                    }}
+                                >
+                                    {footer}
+                                </div>
                                 );
                             }
 
@@ -181,8 +191,10 @@ export function VirtualizedGrid<T>({
                                     data-index={virtualRow.index}
                                     ref={rowVirtualizer.measureElement}
                                     className="absolute left-0 top-0 w-full"
+                                    // 与 footer 行同理: 这里必须用 top 定位, 不能用 transform: translateY,
+                                    // 否则本行成为 position: fixed 后代的包含块, 拖拽中的行会被二次偏移。
                                     style={{
-                                        transform: `translateY(${virtualRow.start}px)`,
+                                        top: `${virtualRow.start}px`,
                                     }}
                                 >
                                     <div

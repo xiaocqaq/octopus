@@ -329,6 +329,98 @@ func TestScheduledProbeGrantIDsOnlyDropsMatchingName(t *testing.T) {
 	remaining := ScheduledProbeGrantIDs(target)
 
 	if len(remaining) != 3 {
-		t.Fatalf("expected 名称不匹配时 3 条授权都保留, actual %v", remaining)
+		t.Fatalf("expected 名称不匹配时 3 条授权都保留, actual %v", len(remaining))
+	}
+}
+
+// 三条凭据删到只剩一条时目标必须留着: 早删一步就会把用户还没删的凭据一起丢掉。
+func TestTargetFullyExcludedKeepsTargetWhileKeysRemain(t *testing.T) {
+	seedProbeGrantCaches(t)
+	target := model.ScheduledProbeTarget{
+		ChannelID:    2,
+		ModelName:    "deepseek-chat",
+		ExcludedKeys: []string{"a", "b"},
+	}
+
+	if targetFullyExcluded(target) {
+		t.Fatalf("expected 还剩 c 未排除时不删目标, actual 判定为已删空")
+	}
+}
+
+// 三条凭据全删光才算删空 —— 这是界面点掉最后一行后目标该消失的判据。
+func TestTargetFullyExcludedWhenEveryKeyExcluded(t *testing.T) {
+	seedProbeGrantCaches(t)
+	target := model.ScheduledProbeTarget{
+		ChannelID:    2,
+		ModelName:    "deepseek-chat",
+		ExcludedKeys: []string{"a", "b", "c"},
+	}
+
+	if !targetFullyExcluded(target) {
+		t.Fatalf("expected 三条凭据全排除时判定为已删空, actual 判定为未删空")
+	}
+}
+
+// 目标下一个凭据都没有时不能判定为删空: 那是渠道配置变了(模型被删、凭据被删),
+// 不是用户逐行删的; 此时把目标删掉等于替用户改了配置。
+func TestTargetFullyExcludedIgnoresTargetWithoutKeys(t *testing.T) {
+	seedProbeGrantCaches(t)
+	target := model.ScheduledProbeTarget{ChannelID: 2, ModelName: "已经没有的模型"}
+
+	if targetFullyExcluded(target) {
+		t.Fatalf("expected 目标下无凭据时不判定为删空, actual 判定为已删空")
+	}
+}
+
+// 停用不是删除: 渠道或凭据临时关掉时, 用户并没有表达"不要这个目标"。
+func TestTargetFullyExcludedIgnoresDisabledKeys(t *testing.T) {
+	seedProbeGrantCaches(t)
+	channelKeyCache.Set(30, model.ChannelKey{
+		ID:               30,
+		ChannelID:        2,
+		ChannelKeyConfig: model.ChannelKeyConfig{Name: "a", Enabled: false},
+	})
+	target := model.ScheduledProbeTarget{
+		ChannelID:    2,
+		ModelName:    "deepseek-chat",
+		ExcludedKeys: []string{"b", "c"},
+	}
+
+	if targetFullyExcluded(target) {
+		t.Fatalf("expected 仅 a 停用时不算删空, actual 判定为已删空")
+	}
+}
+
+// 删目标要按渠道+模型精确剔除顺序项, 不能连别的目标一起清掉。
+func TestDropCreditOrderOfRemovesOnlyMatchingTarget(t *testing.T) {
+	order := []string{
+		"2\x00m-a\x00k-1",
+		"2\x00m-b\x00k-1",
+		"2\x00m-a\x00k-2",
+		"3\x00m-a\x00k-1",
+	}
+
+	kept := dropCreditOrderOf(order, 2, "m-a")
+
+	expected := []string{"2\x00m-b\x00k-1", "3\x00m-a\x00k-1"}
+	if len(kept) != len(expected) {
+		t.Fatalf("expected 只剩 %d 项, actual %d 项: %v", len(expected), len(kept), kept)
+	}
+	for index := range expected {
+		if kept[index] != expected[index] {
+			t.Fatalf("expected 第 %d 项为 %q, actual %q", index, expected[index], kept[index])
+		}
+	}
+}
+
+// 模型名可能互为前缀, 剔除必须整段匹配: 删 "m-a" 不该顺手带走 "m-ab"。
+func TestDropCreditOrderOfDoesNotMatchModelNamePrefix(t *testing.T) {
+	order := []string{"2\x00m-a\x00k-1", "2\x00m-ab\x00k-1"}
+
+	kept := dropCreditOrderOf(order, 2, "m-a")
+
+	expected := []string{"2\x00m-ab\x00k-1"}
+	if len(kept) != len(expected) || kept[0] != expected[0] {
+		t.Fatalf("expected 只剩 %v, actual %v", expected, kept)
 	}
 }

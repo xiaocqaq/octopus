@@ -317,7 +317,12 @@
             "deleted": "刪除成功",
             "probeFailed": "測活請求失敗",
             "probeAllOk": "{count} 個成員全部通過體檢",
-            "probeAllPartial": "{ok} 個通過，{failed} 個不通"
+            "probeAllPartial": "{ok} 個通過，{failed} 個不通",
+            "monitorCreated": "已為「{name}」開啟模型監控，共 {count} 個目標",
+            "monitorMerged": "「{name}」已併入 {count} 個新目標",
+            "monitorNarrowed": "已按分組收窄「{name}」的監控範圍，{count} 個目標不再多測憑據",
+            "monitorExists": "「{name}」已在模型監控中，沒有新目標可加",
+            "monitorFailed": "開啟模型監控失敗"
         },
         "create": {
             "submit": "建立",
@@ -340,7 +345,10 @@
             "probeOk": "上次測活通過，耗時 {ms}ms",
             "probeFailed": "上次測活失敗：{message}",
             "probeUnknownError": "未知錯誤",
-            "probeValidFor": "結論 {minutes} 分鐘內有效，逾期後需重新測活"
+            "probeValidFor": "結論 {minutes} 分鐘內有效，逾期後需重新測活",
+            "monitorHint": "開啟模型監控：把本組模型加到「模型監控」，用預設設定定時測活",
+            "monitor": "開啟模型監控",
+            "monitorOnHint": "本組已在模型監控中，點擊可補齊新增的模型"
         },
         "detail": {
             "actions": {

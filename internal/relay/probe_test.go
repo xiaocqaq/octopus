@@ -278,3 +278,31 @@ func TestProbeFreshBoundary(t *testing.T) {
 		t.Fatalf("未来时间戳的结论不该被判为过期")
 	}
 }
+
+// TestProbeFreshPrefersOwnExpiry 结论自带失效时刻时以它为准, 不再套用默认有效期。
+//
+// 这是"配 30 分钟间隔、徽标却只挂 10 分钟"的直接回归: 定时测活的结论按任务轮转周期给有效期,
+// 若读侧仍拿 probeResultTTL 去算, 用户配的长间隔任务就会在两次复测之间空窗, 看起来像结论丢了。
+func TestProbeFreshPrefersOwnExpiry(t *testing.T) {
+	now := time.Now().UnixMilli()
+	// 产生时间早已超过默认有效期, 但自带的有效期还没到 —— 该判为有效。
+	beyondDefault := ProbeResult{
+		ProbedAt:  now - probeResultTTL.Milliseconds() - time.Minute.Milliseconds(),
+		ExpiresAt: now + time.Minute.Milliseconds(),
+	}
+	if !probeFresh(beyondDefault, now) {
+		t.Fatal("自带有效期未到时, 结论不该因超过默认有效期而被判为过期")
+	}
+
+	// 自带的有效期已过, 哪怕产生时间还很新, 也该判为过期(短周期任务配长间隔的单向情形)。
+	freshButScheduledExpired := ProbeResult{ProbedAt: now - 1000, ExpiresAt: now - 1000}
+	if probeFresh(freshButScheduledExpired, now) {
+		t.Fatal("自带有效期已到时应判为过期")
+	}
+
+	// 未带有效期(指令触发的手动测活)仍走默认有效期这条兜底。
+	manual := ProbeResult{ProbedAt: now - 1000}
+	if !probeFresh(manual, now) {
+		t.Fatal("没有自带有效期的结论应回落到默认有效期")
+	}
+}

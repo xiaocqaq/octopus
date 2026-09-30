@@ -13,6 +13,8 @@ import (
 
 // 渠道拆分为渠道, 凭据, 模型与渠道授权后导出结构变化, 版本随之递增;
 // 版本 5 起 api_keys.supported_models 由逗号分隔字符串改为 JSON 数组。
+// 纯新增表(如定时测活)只追加 omitempty 字段, 不递增版本: 旧备份没有该字段时按空导入,
+// 新旧版本双向兼容, 不必为一次加法让已有备份失效。
 const dbDumpVersion = 5
 
 // DBExportAll 导出完整数据库内容，包括所有统计数据。
@@ -50,6 +52,14 @@ func DBExportAll(ctx context.Context) (*model.DBDump, error) {
 	}
 	if err := conn.Find(&d.Settings).Error; err != nil {
 		return nil, fmt.Errorf("export settings: %w", err)
+	}
+	// 定时测活任务与目标分开导出: Find 不预载关联, 任务里的 Targets 为空,
+	// 由下面单独的一张表承载, 与分组/分组成员同一口径。
+	if err := conn.Find(&d.ScheduledProbes).Error; err != nil {
+		return nil, fmt.Errorf("export scheduled_probes: %w", err)
+	}
+	if err := conn.Find(&d.ScheduledProbeTargets).Error; err != nil {
+		return nil, fmt.Errorf("export scheduled_probe_targets: %w", err)
 	}
 
 	if err := conn.Find(&d.StatsTotal).Error; err != nil {
@@ -98,6 +108,11 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		}
 		dump.Channels[i].ChannelConfig = config
 	}
+	// 定时测活的目标以独立数组导入为准, 嵌在任务里的顺手清掉:
+	// 留着 GORM 会在建任务时连带再建一次, 目标就翻倍了。
+	for i := range dump.ScheduledProbes {
+		dump.ScheduledProbes[i].Targets = nil
+	}
 
 	conn := db.GetDB().WithContext(ctx)
 	res := &model.DBImportResult{RowsAffected: map[string]int64{}}
@@ -141,6 +156,18 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			return fmt.Errorf("import group_items: %w", err)
 		} else {
 			res.RowsAffected["group_items"] = n
+		}
+		// 定时测活任务先于目标导入: 目标的 probe_id 外键指向任务, 顺序反了会违反约束。
+		// 与分组/分组成员同一口径, 按主键冲突跳过, 已存在的任务不覆盖。
+		if n, err := createDoNothing(tx, dump.ScheduledProbes); err != nil {
+			return fmt.Errorf("import scheduled_probes: %w", err)
+		} else {
+			res.RowsAffected["scheduled_probes"] = n
+		}
+		if n, err := createDoNothing(tx, dump.ScheduledProbeTargets); err != nil {
+			return fmt.Errorf("import scheduled_probe_targets: %w", err)
+		} else {
+			res.RowsAffected["scheduled_probe_targets"] = n
 		}
 		if n, err := createUpsertAll(tx, dump.LLMInfos, []clause.Column{{Name: "name"}}); err != nil {
 			return fmt.Errorf("import llm_infos: %w", err)

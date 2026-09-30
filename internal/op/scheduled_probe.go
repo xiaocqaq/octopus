@@ -334,6 +334,45 @@ func targetKey(channelID int, modelName string) string {
 	return fmt.Sprintf("%d\x00%s", channelID, modelName)
 }
 
+// targetCredentialKeys 返回该目标下的全部凭据名称, 不按启用与否过滤。
+//
+// 与 ScheduledProbeGrantIDs 的差别只在过滤: 那里要的是"此刻能测的", 这里要的是"一共有哪些"。
+// 渠道或凭据临时停用不该被读成"用户把凭据删光了", 故这里不看 Enabled。
+func targetCredentialKeys(target model.ScheduledProbeTarget) []string {
+	keys := make([]string, 0, channelKeyCache.Len())
+	for _, grant := range channelGrantCache.GetAll() {
+		channelModel, modelOK := channelModelCache.Get(grant.ChannelModelID)
+		channelKey, keyOK := channelKeyCache.Get(grant.ChannelKeyID)
+		if !modelOK || !keyOK {
+			continue
+		}
+		if channelModel.ChannelID != target.ChannelID || channelModel.Name != target.ModelName {
+			continue
+		}
+		keys = append(keys, channelKey.Name)
+	}
+	return keys
+}
+
+// targetFullyExcluded 判断该目标下的凭据是否已被逐行删光。
+// 目标下一条凭据都没有时返回假: 那种情况是渠道配置变了, 不是用户删的, 不该顺手把目标也删掉。
+func targetFullyExcluded(target model.ScheduledProbeTarget) bool {
+	keys := targetCredentialKeys(target)
+	if len(keys) == 0 {
+		return false
+	}
+	excluded := make(map[string]bool, len(target.ExcludedKeys))
+	for _, keyName := range target.ExcludedKeys {
+		excluded[keyName] = true
+	}
+	for _, keyName := range keys {
+		if !excluded[keyName] {
+			return false
+		}
+	}
+	return true
+}
+
 // ScheduledProbeCredentialSet 在某个目标下隐藏或恢复一条凭据, 并立即刷新缓存。
 //
 // 单独一个入口而不是让界面提交整条任务: 界面上那一行只知道自己的渠道、模型与凭据名,
@@ -358,6 +397,22 @@ func ScheduledProbeCredentialSet(id, channelID int, modelName, keyName string, e
 
 	row := probe.Targets[index]
 	row.ExcludedKeys = excludeKey(row.ExcludedKeys, keyName, excluded)
+
+	// 这个目标的凭据被删光了, 就把目标本身也删掉: 留着它, 任务里挂着一个一条凭据都没有的目标,
+	// 编辑表单里那一项还勾着、卡片上却一行都不出, 用户看到的就是"删了但没删掉"。
+	if targetFullyExcluded(row) {
+		if err := db.GetDB().WithContext(ctx).Delete(&model.ScheduledProbeTarget{}, row.ID).Error; err != nil {
+			return model.ScheduledProbe{}, fmt.Errorf("failed to delete scheduled probe target: %w", err)
+		}
+		probe.Targets = append(probe.Targets[:index], probe.Targets[index+1:]...)
+		probe.CreditOrder = dropCreditOrderOf(probe.CreditOrder, row.ChannelID, row.ModelName)
+		if err := db.GetDB().WithContext(ctx).Save(&probe).Error; err != nil {
+			return model.ScheduledProbe{}, fmt.Errorf("failed to update scheduled probe: %w", err)
+		}
+		scheduledProbeCache.Set(id, probe)
+		return probe, nil
+	}
+
 	// Save 整行而不是 Update 单个列: 排除集合是靠 serializer 序列化落库的,
 	// 只给列名和一个切片, 序列化不会参与, 驱动也认不出 []string。
 	if err := db.GetDB().WithContext(ctx).Save(&row).Error; err != nil {
@@ -367,6 +422,19 @@ func ScheduledProbeCredentialSet(id, channelID int, modelName, keyName string, e
 	probe.Targets[index] = row
 	scheduledProbeCache.Set(id, probe)
 	return probe, nil
+}
+
+// dropCreditOrderOf 从顺序记录里剔除属于该目标(渠道+模型)的全部项。
+// 目标都没了, 记着它的顺序项就是死条目: 留着虽然读侧会忽略, 但下次拖拽会把它一并回传, 越积越多。
+func dropCreditOrderOf(order []string, channelID int, modelName string) []string {
+	prefix := fmt.Sprintf("%d\x00%s\x00", channelID, modelName)
+	kept := make([]string, 0, len(order))
+	for _, key := range order {
+		if !strings.HasPrefix(key, prefix) {
+			kept = append(kept, key)
+		}
+	}
+	return kept
 }
 
 // excludeKey 返回增删了 keyName 之后的排除集合, 不改动传入的切片。

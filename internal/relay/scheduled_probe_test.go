@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 )
 
 // resetScheduledProbeScheduler 清掉调度进度与轮转游标, 使各用例互不影响。
@@ -101,6 +102,77 @@ func TestScheduledProbeAmortizesIntervalAcrossCredits(t *testing.T) {
 		if got := scheduledProbeAmortizedPeriod(item.interval, item.total); got != item.want {
 			t.Fatalf("%s: expected %v, actual %v", item.name, item.want, got)
 		}
+	}
+}
+
+// TestScheduledProbeCycleEqualsConfiguredInterval 轮转一圈的时间就是用户配的间隔。
+//
+// 这条等式是"有效期的口径"能否成立的前提: 结论按轮转周期续期, 而用户配的那个数字
+// 表达的正是"每条凭据各测一次"的周期。两者一旦不等, 要么徽标提前空窗, 要么旧结论挂过头。
+func TestScheduledProbeCycleEqualsConfiguredInterval(t *testing.T) {
+	cases := []struct {
+		name     string
+		interval time.Duration
+		total    int
+		want     time.Duration
+	}{
+		{"单条凭据时一圈就是间隔", 10 * time.Minute, 1, 10 * time.Minute},
+		{"30 分钟配 7 条凭据仍是一圈 30 分钟", 30 * time.Minute, 7, 30 * time.Minute},
+		{"30 分钟配 6 条凭据仍是一圈 30 分钟", 30 * time.Minute, 6, 30 * time.Minute},
+		{"没有凭据时没有周期", 10 * time.Minute, 0, 0},
+		// 周期被节拍兜底后, 一圈会比配置的间隔更长: 此时按配置的间隔算就会提前空窗。
+		{"摊到比节拍还短时一圈按节拍算", time.Minute, 30, 30 * ScheduledProbeTickInterval},
+	}
+
+	for _, item := range cases {
+		if got := scheduledProbeCycle(item.interval, item.total); got != item.want {
+			t.Fatalf("%s: expected %v, actual %v", item.name, item.want, got)
+		}
+	}
+}
+
+// TestScheduledProbeValidityExceedsCycle 有效期必须比一圈更长, 否则徽标会在下一轮结论落下来之前先空掉。
+// 余量要盖住沿圈累计的抖动与一次探测的耗时; 具体幅度不是契约, "严格更长"才是。
+func TestScheduledProbeValidityExceedsCycle(t *testing.T) {
+	for _, cycle := range []time.Duration{time.Minute, 10 * time.Minute, 30 * time.Minute, time.Hour} {
+		validity := scheduledProbeValidity(cycle)
+		if validity <= cycle {
+			t.Fatalf("一圈 %v 时有效期 %v 不严格长于一圈", cycle, validity)
+		}
+		// 余量要有界: 不该长到让已经过时的结论继续参与选路。
+		if validity > cycle+cycle/scheduledProbeJitterPeriodDivisor+probeTimeout {
+			t.Fatalf("一圈 %v 时有效期 %v 超出预期余量", cycle, validity)
+		}
+	}
+	if got := scheduledProbeValidity(0); got != 0 {
+		t.Fatalf("没有周期时不该给出有效期, 实际 %v", got)
+	}
+}
+
+// TestWithProbeExpiryKeepsExisting 已经带有效期的结论不再被改写。
+// 手动测试与定时测活共用同一条续期规则, 谁先定稿就以谁为准, 不因调用顺序而变。
+func TestWithProbeExpiryKeepsExisting(t *testing.T) {
+	now := time.Now().UnixMilli()
+	preset := ProbeResult{ProbedAt: now, ExpiresAt: now + 12345}
+	if got := withProbeExpiry(preset, 1); got.ExpiresAt != preset.ExpiresAt {
+		t.Fatalf("expected 既有有效期 %d 被保留, actual %d", preset.ExpiresAt, got.ExpiresAt)
+	}
+}
+
+// TestScheduledProbeValiditiesCoverEveryGrant 有效期按凭据逐条落定, 且只覆盖被监控的那些。
+// 顺带把两种口径放在一起: 有任务监控的凭据拿到任务周期, 没有的保持 0 由读侧兜底。
+func TestScheduledProbeValidityCoversMonitoredGrants(t *testing.T) {
+	if got := scheduledProbeGrantValidity(999999); got != 0 {
+		t.Fatalf("没有任何任务覆盖的凭据不该拿到有效期, 实际 %v", got)
+	}
+	if creditsCoverGrant(nil, 1) {
+		t.Fatal("空凭据列表不该覆盖任何授权")
+	}
+	if !creditsCoverGrant([]op.ScheduledProbeCredit{{GrantID: 7}}, 7) {
+		t.Fatal("凭据列表里有该授权时应判为覆盖")
+	}
+	if creditsCoverGrant([]op.ScheduledProbeCredit{{GrantID: 7}}, 8) {
+		t.Fatal("凭据列表里没有该授权时不该判为覆盖")
 	}
 }
 

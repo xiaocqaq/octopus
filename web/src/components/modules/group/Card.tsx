@@ -1,8 +1,9 @@
 import { memo, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useProbeGroup, useProbeGroupItem } from '@/api/group';
+import { useMonitorGroup, useScheduledProbeList } from '@/api/scheduled-probe';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -327,6 +328,14 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 结论由后端写进路由状态并经事件流广播，前端不落本地副本 —— 单条与一键共用同一份结论展示。
     const probeOne = useProbeGroupItem();
     const probeAll = useProbeGroup();
+
+    // 开启模型监控：把本分组下的模型按 (渠道, 模型) 归并后加进「模型监控」页。
+    // 标题取分组名（分组名就是它对外提供的模型名），配置取默认值：用户要的是"盯上这些通道"，
+    // 间隔与时段在监控页上还能改，先按默认值起手比先弹一张表单更省事。
+    const monitorGroup = useMonitorGroup();
+    const { data: monitorTasks } = useScheduledProbeList();
+    // 同名任务已在监控里时把图标点亮：用户一眼就能看出这个分组是不是已经被盯上了。
+    const isMonitored = (monitorTasks ?? []).some((task) => task.name === group.name);
     // 正在测活的成员集合。只做按钮级反馈，不设全局串行锁：后端一条与一键是各自独立的一次调用，
     // 用户点第二个成员不应该被第一条挡住。
     const [probingItemIds, setProbingItemIds] = useState<Set<number>>(() => new Set());
@@ -362,6 +371,22 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             onError: (error) => toast.error(t('toast.probeFailed'), { description: error.message }),
         });
     }, [group.id, probeAll, t]);
+
+    // 开启模型监控：标题取分组名，配置取默认值（间隔 10 分钟、工作日 08:00–20:00）。
+    // 传成员而不是折算好的目标：折算要用到"某 (渠道, 模型) 下有哪些凭据"，那份候选列表在 hook 里取，
+    // 由它算 excluded_keys 才能保证只监控分组里真正用到的那几条凭据。
+    // 成功后只提示，不跳转：用户可能想连着给几个分组都点上，跳走反而打断这一串动作。
+    const handleMonitor = useCallback(() => {
+        monitorGroup.mutate({ name: group.name, items: group.items }, {
+            onSuccess: (result) => {
+                if (result.created) toast.success(t('toast.monitorCreated', { name: result.name, count: result.addedTargets }));
+                else if (result.addedTargets > 0) toast.success(t('toast.monitorMerged', { name: result.name, count: result.addedTargets }));
+                else if (result.narrowedTargets > 0) toast.success(t('toast.monitorNarrowed', { name: result.name, count: result.narrowedTargets }));
+                else toast.info(t('toast.monitorExists', { name: result.name }));
+            },
+            onError: (error) => toast.error(t('toast.monitorFailed'), { description: error.message }),
+        });
+    }, [group.name, group.items, monitorGroup, t]);
 
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         const payload: GroupUpdateRequest & { id: number } = { id: group.id };
@@ -426,7 +451,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                 role={isTouchDevice ? 'button' : undefined}
                 aria-expanded={isTouchDevice ? expanded : undefined}
             >
-                <div className="relative flex-1 mr-2 min-w-0 group/title">
+                <div className="relative flex-1 mr-0.5 min-w-0 group/title">
                     <div className="flex items-center gap-1.5">
                         <Tooltip>
                             <TooltipTrigger asChild>
@@ -445,7 +470,14 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                     </div>
                 </div>
 
-                <div className="flex items-center gap-1 shrink-0">
+                {/* 图标排用 gap-px 而不是 gap-1: 一行五个图标按钮时, 每个间隙省下的 3px 正好变成标题的宽度。
+                    实测(卡片宽 324.7px): gap-1 时标题只有 127px, 而三个最长的分组名要 138.7~139.2px,
+                    于是 claude-opus-4-8 / claude-opus-5-5 / gemini-3.8-flash 都被画了省略号;
+                    收到 gap-px 并压掉标题的右外边距后标题有 145px, 这三个名字都完整显示。
+                    只不过差之毫厘: 差的只有 0.06~0.53px, 用整数级的 scrollWidth 比对量不出来,
+                    验证时要按 Range 的小数宽度量(见 measure-precise.mjs)。
+                    按钮本身保持 28px 的可点区域, 不为了省宽度把点击目标改小。 */}
+                <div className="flex items-center gap-px shrink-0">
                     {/* 路由模式开关: 与右侧编辑/复制/删除同款图标按钮, 点一下即切换另一种模式。
                         图标即当前模式, 说明放在 Tooltip 里; 悬浮展开成员列表已足够表达"当前选了谁"。 */}
                     <IconButton
@@ -457,6 +489,18 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                         {group.mode === 'manual'
                             ? <Hand className="size-4" />
                             : <Shuffle className="size-4" />}
+                    </IconButton>
+
+                    <IconButton
+                        onClick={handleMonitor}
+                        disabled={monitorGroup.isPending || group.items.length === 0}
+                        className={cn('size-7', isMonitored && 'text-primary')}
+                        aria-label={t('card.monitor')}
+                        tip={isMonitored ? t('card.monitorOnHint') : t('card.monitorHint')}
+                    >
+                        {monitorGroup.isPending
+                            ? <LoaderCircle className="size-4 animate-spin" />
+                            : <Activity className="size-4" />}
                     </IconButton>
 
                     <MorphingDialog>
@@ -579,8 +623,10 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
 
         </article >
 
-        {/* 成员浮层挂在 body 上, 而不是留在卡片内: VirtualizedGrid 的行带 transform, 会为每行建立层叠上下文,
+        {/* 成员浮层挂在 body 上, 而不是留在卡片内: VirtualizedGrid 的行有自己的层叠上下文,
             卡片内的任何 z-index 都被困在自己那一行里, 压不住后面渲染的行。挂到 body 才真正盖得住下方卡片。
+            行不能用 transform 定位: 带 transform 的元素会成为 position: fixed 的包含块,
+            拖拽克隆体那种视口坐标就会叠加在行的偏移上, 一拖就飞出去(实测偏了 277px)。
             浮层与卡片无缝拼成同一张卡: 默认向下生长时顶部方角无上边框, 接着卡片的去底边版本往下长;
             翻到上方生长时镜像处理, 底部方角无下边框, 卡片改为去顶边。左右边框与宽度照抄卡片外框。
             高度固定且不参与卡片布局, 卡片高度因此恒等于收起态, 网格不会被撑变形。

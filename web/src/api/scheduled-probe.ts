@@ -1,5 +1,6 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from './client';
+import { channelGrantListQueryOptions } from './channel';
 
 // ScheduledProbeRow 是卡片里的一行，对应一条渠道凭据（渠道名 + 凭据名）。
 // 按凭据出行而不是按目标：一个目标可能挂多条凭据，只出一行就既看不到「哪条不通」，
@@ -10,7 +11,8 @@ export type ScheduledProbeRow = {
     channel_name: string;
     model_name: string;
     key_name: string;
-    // probed 为假表示还没有仍在有效期内的结论，此时下面几个字段都无意义。
+    // probed 为假表示还没有结论，此时下面几个字段都无意义。结论不设有效期，
+    // 只会被下一次测活覆盖，界面按 probed_at 照实显示"多久以前"。
     probed: boolean;
     ok: boolean;
     latency_ms: number;
@@ -58,6 +60,13 @@ export const WeekdayAll = 0b1111111;
 // SCHEDULED_PROBE_DEFAULT_INTERVAL 与后端 ScheduledProbeDefaultIntervalMinutes 一致。
 export const SCHEDULED_PROBE_DEFAULT_INTERVAL = 10;
 
+// 新建任务默认按"工作日 08:00–20:00"起手: 监控多半是为了盯住工作时段的上游可用性,
+// 默认给一个能直接用的窗口, 比默认"不限时段"再让用户自己收窄更省事。
+export const SCHEDULED_PROBE_DEFAULT_WEEKDAYS =
+    WeekdayMonday | WeekdayTuesday | WeekdayWednesday | WeekdayThursday | WeekdayFriday;
+export const SCHEDULED_PROBE_DEFAULT_START_HOUR = 8;
+export const SCHEDULED_PROBE_DEFAULT_END_HOUR = 20;
+
 // SCHEDULED_PROBE_HOURS 是时间窗的可选整点，供下拉使用。
 export const SCHEDULED_PROBE_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
@@ -73,9 +82,12 @@ export type ScheduledProbeInput = {
 };
 
 // scheduledProbeListQueryOptions 供页面查询与启动预取共享模型监控列表定义。
+// 定时测活在后台持续产生新结论，页面必须自己轮询才能看到：结论落点后没有针对监控页的推送，
+// 只靠 mutation 后的失效刷新，用户开着页面不动就看不到后台测出的新结果。
 export const scheduledProbeListQueryOptions = queryOptions({
     queryKey: ['scheduled-probes', 'list'],
     queryFn: () => apiRequest<ScheduledProbe[]>('/api/v1/scheduled-probe/list'),
+    refetchInterval: 30000,
 });
 
 // useScheduledProbeList 读取全部模型监控任务。
@@ -193,6 +205,145 @@ export function useSetScheduledProbeOrder() {
                 method: 'POST',
                 body: { credits: data.credits },
             }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// GroupMonitorItem 是分组里的一条成员，只取折算监控目标需要的三个字段。
+export type GroupMonitorItem = { channel_id: number; model_name: string; key_name: string };
+
+// GrantMonitorCandidate 是渠道里的一条授权候选，用来知道某个 (渠道, 模型) 下到底有哪些凭据。
+export type GrantMonitorCandidate = { channel_id: number; model_name: string; key_name: string };
+
+// pairKeyOf 生成目标的去重键，与后端 targetKey 同构（用不可见字符分隔，避免拼接撞键）。
+const pairKeyOf = (channelID: number, modelName: string) => `${channelID}\u0000${modelName}`;
+
+// monitorTargetsOfGroup 把分组里的成员折算成监控目标，并把分组没用到的凭据排除掉。
+//
+// 目标粒度是 (渠道, 模型)，但同一个 (渠道, 模型) 下可以挂多条凭据(key)。分组只用了其中一条时，
+// 整条目标照搬会把没用到的凭据一并拖进监控 —— 实际踩过：某渠道下同一模型有 2 个 key，
+// 分组里只加了 1 个，一键监控却把 2 个都测上了，用户看到的监控范围比他自己配的还大。
+// 所以这里按分组实际用到的 key 反算 excluded_keys，让监控范围与分组一致。
+//
+// 归并按 (渠道, 模型)：同一对在分组里出现多次（不同优先级、不同 key）要折成一个目标，
+// 但 key 要合并统计，不能只看第一条。也不按模型名跨渠道归并：同一模型名可能由多个渠道提供，
+// 那是各自独立的通道。
+export function monitorTargetsOfGroup(items: GroupMonitorItem[], candidates: GrantMonitorCandidate[]): ScheduledProbeTarget[] {
+    const order: { channel_id: number; model_name: string }[] = [];
+    const usedKeys = new Map<string, Set<string>>();
+    for (const item of items) {
+        const key = pairKeyOf(item.channel_id, item.model_name);
+        if (!usedKeys.has(key)) {
+            usedKeys.set(key, new Set());
+            order.push({ channel_id: item.channel_id, model_name: item.model_name });
+        }
+        usedKeys.get(key)?.add(item.key_name);
+    }
+
+    const allKeys = new Map<string, string[]>();
+    for (const candidate of candidates) {
+        const key = pairKeyOf(candidate.channel_id, candidate.model_name);
+        const keys = allKeys.get(key) ?? [];
+        if (!keys.includes(candidate.key_name)) keys.push(candidate.key_name);
+        allKeys.set(key, keys);
+    }
+
+    return order.map((pair) => {
+        const key = pairKeyOf(pair.channel_id, pair.model_name);
+        const used = usedKeys.get(key) ?? new Set<string>();
+        // 候选里查不到这一对（渠道已停用等）时保持空排除项：宁可不排除，也不要凭空给出一条错误的范围。
+        const excluded = (allKeys.get(key) ?? []).filter((keyName) => !used.has(keyName));
+        return { channel_id: pair.channel_id, model_name: pair.model_name, excluded_keys: excluded };
+    });
+}
+
+// excludeUnusedKeys 把分组没用到的凭据追加进既有目标的排除项。
+//
+// 只做加法，从不删除已有的排除项：用户在监控页上逐行删掉某条凭据是一次明确的取舍，
+// 分组页的又一次点击不该把它复活。反过来"收窄"是安全的 —— 它只是让监控范围不再超出。
+function excludeUnusedKeys(target: ScheduledProbeTarget, unused: string[]): ScheduledProbeTarget {
+    const current = target.excluded_keys ?? [];
+    const added = unused.filter((keyName) => !current.includes(keyName));
+    if (added.length === 0) return target;
+    return { ...target, excluded_keys: [...current, ...added] };
+}
+
+// ScheduledProbeMonitorResult 汇报"开启模型监控"这一步实际做了什么。
+// 区分新建 / 新增目标 / 仅收窄：三种情况用户看到的都是"加上了"，但各自做了什么必须说清楚，
+// 否则"没有新目标可加"会被误解成点击没生效。
+export type ScheduledProbeMonitorResult = {
+    name: string;
+    created: boolean; // 真为新建了一条任务，假为并入既有任务。
+    addedTargets: number; // 本次新增的目标数。
+    narrowedTargets: number; // 本次仅收窄了监控范围的目标数（补了排除项）。
+    existing: boolean; // 真表示这条任务此前已在监控里。
+};
+
+// useMonitorGroup 用一条分组开启模型监控：标题取分组名，配置取默认值。
+//
+// 同名任务已存在时并入而不是再建一条：分组卡片上那个图标点两次是很自然的动作，
+// 而两条同名任务会让界面上出现两张一模一样的卡片，用户也无从判断该删哪一条。
+// 并入时补齐缺的目标，并把分组没用到的凭据补进排除项；已有排除项一概不动。
+export function useMonitorGroup() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async ({ name, items }: { name: string; items: GroupMonitorItem[] }): Promise<ScheduledProbeMonitorResult> => {
+            if (items.length === 0) throw new Error('empty-targets');
+
+            // 候选授权列表决定"某 (渠道, 模型) 下有哪些凭据"，缺了它就算不出该排除谁。
+            // 分组页的成员选择器本来就在用同一份查询, 这里通常直接命中缓存。
+            const candidates = await queryClient.fetchQuery(channelGrantListQueryOptions);
+            const targets = monitorTargetsOfGroup(items, candidates);
+
+            const tasks = await apiRequest<ScheduledProbe[]>('/api/v1/scheduled-probe/list');
+            const existing = tasks.find((task) => task.name === name);
+            if (!existing) {
+                await apiRequest<ScheduledProbe>('/api/v1/scheduled-probe/create', {
+                    method: 'POST',
+                    body: {
+                        name,
+                        targets,
+                        interval_minutes: SCHEDULED_PROBE_DEFAULT_INTERVAL,
+                        enabled: true,
+                        weekdays: SCHEDULED_PROBE_DEFAULT_WEEKDAYS,
+                        start_hour: SCHEDULED_PROBE_DEFAULT_START_HOUR,
+                        end_hour: SCHEDULED_PROBE_DEFAULT_END_HOUR,
+                    },
+                });
+                return { name, created: true, addedTargets: targets.length, narrowedTargets: 0, existing: false };
+            }
+
+            const wanted = new Map(targets.map((target) => [pairKeyOf(target.channel_id, target.model_name), target]));
+            let narrowed = 0;
+            const kept = existing.targets.map((target) => {
+                const match = wanted.get(pairKeyOf(target.channel_id, target.model_name));
+                if (!match) return target;
+                const next = excludeUnusedKeys(target, match.excluded_keys ?? []);
+                if (next !== target) narrowed += 1;
+                return next;
+            });
+            const known = new Set(existing.targets.map((target) => pairKeyOf(target.channel_id, target.model_name)));
+            const missing = targets.filter((target) => !known.has(pairKeyOf(target.channel_id, target.model_name)));
+
+            if (missing.length === 0 && narrowed === 0) {
+                return { name, created: false, addedTargets: 0, narrowedTargets: 0, existing: true };
+            }
+
+            await apiRequest<ScheduledProbe>(`/api/v1/scheduled-probe/update/${existing.id}`, {
+                method: 'POST',
+                body: {
+                    name: existing.name,
+                    targets: [...kept, ...missing],
+                    interval_minutes: existing.interval_minutes,
+                    enabled: existing.enabled,
+                    weekdays: existing.weekdays,
+                    start_hour: existing.start_hour,
+                    end_hour: existing.end_hour,
+                },
+            });
+            return { name, created: false, addedTargets: missing.length, narrowedTargets: narrowed, existing: true };
+        },
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil, Trash2, Zap } from 'lucide-react';
+import { Check, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
@@ -117,6 +117,7 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                         onClick={handleProbeAll}
                         disabled={probeNow.isPending || probe.rows.length === 0}
                         tip={t('probeNow')}
+                        aria-label={t('probeNow')}
                         className="size-7"
                     >
                         <Zap className={cn('size-3.5', probeNow.isPending && 'animate-pulse')} />
@@ -125,7 +126,7 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                     {/* 编辑弹窗自带 provider，trigger 由 IconButton asChild 承载 motion.div 形变。 */}
                     <MorphingDialog>
                         <IconButton asChild tip={t('edit')} className="size-7">
-                            <MorphingDialogTrigger>
+                            <MorphingDialogTrigger aria-label={t('edit')}>
                                 <Pencil className="size-3.5" />
                             </MorphingDialogTrigger>
                         </IconButton>
@@ -143,30 +144,35 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                     </MorphingDialog>
 
                     {confirmDelete ? (
-                        <div className="flex items-center gap-0.5">
-                            {/* 确认删除就地换成两个小按钮而不弹窗: 卡片已经很窄, 再开一层弹窗反而更重;
-                                按钮文字收到 11px 才不至于把标题挤没, 而"取消/确认删除"四个字本身已足够清楚。 */}
-                            <button
-                                type="button"
+                        <>
+                            {/* 与渠道卡片同一套确认方式: ✕ 取消、✓ 确认删除。
+                                文字按钮在这么窄的一行里要占掉两个按钮的宽度, 标题会被挤没;
+                                图标只占一个按钮位, 和它替掉的垃圾桶一样大, 换进来不会让整行跳动。
+                                ✓ 用危险色而不是绿色: 这一下点下去是删除, 颜色该提示后果而不是"成功"。 */}
+                            <IconButton
                                 onClick={() => setConfirmDelete(false)}
-                                className="h-6 rounded-md border border-border px-1.5 text-[11px] font-medium hover:bg-muted/30"
+                                tip={t('cancel')}
+                                aria-label={t('cancel')}
+                                className="size-7"
                             >
-                                {t('cancel')}
-                            </button>
-                            <button
-                                type="button"
+                                <X className="size-3.5" />
+                            </IconButton>
+                            <IconButton
                                 onClick={handleConfirmDelete}
                                 disabled={deleteProbe.isPending}
-                                className="h-6 rounded-md bg-destructive px-1.5 text-[11px] font-medium text-destructive-foreground disabled:opacity-50"
+                                tip={t('confirmDelete')}
+                                aria-label={t('confirmDelete')}
+                                className="size-7 text-destructive hover:text-destructive/70"
                             >
-                                {t('confirmDelete')}
-                            </button>
-                        </div>
+                                <Check className="size-3.5" />
+                            </IconButton>
+                        </>
                     ) : (
                         <IconButton
                             onClick={() => setConfirmDelete(true)}
                             disabled={deleteProbe.isPending}
                             tip={t('delete')}
+                            aria-label={t('delete')}
                             className="size-7 hover:text-destructive"
                         >
                             <Trash2 className="size-3.5" />
