@@ -47,7 +47,7 @@ function toInput(probe: ScheduledProbe, enabled: boolean): ScheduledProbeInput {
 //
 // 卡片头不摆"每 10 分钟 · 不限时段"那枚徽标: 它恒定占着宽度, 把一行能放下的卡片数从四个压到两个,
 // 而这两项配置是设一次就很少再看的东西 —— 挪到名字的悬停提示里, 想核对时同样一眼可见, 平时不占版面。
-export function Item({ probe }: { probe: ScheduledProbe }) {
+export function Item({ probe, now }: { probe: ScheduledProbe; now: number }) {
     const t = useTranslations('scheduledProbe');
     const updateProbe = useUpdateScheduledProbe();
     const deleteProbe = useDeleteScheduledProbe();
@@ -188,7 +188,7 @@ export function Item({ probe }: { probe: ScheduledProbe }) {
                 </div>
             </div>
 
-            <RowList probeId={probe.id} rows={probe.rows} />
+            <RowList probeId={probe.id} rows={probe.rows} now={now} />
         </article>
     );
 }

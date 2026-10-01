@@ -178,9 +178,18 @@ function removeGroupCache(id: number) {
     queryClient.removeQueries({ queryKey: ['groups', 'detail', id] });
 }
 
+// GROUP_LATENCY_REFRESH_INTERVAL_MS 是分组页刷新模型延迟的节拍(30 秒)。
+//
+// 分组页的延迟主要靠事件流推送, 这一道轮询是兜底: 事件流断开、被中间层缓冲或某次增量没能落地时,
+// 页面上的延迟就停在旧值上, 而用户看到的只是"这个数字怎么不动了"。定时重拉一次全量列表,
+// 最坏情况也只是比推送晚 30 秒对齐, 代价是一次分组列表请求。
+export const GROUP_LATENCY_REFRESH_INTERVAL_MS = 30000;
+
 // useGroupList 获取全部分组，并由明确需要实时状态的页面控制是否订阅事件流。
-export function useGroupList(enabled = true, eventsEnabled = false) {
-    const query = useQuery({ ...groupListQueryOptions, enabled });
+// refetchInterval 由调用方按需给: 分组页要定期刷新延迟, 而渠道表单、API Key 表单只是读一次分组名,
+// 给它们也挂上轮询纯属白拉 —— 共享的查询定义不替所有调用方做这个决定。
+export function useGroupList(enabled = true, eventsEnabled = false, refetchInterval?: number) {
+    const query = useQuery({ ...groupListQueryOptions, enabled, refetchInterval });
 
     useGroupEventStream(enabled && eventsEnabled);
 

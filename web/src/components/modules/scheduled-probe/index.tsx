@@ -12,6 +12,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { useScheduledProbeList } from '@/api/scheduled-probe';
 import { CreateDialogContent } from './Create';
 import { Item } from './Item';
+import { useProbeClock } from './clock';
 
 // ScheduledProbeActions 向稳定顶栏提供新建入口。
 // 这里没有搜索与视图选项: 列表是'几条到几十条'的手工维护清单, 排序由后端的轮转顺序定稿,
@@ -50,6 +51,8 @@ export function ScheduledProbeActions() {
 export function ScheduledProbe() {
     const t = useTranslations('scheduledProbe');
     const { data: probes } = useScheduledProbeList();
+    // 页面级时钟: 各张卡片共享同一个"现在", 用来把「多久以前」算准(见 useProbeClock)。
+    const now = useProbeClock();
 
     // 顺序直接用后端给的（主键升序）: 那就是轮转顺序, 界面上不该重排。
     const items = useMemo(() => probes ?? [], [probes]);
@@ -74,7 +77,7 @@ export function ScheduledProbe() {
             // 卡片头一行 + 两条凭据行的高度; 实际高度由 VirtualizedGrid 自行测量。
             estimateItemHeight={156}
             getItemKey={(probe) => `scheduled-probe-${probe.id}`}
-            renderItem={(probe) => <Item key={probe.id} probe={probe} />}
+            renderItem={(probe) => <Item key={probe.id} probe={probe} now={now} />}
         />
     );
 }

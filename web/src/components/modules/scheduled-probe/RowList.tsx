@@ -44,7 +44,9 @@ function sameGrantOrder(left: ScheduledProbeRow[], right: ScheduledProbeRow[]): 
 //
 // 凭据行可以拖着排顺序, 而且这个顺序不只是好看: 后端按同一份顺序轮转, 拖到最前的那条就是
 // 下一拍最先被测的那条。所以这里拖完必须回传服务端 —— 只改本地渲染等于骗人。
-export function RowList({ probeId, rows }: { probeId: number; rows: ScheduledProbeRow[] }) {
+//
+// now 是页面共享的当前时刻, 只为把「多久以前」算准而往下传(见 useProbeClock)。
+export function RowList({ probeId, rows, now }: { probeId: number; rows: ScheduledProbeRow[]; now: number }) {
     const t = useTranslations('scheduledProbe');
     const setOrder = useSetScheduledProbeOrder();
     // 拖动之后到服务端回话之前, 先按用户拖出来的顺序渲染: 否则卡片会弹回旧顺序,
@@ -93,6 +95,7 @@ export function RowList({ probeId, rows }: { probeId: number; rows: ScheduledPro
                                     <Row
                                         probeId={probeId}
                                         row={row}
+                                        now={now}
                                         dnd={{
                                             // 这三个都必须落到 DOM 上, 少一个都拖不动:
                                             // innerRef 让拖动项登记进注册表, draggableProps 带上它的标识与位移,
@@ -118,7 +121,7 @@ export function RowList({ probeId, rows }: { probeId: number; rows: ScheduledPro
 
 // Row 渲染一条凭据：左侧是「渠道名/凭据名」(大字)、中间是结论、右侧是只测这一条的闪电与只删这一条的 ×。
 // 行首的握把是拖动的落点: 整行可拖会和行内的两个按钮抢手势, 也会把文字选择一起吞掉。
-function Row({ probeId, row, dnd }: { probeId: number; row: ScheduledProbeRow; dnd?: RowDnd }) {
+function Row({ probeId, row, now, dnd }: { probeId: number; row: ScheduledProbeRow; now: number; dnd?: RowDnd }) {
     const t = useTranslations('scheduledProbe');
     const probeGrant = useProbeGrantNow();
     const setCredential = useSetScheduledProbeCredential();
@@ -202,7 +205,7 @@ function Row({ probeId, row, dnd }: { probeId: number; row: ScheduledProbeRow; d
                         <HeartCrack className="size-3.5 text-rose-600 dark:text-rose-400" />
                     )}
                     <span className="tabular-nums">{row.latency_ms}ms</span>
-                    <span className="text-muted-foreground/60">{describeProbedAt(row.probed_at, t)}</span>
+                    <span className="text-muted-foreground/60">{describeProbedAt(row.probed_at, now, t)}</span>
                 </span>
             )}
 

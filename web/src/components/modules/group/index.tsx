@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import { GroupCard } from './Card';
 import { CreateDialogContent } from './Create';
 import { useRuntimeClock } from './MemberStatus';
-import { useGroupList, probeDeadline, scoreDeadline } from '@/api/group';
+import { GROUP_LATENCY_REFRESH_INTERVAL_MS, useGroupList, probeDeadline, scoreDeadline } from '@/api/group';
 import { PageActions, usePageActionsStore } from '@/components/common/PageActions';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
 
@@ -47,7 +47,9 @@ export function GroupActions() {
 
 // Group 渲染分组列表正文。
 export function Group() {
-    const { data: groups } = useGroupList(true, true);
+    // 每 30 秒重拉一次: 成员行上的延迟来自分组运行状态, 事件流负责即时推送,
+    // 这里定时兜底, 保证推送万一没到页面也不会一直停在旧数字上(见 GROUP_LATENCY_REFRESH_INTERVAL_MS)。
+    const { data: groups } = useGroupList(true, true, GROUP_LATENCY_REFRESH_INTERVAL_MS);
     const runtimeNow = useRuntimeClock(groups);
     const searchTerm = usePageActionsStore((state) => state.searchTerms.group || '');
     const sortOrder = usePageActionsStore((state) => state.sortOrders.group === 'desc' ? 'desc' : 'asc');
