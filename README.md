@@ -39,14 +39,14 @@ docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/xia
 Or use docker compose:
 
 ```bash
-wget https://raw.githubusercontent.com/bestruirui/octopus/refs/heads/master/docker-compose.yml
+wget https://raw.githubusercontent.com/xiaocqaq/octopus/refs/heads/master/docker-compose.yml
 docker compose up -d
 ```
 
 
 ### 📦 Download from Release
 
-Download the binary for your platform from [Releases](https://github.com/bestruirui/octopus/releases), then run:
+Download the binary for your platform from [Releases](https://github.com/xiaocqaq/octopus/releases), then run:
 
 ```bash
 ./octopus start
@@ -60,8 +60,8 @@ Download the binary for your platform from [Releases](https://github.com/bestrui
 - pnpm
 
 ```bash
-# Clone the repository
-git clone https://github.com/bestruirui/octopus.git
+# Clone the forked repository
+git clone https://github.com/xiaocqaq/octopus.git
 cd octopus
 # Build frontend
 cd web && pnpm install && pnpm run build
@@ -243,6 +243,8 @@ The program automatically appends the API version and endpoint path based on the
 
 ---
 
+> 📢 **Note:** This repository is a fork of `bestruirui/octopus`, with the features above and the [Model Monitor](#-model-monitor--scheduled-probe) extending the upstream codebase.
+
 ### 📁 Group Management
 
 Groups aggregate multiple channels into a unified external model name.
@@ -253,6 +255,8 @@ Groups aggregate multiple channels into a unified external model name.
 - When calling the API, set the `model` parameter to the group name
 
 > 💡 **Example**: Create a group named `gpt-4o`, add multiple providers' GPT-4o channels to it, then access all channels via a unified `model: gpt-4o`.
+>
+> 💡 **Tip**: In the Channel page, click the menu on a channel and choose "Add to Group" to add all of the channel's models to an existing group in one click.
 
 ---
 
@@ -294,6 +298,8 @@ Since the program handles numerous statistics, writing to the database on every 
 
 ## 🔌 Client Integration
 
+> 💡 **Tip**: This fork keeps the same API surface as upstream (`OpenAI Chat / Responses / Anthropic`, plus image passthrough at `/v1/images/{generations,edits}`).
+
 ### OpenAI SDK
 
 ```python
@@ -311,6 +317,18 @@ completion = client.chat.completions.create(
     ],
 )
 print(completion.choices[0].message.content)
+```
+
+### 🎨 Image Generation / Editing ( Images )
+
+Passthrough for `/v1/images/generations` and `/v1/images/edits`. Currently only OpenAI-protocol channels participate in routing:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="sk-octopus-...")
+resp = client.images.generate(prompt="a cat wearing sunglasses", n=1, size="1024x1024")
+print(resp.data[0].url)
 ```
 
 ### Claude Code
@@ -368,3 +386,12 @@ Edit `~/.codex/auth.json`
 - 📊 [sst/models.dev](https://github.com/sst/models.dev) - AI model database providing model pricing data
 - 🇨🇳 [AtomGit](https://atomgit.com/bestruirui/octopus) - China-based code hosting
 - 💬 [Linux.do](https://linux.do/)
+
+### 🕵️ Model Monitor / Scheduled Probe
+
+A fork-only feature for periodic health checks: probes each channel/credential in the background on a rotating schedule and surfaces the current latency/status on the **Model Monitor** page.
+
+- **Multi-target with rename** — a single probe task can monitor many channels/models, with a custom group name
+- **Evenly distributed intervals** — the interval is split across credentials to avoid thundering probes on the same group
+- **Drag-to-reorder rows** — reorder probe targets by dragging
+- **Never-stale results** — live-updating badge & latency, with a 5-minute validity window (expired results fade out)

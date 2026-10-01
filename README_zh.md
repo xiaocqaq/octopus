@@ -39,7 +39,7 @@ docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/xia
 或者使用 docker compose 运行
 
 ```bash
-wget https://raw.githubusercontent.com/bestruirui/octopus/refs/heads/master/docker-compose.yml
+wget https://raw.githubusercontent.com/xiaocqaq/octopus/refs/heads/master/docker-compose.yml
 docker compose up -d
 ```
 
@@ -60,8 +60,8 @@ docker compose up -d
 - pnpm
 
 ```bash
-# 克隆项目
-git clone https://github.com/bestruirui/octopus.git
+# 克隆本分支项目
+git clone https://github.com/xiaocqaq/octopus.git
 cd octopus
 # 构建前端
 cd web && pnpm install && pnpm run build
@@ -225,6 +225,18 @@ http://localhost:5173
 
 ## 📖 功能说明
 
+> 📢 **本仓库是 `bestruirui/octopus` 的一个分支(fork)**，在上游基础上新增并维护了以下功能。
+
+### 🕵️ 模型监控 / 定时测活
+
+定时探测保活（scheduled probe）：在后台按节奏自动探测分组里每一个渠道·凭据的可用性与延迟，结论实时回显在**模型监控**页：
+
+- 支持多目标并更名：一个任务可监控多条渠道/模型，分组名称可自定义
+- 间隔按凭据均摊：探测间隔会自动在凭据之间均匀分配，避免同组探测撞车
+- 行序可拖拽：拖动行改变探测顺序
+- 结论不再过期：上次探测通过/失败的徽标与耗时实时滚动，过期结论在 5 分钟后自动置灰
+- 仅 fork 生效：该模块在上游 master 不存在
+
 ### 📡 渠道管理
 
 渠道是连接 LLM 供应商的基础配置单元。
@@ -254,6 +266,8 @@ http://localhost:5173
 - 调用 API 时，将请求中的 `model` 参数设置为分组名称即可
 
 > 💡 **示例**：创建分组名称为 `gpt-4o`，将多个供应商的 GPT-4o 渠道加入该分组，即可通过统一的 `model: gpt-4o` 访问所有渠道。
+>
+> 💡 **小技巧**：在渠道页，点击渠道右上角菜单中的「加入分组」，可把该渠道下的所有模型一次性加入到已有分组中。
 
 ---
 
@@ -291,10 +305,10 @@ http://localhost:5173
 
 > ⚠️ **重要提示**：退出程序时，请使用正常的关闭方式（如 `Ctrl+C` 或发送 `SIGTERM` 信号），以确保内存中的统计数据能正确写入数据库。**请勿使用 `kill -9` 等强制终止方式**，否则可能导致统计数据丢失。
 
-
-
-
 ## 🔌 客户端接入
+
+> 💡 **提示**：本分支对外暴露的 API 与上游保持一致 (`OpenAI Chat / Responses / Anthropic / Images`)，
+> 新增的图片生成/编辑接口透传路径为 `/v1/images/{generations,edits}`。
 
 ### OpenAI SDK
 
@@ -307,12 +321,24 @@ client = OpenAI(
     api_key="sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
 )
 completion = client.chat.completions.create(
-    model="octopus-openai",  // 填写正确的分组名称
+    model="octopus-openai",  # 填写正确的分组名称
     messages = [
         {"role": "user", "content": "Hello"},
     ],
 )
 print(completion.choices[0].message.content)
+```
+
+### 🎨 图片生成 / 编辑 ( Images )
+
+透传 `/v1/images/generations` 与 `/v1/images/edits` 两个端点，目前仅 OpenAI 协议渠道参与选路：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="sk-octopus-...")
+resp = client.images.generate(prompt="一只戴墨镜的猫", n=1, size="1024x1024")
+print(resp.data[0].url)
 ```
 
 ### Claude Code
