@@ -1,9 +1,11 @@
 # Changelog
 
 All notable changes to this project's fork are documented here.
-This fork tracks upstream `bestruirui/octopus` and carries fork-specific v0.14.x features.
+This fork tracks upstream `bestruirui/octopus` and carries fork-specific v0.13.9.x features.
 
-## [v0.14.0] — 2026-10-01
+## [v0.13.9.6] — 2026-10-01
+
+**合并上游更新** (upstream `v0.13.7` ~ `v0.13.9`)。
 
 ### Merged
 - **e088b8b** Merge remote-tracking branch `upstream/master` (12 upstream commits since `33942bf`):
