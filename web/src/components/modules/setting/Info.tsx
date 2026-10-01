@@ -31,16 +31,17 @@ export function SettingInfo() {
     // 最新版本与后端当前版本不一致 → 有新版本可更新。
     const hasNewVersion = hasRealVersion(latestVersion) && hasRealVersion(backendNowVersion) && latestVersion !== backendNowVersion;
 
-    // clearCacheAndReload 清理 Octopus 缓存和根作用域注册后刷新页面。
+    // clearCacheAndReload 清理当前应用目录的缓存和 Service Worker 注册后刷新页面。
     const clearCacheAndReload = async () => {
+        const scope = new URL('./', document.baseURI); // 当前应用的 Service Worker 作用域及缓存所属目录。
         if ('caches' in window) {
             const names = await caches.keys();
-            await Promise.all(names.filter((name) => name.startsWith('octopus-')).map((name) => caches.delete(name)));
+            await Promise.all(names.filter((name) => name.startsWith(`octopus-${encodeURIComponent(scope.pathname)}-`)).map((name) => caches.delete(name)));
         }
 
         if ('serviceWorker' in navigator) {
-            const registration = await navigator.serviceWorker.getRegistration('/');
-            if (registration) await registration.unregister();
+            const registration = await navigator.serviceWorker.getRegistration(scope.href);
+            if (registration && registration.scope === scope.href) await registration.unregister();
         }
 
         window.location.reload();

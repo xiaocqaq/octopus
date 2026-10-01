@@ -1,12 +1,11 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Brain, Clock, Cpu, Database, DollarSign, Gauge, KeyRound, Loader2, Percent, Square, Zap } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Brain, Clock, Cpu, Database, DollarSign, Gauge, KeyRound, Loader2, Square, Zap, Percent } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import JsonView from '@uiw/react-json-view';
 import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
 import { githubLightTheme } from '@uiw/react-json-view/githubLight';
 import { useTheme } from '@/provider/theme';
-import { type RelayLogOverview, type RelayRetryError, getRetryErrors, useLogRequestBody, useLogResponseBody, useStopRequest } from '@/api/log';
-import { cacheRate } from '@/api/stats';
+import { type RelayLogOverview, useLogRequestBody, useLogResponseBody, useStopRequest } from '@/api/log';
 import { useGroup, useUpdateGroup } from '@/api/group';
 import { Protocol } from '@/api/channel';
 import { getModelIcon } from '@/lib/model-icons';
@@ -62,103 +61,59 @@ const PROTOCOL_LABELS: Record<number, string> = {
     [Protocol.OpenAIChatCompletion]: 'Chat',
     [Protocol.OpenAIResponse]: 'Response',
     [Protocol.AnthropicMessage]: 'Message',
-    [Protocol.OpenAIImage]: 'Image',
 };
 
-// ReasoningBadge 展示客户端声明的思维强度, 未声明时不渲染。
-// 取值由后端归一: OpenAI 两种协议给出 minimal/low/medium/high 之类的档位, Anthropic 给出折成 k 的思考预算。
-function ReasoningBadge({ reasoning }: { reasoning?: string }) {
-    if (!reasoning) return null;
-
-    return (
-        <Badge
-            variant="outline"
-            className="shrink-0 gap-1 px-1.5 py-0 text-xs font-medium border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400"
-        >
-            <Brain className="size-3" />
-            {reasoning}
-        </Badge>
-    );
-}
-
-// LogMetrics 渲染时间、API Key、耗时、首字、费用、Token 与缓存率指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
+// LogMetrics 渲染时间、API Key、耗时、费用和 Token 指标; card 变体用于卡片栅格, footer 变体用于弹窗底部。
 function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; now: number; brandColor: string; variant: 'card' | 'footer' }) {
-    const t = useTranslations('log.card');
     const cachedTokens = log.usage.prompt_tokens_details?.cached_tokens ?? 0;
-    // 总耗时与首字耗时均从请求到达开始, 包含选路和此前重试。
+    // 缓存率取输入缓存占全部输入 Token 的比例, 无输入时为零。
+    const cacheRate = log.usage.prompt_tokens > 0 ? Math.round((cachedTokens / log.usage.prompt_tokens) * 100) : 0;
+    // 请求进行中显示实时总耗时; 结束后只显示实际响应阶段耗时, 提交前结束时回退到总耗时。
     const requestActive = log.status === 'running' || log.status === 'committed';
-    const duration = requestActive
-        ? formatMilliseconds(now - new Date(log.started_at).getTime())
-        : formatMilliseconds(log.duration / 1_000_000);
-    // 首字耗时未提交前为零: 此刻还没有字节写给客户端, 显示占位而不是形似真实的 0ms。
-    const firstToken = log.first_token_duration > 0
-        ? formatMilliseconds(log.first_token_duration / 1_000_000)
-        : '--';
-    // output_chars 实际计数 SSE 事件, 使用同一服务端快照的时长估算事件速度。
+    const elapsedMs = requestActive
+        ? now - new Date(log.started_at).getTime()
+        : log.duration / 1_000_000;
     const responseMs = (log.stream_duration || log.response_duration) / 1_000_000;
+    const duration = formatMilliseconds(!requestActive && responseMs > 0 ? responseMs : elapsedMs);
+    // 首字时间仅流式响应存在, 非流式或尚未提交时留空。
+    const firstToken = log.first_token_duration > 0 ? formatMilliseconds(log.first_token_duration / 1_000_000) : '-';
+    // 请求进行中使用同一份服务端快照中的字符数和流式传输时长, 结束后改用最终 Token 数。
     const outputCount = requestActive ? log.output_chars : log.usage.completion_tokens;
     const outputSpeed = responseMs > 0 ? outputCount / (responseMs / 1000) : 0;
-    const outputSpeedUnit = requestActive ? 'e/s' : 't/s';
+    const outputSpeedUnit = requestActive ? 'c/s' : 't/s';
     const metrics = [
-        { key: 'time', Icon: Clock, iconClassName: 'size-3.5 shrink-0', iconStyle: { color: brandColor } as CSSProperties, value: formatTime(log.started_at), valueClassName: 'tabular-nums', cellClassName: 'col-span-4 whitespace-nowrap md:col-span-1' },
-        { key: 'apiKey', Icon: KeyRound, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: log.api_key_name || '-', valueClassName: 'truncate', cellClassName: 'col-span-4 md:col-span-1' },
-        { key: 'duration', Icon: Cpu, iconClassName: 'size-3.5 shrink-0 text-blue-500', value: duration, cellClassName: 'col-span-4 md:col-span-1' },
-        { key: 'firstToken', Icon: Zap, iconClassName: 'size-3.5 shrink-0 text-amber-500', value: firstToken, valueClassName: 'tabular-nums', cellClassName: 'col-span-4 md:col-span-1' },
-        { key: 'cost', Icon: DollarSign, iconClassName: 'size-3.5 shrink-0 text-emerald-500', value: log.cost.toFixed(6), valueClassName: 'font-medium text-emerald-600 dark:text-emerald-400', cellClassName: 'col-span-4 md:col-span-1' },
-        { key: 'prompt', Icon: ArrowDownToLine, iconClassName: 'size-3.5 shrink-0 text-green-500', value: (log.usage.prompt_tokens - cachedTokens).toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
-        { key: 'cached', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-cyan-500', value: cachedTokens.toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
-        { key: 'cacheRate', Icon: Percent, iconClassName: 'size-3.5 shrink-0 text-teal-500', value: `${cacheRate(log.usage.prompt_tokens, cachedTokens).toFixed(1)}%`, valueClassName: 'tabular-nums', cellClassName: 'col-span-3 md:col-span-1' },
-        { key: 'completion', Icon: ArrowUpFromLine, iconClassName: 'size-3.5 shrink-0 text-purple-500', value: outputCount.toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
-        { key: 'cacheWrite', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: (log.usage.prompt_tokens_details?.write_cached_tokens ?? 0).toLocaleString(), cellClassName: 'col-span-3 md:col-span-1' },
-        { key: 'speed', Icon: Gauge, iconClassName: 'size-3.5 shrink-0 text-sky-500', value: outputSpeed > 0 ? `${outputSpeed.toFixed(0)} ${outputSpeedUnit}` : '--', cellClassName: 'col-span-3 md:col-span-1' },
+        { key: 'time', Icon: Clock, iconClassName: 'size-3.5 shrink-0', iconStyle: { color: brandColor } as CSSProperties, value: formatTime(log.started_at), cellClassName: 'whitespace-nowrap col-span-5 md:col-span-1' },
+        { key: 'apiKey', Icon: KeyRound, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: log.api_key_name || '-', cellClassName: 'whitespace-nowrap col-span-5 md:col-span-1' },
+        { key: 'firstToken', Icon: Zap, iconClassName: 'size-3.5 shrink-0 text-amber-500', value: firstToken, cellClassName: 'whitespace-nowrap col-span-5 md:col-span-1' },
+        { key: 'duration', Icon: Cpu, iconClassName: 'size-3.5 shrink-0 text-blue-500', value: duration, cellClassName: 'whitespace-nowrap col-span-5 md:col-span-1' },
+        { key: 'prompt', Icon: ArrowDownToLine, iconClassName: 'size-3.5 shrink-0 text-green-500', value: (log.usage.prompt_tokens - cachedTokens).toLocaleString(), cellClassName: 'whitespace-nowrap col-span-4 md:col-span-1' },
+        { key: 'cached', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-cyan-500', value: `${cachedTokens.toLocaleString()}`, cellClassName: 'whitespace-nowrap col-span-4 md:col-span-1' },
+        { key: 'cacheRate', Icon: Percent, iconClassName: 'size-3.5 shrink-0 text-teal-500', value: `${cacheRate}%`, valueClassName: 'tabular-nums', cellClassName: 'col-span-4 md:col-span-1' },
+        { key: 'completion', Icon: ArrowUpFromLine, iconClassName: 'size-3.5 shrink-0 text-purple-500', value: (requestActive ? log.output_chars.toLocaleString() : log.usage.completion_tokens.toLocaleString()), cellClassName: 'col-span-4 md:col-span-1' },
+        { key: 'cacheWrite', Icon: Database, iconClassName: 'size-3.5 shrink-0 text-orange-500', value: (log.usage.prompt_tokens_details?.write_cached_tokens ?? 0).toLocaleString(), cellClassName: 'whitespace-nowrap col-span-4 md:col-span-1' },
+        { key: 'speed', Icon: Gauge, iconClassName: 'size-3.5 shrink-0 text-sky-500', value: outputSpeed > 0 ? `${outputSpeed.toFixed(0)}${outputSpeedUnit}` : '-', cellClassName: 'whitespace-nowrap col-span-4 md:col-span-1' },
+        { key: 'cost', Icon: DollarSign, iconClassName: 'size-3.5 shrink-0 text-emerald-500', value: log.cost.toFixed(6), cellClassName: 'whitespace-nowrap col-span-4 md:col-span-1' },
     ];
-    // 实时输出与速度明确标为 SSE 事件估算, 完成后展示确认的 Token 指标。
-    const titles: Record<string, string | undefined> = {
-        apiKey: log.api_key_name,
-        firstToken: t('firstToken'),
-        cacheRate: t('cacheRate'),
-        duration: t('duration'),
-        completion: t(requestActive ? 'estimatedOutput' : 'completionTokens'),
-        speed: t(requestActive ? 'estimatedEventSpeed' : 'tokenSpeed'),
-        cacheWrite: t('cacheWrite'),
-    };
 
     return metrics.map((metric) => (
         <div
             key={metric.key}
-            title={titles[metric.key]}
+            title={metric.key === 'apiKey' ? log.api_key_name : undefined}
             className={cn('flex min-w-0 items-center gap-1.5', variant === 'card' && metric.cellClassName)}
         >
             <metric.Icon className={metric.iconClassName} style={metric.iconStyle} />
-            <span className={metric.valueClassName}>{metric.value}</span>
+            <span>{metric.value}</span>
         </div>
     ));
 }
 
-// RetryHistory 独立于主要响应内容, 重开详情或新一轮清空 error 都不会丢失服务端历史。
-function RetryHistory({ errors, active }: { errors: RelayRetryError[]; active: boolean }) {
-    const t = useTranslations('log.card');
-    if (!errors.length) return null;
-    return (
-        <details open={active} className="border-t border-border text-xs">
-            <summary className="cursor-pointer px-4 py-3 font-medium text-muted-foreground">
-                {t('retryHistory', { count: errors.length })}
-            </summary>
-            <div className="divide-y divide-border">
-                {errors.map((entry) => (
-                    <div key={entry.round} className="flex flex-col gap-1.5 px-4 py-2.5">
-                        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                            <span>{t('retryIndex', { index: entry.round })}</span>
-                            <span className="font-semibold text-foreground">{entry.target_channel || '-'}</span>
-                            <span className="break-all">{entry.target_model}</span>
-                            <CopyIconButton text={entry.error} className="ml-auto shrink-0 p-1 rounded-md hover:bg-muted" copyIconClassName="size-3.5" checkIconClassName="size-3.5" />
-                        </div>
-                        <div className="leading-relaxed text-muted-foreground whitespace-pre-wrap wrap-break-word">{entry.error}</div>
-                    </div>
-                ))}
-            </div>
-        </details>
-    );
+// ObservedRound 保存弹窗打开期间观察到的一轮上游请求状态。
+interface ObservedRound {
+    round: number; // 当前请求内递增的轮次序号。
+    channelKey: string; // 本轮实际请求的渠道名称和 Key 名称, 以空格分隔。
+    error: string; // 本轮最近一次上游错误。
+    sending: boolean; // 本轮是否仍在等待上游响应。
+    startedAt: string; // 服务端记录的本轮开始时间。
 }
 
 // JsonContent 渲染请求或响应正文, 能解析为 JSON 时使用折叠视图, 否则按纯文本展示。
@@ -210,10 +165,12 @@ function JsonContent({ content, fallbackText }: { content: string | object | und
 }
 
 // LogDetail 渲染日志详情弹窗内容, 仅在弹窗打开期间挂载, 由此避免列表中的卡片持有详情查询和状态。
-function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
+function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: number; errorRounds: ObservedRound[] }) {
     const t = useTranslations('log.card');
     const statusT = useTranslations('log.status');
     const [leftTab, setLeftTab] = useState<'request' | 'group'>('group');
+    const [rounds, setRounds] = useState<ObservedRound[]>(errorRounds);
+    const [observedRoundKey, setObservedRoundKey] = useState(''); // observedRoundKey 是已记入 rounds 的最近一次日志快照, 用于跳过重复渲染。
     const [detailReady, setDetailReady] = useState(false); // 展开动画结束后才允许加载详情数据。
     const [switchingItemId, setSwitchingItemId] = useState<number | null>(null);
     const requestBody = useLogRequestBody(log.id, log.started_at, detailReady && leftTab === 'request');
@@ -227,7 +184,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
     const requestFailed = log.status === 'failed' || log.status === 'canceled';
     const responseCommitted = log.status === 'committed';
     const requestActive = log.status === 'running' || responseCommitted;
-    const retryErrors = getRetryErrors(log);
+    const showRounds = log.status === 'running' || (requestFailed && rounds.length > 0);
     const isWaitingForSelection = log.status === 'running' && !log.sending && activeGroup?.mode === 'manual' && activeGroup.runtime.current_item_id === 0; // isWaitingForSelection 表示手动模式请求正等待选择渠道。
 
     // 让弹窗先完成展开动画, 避免详情请求及其状态更新占用动画起步帧。
@@ -236,28 +193,54 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
         return () => window.clearTimeout(timer);
     }, []);
 
+    // 按轮次记录本次打开期间观察到的上游请求状态, 最新一轮排在最前。
+    // 轮次来自逐次推送的日志, 需在渲染期比对已记录的快照累积, 不能仅由当前 log 推导。
+    const roundKey = log.round === 0 ? '' : `${log.round}:${log.target_channel_key}:${log.sending}:${errorText}`;
+    if (roundKey !== '' && roundKey !== observedRoundKey) {
+        setObservedRoundKey(roundKey);
+        setRounds((current) => {
+            if (!log.sending && current.every((item) => item.round !== log.round)) return current;
+            const previous = current.find((item) => item.round === log.round);
+            const startedAt = previous?.startedAt ?? log.round_started_at;
+            return [
+                {
+                    round: log.round,
+                    channelKey: log.target_channel_key,
+                    error: errorText,
+                    sending: log.sending,
+                    startedAt,
+                },
+                ...current.filter((item) => item.round !== log.round),
+            ];
+        });
+    }
 
     return (
         <MorphingDialogContent className="relative w-[calc(100vw-2rem)] md:w-[80vw] bg-card text-card-foreground px-6 py-4 rounded-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
             <MorphingDialogClose className="top-4 right-5 text-muted-foreground hover:text-foreground transition-colors" />
             <MorphingDialogTitle className="flex flex-wrap items-center gap-2 mb-3 text-sm">
-                <span className="flex items-center gap-2 w-full md:w-auto">
-                    <Icon aria-hidden="true" className={iconClassName} width={28} height={28} />
-                    <span className="text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span>
-                    <span className="font-semibold text-card-foreground">{log.model || t('unknownModel')}</span>
-                    <ReasoningBadge reasoning={log.reasoning} />
+                <span className="flex min-w-0 items-center gap-2 w-full md:w-auto">
+                    <Icon aria-hidden="true" className={cn('hidden shrink-0 md:block', iconClassName)} width={28} height={28} />
+                    <span className="shrink-0 text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span></span>
+                    <span className="min-w-0 truncate font-semibold text-card-foreground">{log.model || t('unknownModel')}</span>
+                    {log.reasoning_effort && (
+                        <Badge variant="outline" className="max-w-32 bg-violet-500/10 px-1.5 py-0 text-xs text-violet-700 dark:text-violet-300">
+                            <Brain aria-hidden="true" />
+                            <span className="truncate">{log.reasoning_effort}</span>
+                        </Badge>
+                    )}
                     {log.status === 'running' || responseCommitted
                         ? <Loader2 className={cn('size-3.5 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
                         : <ArrowRight className="size-3.5 text-muted-foreground/50" />}
                 </span>
                 <span className="flex items-center gap-2 w-full md:w-auto">
-                    <span className="text-xs text-muted-foreground/70">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span>
+                    <span className="text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.target_protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span></span>
                     <Badge
                         variant="secondary"
                         className="text-xs px-1.5 py-0"
                         style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
                     >
-                        {log.target_channel || '-'}
+                        {log.target_channel_key || '-'}
                     </Badge>
                     <span className="text-muted-foreground">{actualModel}</span>
                 </span>
@@ -314,12 +297,6 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                 <div className="divide-y divide-border">
                                     {activeGroup.items.map((item) => {
                                         const { Icon: ItemIcon, className: itemIconClassName } = getModelIcon(item.model_name);
-                                        // 手动模式用 active_item_id 记住人工指定的成员, 故障转移模式用 pinned_item_id 强制优先。
-                                        // 两者都优先于配置优先级被选中, 因而"点一个成员"在两种模式下都能让它在下一轮上位。
-                                        const manual = activeGroup.mode === 'manual';
-                                        const isSelected = manual
-                                            ? activeGroup.runtime.current_item_id === item.id
-                                            : activeGroup.pinned_item_id === item.id;
                                         const itemCurrent = switchingItemId !== null
                                             ? item.id === switchingItemId
                                             : activeGroup.runtime.current_item_id === item.id;
@@ -328,22 +305,19 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                                 key={item.id}
                                                 type="button"
                                                 aria-pressed={itemCurrent}
-                                                disabled={switchingItemId !== null || stopRequest.isPending}
+                                                disabled={activeGroup.mode === 'failover' || switchingItemId !== null || stopRequest.isPending}
                                                 onClick={async () => {
+                                                    if (activeGroup.mode === 'failover') return;
                                                     setSwitchingItemId(item.id);
+                                                    const isCurrent = activeGroup.runtime.current_item_id === item.id;
                                                     try {
-                                                        await updateActiveItem.mutateAsync(manual
-                                                            ? { id: activeGroup.id, active_item_id: isSelected ? 0 : item.id }
-                                                            : { id: activeGroup.id, pinned_item_id: isSelected ? 0 : item.id });
-                                                        // 指定只在新一轮选路时才被读到, 请求正等在上游就先中止本轮让它立刻重选。
+                                                        await updateActiveItem.mutateAsync({ id: activeGroup.id, active_item_id: isCurrent ? 0 : item.id });
                                                         if (log.sending) {
                                                             await stopRequest.mutateAsync({ requestId: log.id, round: log.round });
                                                         }
-                                                        toast.success(isSelected
-                                                            ? t(manual ? 'channelCleared' : 'pinCleared')
-                                                            : t(manual ? 'channelChanged' : 'channelPinned'));
+                                                        toast.success(isCurrent ? t('channelCleared') : t('channelChanged'));
                                                     } catch (cause) {
-                                                        toast.error(t(manual ? 'channelChangeFailed' : 'pinChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
+                                                        toast.error(t('channelChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
                                                     } finally {
                                                         setSwitchingItemId(null);
                                                     }
@@ -369,12 +343,12 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                     </div>
 
                     <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted/50 px-3 py-1 md:px-4">
+                        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-muted/50 px-3 md:px-4">
                             <span className="text-sm font-medium text-card-foreground">
-                                {isWaitingForSelection ? t('waitingChannelSelection') : requestFailed ? t('errorInfo') : t('responseContent')}
+                                {isWaitingForSelection ? t('waitingChannelSelection') : showRounds ? t('retryDetails') : requestFailed ? t('errorInfo') : t('responseContent')}
                             </span>
-                            <div className="ml-auto flex flex-wrap items-center gap-2">
-                                {log.status === 'running' && log.sending && (
+                            <div className="ml-auto flex items-center gap-2">
+                                {log.status === 'running' && log.sending && activeGroup?.mode === 'manual' && (
                                     <button
                                         type="button"
                                         disabled={stopRequest.isPending}
@@ -408,7 +382,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                         {t('cancelRequest')}
                                     </button>
                                 )}
-                                {!requestFailed && !(log.status === 'running' && log.sending) && (
+                                {!requestFailed && !(log.status === 'running' && log.sending && activeGroup?.mode === 'manual') && (
                                     <Badge variant="secondary" className="text-xs">
                                         {responseCommitted
                                             ? statusT('committed')
@@ -422,32 +396,52 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                 <div className="flex h-full items-center justify-center">
                                     <Loader2 className="size-5 animate-spin text-muted-foreground" />
                                 </div>
-                            ) : requestFailed ? (
-                                <div>
-                                    <p className="px-4 pt-3 text-xs font-medium text-destructive">{statusT(log.status)}</p>
-                                    <JsonContent content={errorText} fallbackText={statusT(log.status)} />
+                            ) : isWaitingForSelection ? (
+                                <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="size-4 animate-spin" />
+                                    {t('waitingChannelSelection')}
                                 </div>
-                            ) : log.status === 'running' ? (
-                                <div className="flex flex-col gap-2 px-4 py-4 text-xs text-muted-foreground">
-                                    <div className="flex items-center gap-2">
-                                        <Loader2 className="size-4 shrink-0 animate-spin" />
-                                        {t(isWaitingForSelection ? 'waitingChannelSelection' : 'waitingResponse')}
+                            ) : showRounds ? (
+                                rounds.length ? (
+                                    <div className="divide-y divide-border">
+                                        {rounds.map((round) => (
+                                            <div key={round.round} className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="shrink-0 tabular-nums text-muted-foreground">{formatRoundStartedAt(round.startedAt)}</span>
+                                                    <span className="shrink-0 text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
+                                                    <span className="shrink-0 font-semibold text-foreground">{round.channelKey || '-'}</span>
+                                                    {round.sending ? (
+                                                        <Loader2 className="ml-auto size-3.5 animate-spin text-muted-foreground" />
+                                                    ) : round.error ? (
+                                                        <CopyIconButton
+                                                            text={round.error}
+                                                            className="ml-auto p-1 rounded-md text-destructive/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                                            copyIconClassName="size-3.5"
+                                                            checkIconClassName="size-3.5"
+                                                        />
+                                                    ) : null}
+                                                </div>
+                                                {round.error && (
+                                                    <div className="text-[11px] leading-relaxed text-destructive/90 whitespace-pre-wrap wrap-break-word">
+                                                        {round.error}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
                                     </div>
-                                    {log.sending && (
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <span>{t('currentAttempt')}</span>
-                                            <span>{t('retryIndex', { index: log.round })}</span>
-                                            <span className="font-semibold text-foreground">{log.target_channel || '-'}</span>
-                                            <span className="break-all">{log.target_model}</span>
-                                            <span className="tabular-nums">{formatRoundStartedAt(log.round_started_at)}</span>
-                                        </div>
-                                    )}
-                                </div>
+                                ) : (
+                                    <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
+                                        <Loader2 className="size-4 animate-spin" />
+                                        {t('waitingResponse')}
+                                    </div>
+                                )
                             ) : responseCommitted ? (
-                                <div className="flex items-center justify-center gap-2 px-4 py-6 text-xs text-muted-foreground">
-                                    <Loader2 className="size-4 shrink-0 animate-spin" />
+                                <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="size-4 animate-spin" />
                                     {t('responseStreaming')}
                                 </div>
+                            ) : requestFailed ? (
+                                <JsonContent content={errorText} fallbackText={t('noResponseContent')} />
                             ) : responseBody.isLoading ? (
                                 <div className="flex h-full items-center justify-center">
                                     <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -460,9 +454,6 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                             ) : (
                                 <JsonContent content={responseBody.data} fallbackText={t('noResponseContent')} />
                             )}
-                        </div>
-                        <div className="max-h-40 shrink-0 overflow-auto">
-                            <RetryHistory errors={retryErrors} active={log.status === 'running'} />
                         </div>
                     </div>
                 </div>
@@ -478,16 +469,21 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
 // LogCardBody 渲染日志概览卡片, 并在弹窗打开时挂载详情面板。
 function LogCardBody({ log }: { log: RelayLogOverview }) {
     const t = useTranslations('log.card');
-    const statusT = useTranslations('log.status');
     const { isOpen } = useMorphingDialog();
     const [now, setNow] = useState(() => Date.now());
+    const [displayError, setDisplayError] = useState(log.error ?? ''); // 保留重试期间最近一次错误, 直到响应真正开始。
+    const [errorRounds, setErrorRounds] = useState<ObservedRound[]>(() => log.error ? [{
+        round: log.round,
+        channelKey: log.target_channel_key,
+        error: log.error,
+        sending: log.sending,
+        startedAt: log.round_started_at,
+    }] : []); // 在概览卡片存留期间收集最近五次错误, 供详情打开时直接展示。
     const actualModel = log.target_model || log.model;
     const { Icon, className: iconClassName, color: brandColor } = getModelIcon(actualModel);
     const requestRunning = log.status === 'running' || log.status === 'committed';
-    const requestFailed = log.status === 'failed' || log.status === 'canceled';
     const errorText = log.error ?? '';
-    const retryErrors = getRetryErrors(log);
-    const latestFailure = retryErrors[0];
+    const visibleError = log.status === 'committed' || log.status === 'success' ? '' : displayError;
 
     // 仅在请求进行中或弹窗打开时按 500ms 刷新, 避免已完成日志持续触发重渲染。
     useEffect(() => {
@@ -496,64 +492,81 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
         return () => window.clearInterval(timer);
     }, [isOpen, requestRunning]);
 
+    // 新错误覆盖旧错误; 响应已开始或请求成功后清除错误提示。
+    useEffect(() => {
+        if (log.status === 'committed' || log.status === 'success') {
+            setDisplayError('');
+        } else if (errorText) {
+            setDisplayError(errorText);
+        }
+    }, [errorText, log.status]);
+
+    useEffect(() => {
+        if (!errorText) return;
+        setErrorRounds((current) => [
+            {
+                round: log.round,
+                channelKey: log.target_channel_key,
+                error: errorText,
+                sending: log.sending,
+                startedAt: log.round_started_at,
+            },
+            ...current.filter((round) => round.round !== log.round),
+        ].slice(0, 5));
+    }, [errorText, log.round, log.target_channel_key, log.sending, log.round_started_at]);
+
     return (
         <>
             <MorphingDialogTrigger
-                className={cn(
-                    "rounded-3xl border bg-card w-full text-left",
-                    requestFailed ? "border-destructive/40" : "border-border",
-                )}
+                className="rounded-3xl border border-border bg-card w-full text-left"
             >
-                <div className={cn("p-4 grid grid-cols-[auto_1fr] gap-4", requestFailed ? "items-start" : "items-center")}>
+                <div className="p-4 grid grid-cols-[auto_1fr] gap-4 items-start">
                     <Icon aria-hidden="true" className={cn('hidden md:block', iconClassName)} width={40} height={40} />
                     <div className="min-w-0 flex flex-col gap-3 col-span-2 md:col-span-1">
-                        <div className="flex flex-wrap items-center gap-2 min-w-0 text-sm">
-                            <span className="shrink-0 text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span></span>
-                            <span className="font-semibold text-card-foreground truncate">
-                                {log.model || t('unknownModel')}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 text-sm">
+                            <span className="flex w-full min-w-0 items-center gap-2 md:w-auto">
+                                <span className="shrink-0 text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.protocol] ?? '-'}</span></span>
+                                <span className="font-semibold text-card-foreground truncate">
+                                    {log.model || t('unknownModel')}
+                                </span>
+                                {log.reasoning_effort && (
+                                    <Badge variant="secondary" className="max-w-32 bg-violet-500/10 px-1.5 py-0 text-xs text-violet-700 dark:text-violet-300">
+                                        <Brain aria-hidden="true" />
+                                        <span className="truncate">{log.reasoning_effort}</span>
+                                    </Badge>
+                                )}
+                                {requestRunning
+                                    ? <Loader2 className={cn('size-3.5 shrink-0 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
+                                    : <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />}
                             </span>
-                            <ReasoningBadge reasoning={log.reasoning} />
-                            {requestRunning
-                                ? <Loader2 className={cn('size-3.5 shrink-0 animate-spin', log.status === 'committed' ? 'text-green-500' : log.round > 1 ? 'text-red-500' : 'text-muted-foreground/50')} />
-                                : <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />}
-                            <span className="shrink-0 text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.target_protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span></span>
-                            {log.status === 'running' && log.sending && latestFailure && <span className="shrink-0 text-xs text-muted-foreground">{t('currentAttempt')}</span>}
-                            <Badge
-                                variant="secondary"
-                                className="shrink-0 text-xs px-1.5 py-0"
-                                style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
-                            >
-                                {log.target_channel || '-'}
-                            </Badge>
-                            <span className="text-muted-foreground truncate">
-                                {actualModel}
+                            <span className="flex w-full min-w-0 items-center gap-2 md:w-auto">
+                                <span className="shrink-0 text-xs text-muted-foreground/70"><span className="md:hidden">{PROTOCOL_LABELS[log.target_protocol]?.charAt(0) ?? '-'}</span><span className="hidden md:inline">{PROTOCOL_LABELS[log.target_protocol] ?? '-'}</span></span>
+                                <Badge
+                                    variant="secondary"
+                                    className="shrink-0 text-xs px-1.5 py-0"
+                                    style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
+                                >
+                                    {log.target_channel_key || '-'}
+                                </Badge>
+                                <span className="text-muted-foreground truncate">
+                                    {actualModel}
+                                </span>
                             </span>
                         </div>
-                        <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-11">
+                        <div className="grid grid-cols-20 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-11">
                             <LogMetrics log={log} now={now} brandColor={brandColor} variant="card" />
                         </div>
-                        {requestFailed && (
+                        {visibleError && (
                             <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
-                                <p className="text-xs text-destructive line-clamp-2 whitespace-pre-line wrap-break-word">{errorText || statusT(log.status)}</p>
+                                <p className="text-xs text-destructive line-clamp-1 whitespace-pre-line">{log.status === 'running' ? `${t('retryIndex', { index: log.round })}: ` : ''}{visibleError}</p>
                             </div>
-                        )}
-                        {log.status === 'running' && latestFailure && (
-                            <div className="p-2.5 rounded-xl bg-destructive/5 border border-destructive/20 overflow-hidden">
-                                <p className="text-xs font-medium text-destructive">
-                                    {t('latestFailure', { index: latestFailure.round, channel: latestFailure.target_channel || '-' })}
-                                </p>
-                                <p className="mt-1 text-xs text-destructive line-clamp-2 whitespace-pre-line wrap-break-word">{latestFailure.error}</p>
-                            </div>
-                        )}
-                        {log.status !== 'running' && retryErrors.length > 0 && (
-                            <p className="text-xs text-muted-foreground">{t('retryHistory', { count: retryErrors.length })}</p>
                         )}
                     </div>
                 </div>
             </MorphingDialogTrigger>
 
             <MorphingDialogContainer>
-                <LogDetail log={log} now={now} />
+                <LogDetail log={log} now={now} errorRounds={errorRounds} />
             </MorphingDialogContainer>
         </>
     );

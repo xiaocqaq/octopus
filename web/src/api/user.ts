@@ -91,7 +91,12 @@ export const useAuthStore = create<AuthState>()(
                     isLoading: false
                 });
                 if (typeof document !== 'undefined') {
-                    document.cookie = 'auth=; Max-Age=0; Path=/; SameSite=Lax';
+                    const cookiePath = new URL('./', document.baseURI).pathname; // 当前应用所在目录对应的 Cookie 路径。
+                    document.cookie = `auth=; Max-Age=0; Path=${cookiePath}; SameSite=Lax`;
+                    // 反向代理重写 Cookie Path 时也可省略目录末尾的斜杠。
+                    if (cookiePath !== '/') {
+                        document.cookie = `auth=; Max-Age=0; Path=${cookiePath.slice(0, -1)}; SameSite=Lax`;
+                    }
                 }
             }
         }),

@@ -1,25 +1,27 @@
 // 缓存策略或预缓存结构变化时递增版本，以便激活阶段清理旧缓存。
 // 每次发版时自动从构建产物注入版本号，确保客户端能获取到新资源。
 const CACHE_VERSION = '__APP_VERSION__';
+const BASE_PATH = new URL(self.registration.scope).pathname; // 当前应用所在目录，保留末尾斜杠。
+const CACHE_PREFIX = `octopus-${encodeURIComponent(BASE_PATH)}-`; // 按应用目录隔离缓存及其清理范围。
 const CACHE_NAMES = {
-    shell: `octopus-shell-${CACHE_VERSION}`,
-    static: `octopus-static-${CACHE_VERSION}`,
+    shell: `${CACHE_PREFIX}shell-${CACHE_VERSION}`,
+    static: `${CACHE_PREFIX}static-${CACHE_VERSION}`,
 };
 
 // 应用壳除构建入口外还必须包含的固定 PWA 资源。
 const CORE_ASSETS = [
-    '/manifest.json',
-    '/favicon.ico',
-    '/apple-icon.png',
-    '/web-app-manifest-192x192.png',
-    '/web-app-manifest-512x512.png',
+    `${BASE_PATH}manifest.json`,
+    `${BASE_PATH}favicon.ico`,
+    `${BASE_PATH}apple-icon.png`,
+    `${BASE_PATH}web-app-manifest-192x192.png`,
+    `${BASE_PATH}web-app-manifest-512x512.png`,
 ];
 
 // extractShellAssets 从构建后的 HTML 中提取根路径和相对路径资源。
 function extractShellAssets(html) {
     const assets = new Set(CORE_ASSETS);
     for (const match of html.matchAll(/\b(?:href|src)=["']((?:\/|\.\/)[^"'#]+)["']/g)) {
-        const url = new URL(match[1], `${self.location.origin}/`);
+        const url = new URL(match[1], self.registration.scope);
         assets.add(`${url.pathname}${url.search}`);
     }
     return [...assets];
@@ -27,7 +29,7 @@ function extractShellAssets(html) {
 
 // cacheAppShell 缓存首页、当前构建的哈希入口和固定 PWA 资源。
 async function cacheAppShell() {
-    const response = await fetch('/', { cache: 'no-store' });
+    const response = await fetch(BASE_PATH, { cache: 'no-store' });
     if (!response.ok) {
         throw new Error(`Failed to fetch app shell: ${response.status}`);
     }
@@ -35,10 +37,10 @@ async function cacheAppShell() {
     const assets = extractShellAssets(await response.clone().text());
     const shellCache = await caches.open(CACHE_NAMES.shell);
     const staticCache = await caches.open(CACHE_NAMES.static);
-    await shellCache.put('/', response);
+    await shellCache.put(BASE_PATH, response);
     await Promise.all([
-        shellCache.addAll(assets.filter((asset) => !asset.startsWith('/assets/'))),
-        staticCache.addAll(assets.filter((asset) => asset.startsWith('/assets/'))),
+        shellCache.addAll(assets.filter((asset) => !asset.startsWith(`${BASE_PATH}assets/`))),
+        staticCache.addAll(assets.filter((asset) => asset.startsWith(`${BASE_PATH}assets/`))),
     ]);
 }
 
@@ -55,7 +57,7 @@ self.addEventListener('activate', (event) => {
         const cacheNames = await caches.keys();
         await Promise.all(
             cacheNames
-                .filter((name) => name.startsWith('octopus-') && !currentCaches.has(name))
+                .filter((name) => name.startsWith(CACHE_PREFIX) && !currentCaches.has(name))
                 .map((name) => caches.delete(name)),
         );
         await self.clients.claim();
@@ -67,15 +69,16 @@ self.addEventListener('fetch', (event) => {
     if (request.method !== 'GET') return;
 
     const url = new URL(request.url);
-    if (url.origin !== self.location.origin) return;
+    if (url.origin !== self.location.origin || !url.pathname.startsWith(BASE_PATH)) return;
+    const pathname = url.pathname.slice(BASE_PATH.length); // 相对于应用目录的路径，用于识别 API 和静态资源。
     if (
-        url.pathname === '/sw.js' ||
-        url.pathname === '/api' ||
-        url.pathname.startsWith('/api/') ||
-        url.pathname === '/v1' ||
-        url.pathname.startsWith('/v1/') ||
-        url.pathname.startsWith('/@vite') ||
-        url.pathname.startsWith('/@react-refresh')
+        pathname === 'sw.js' ||
+        pathname === 'api' ||
+        pathname.startsWith('api/') ||
+        pathname === 'v1' ||
+        pathname.startsWith('v1/') ||
+        pathname.startsWith('@vite') ||
+        pathname.startsWith('@react-refresh')
     ) {
         return;
     }
@@ -85,7 +88,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    if (url.pathname.startsWith('/assets/')) {
+    if (pathname.startsWith('assets/')) {
         event.respondWith(cacheFirst(request));
         return;
     }
@@ -137,9 +140,9 @@ async function networkFirst(request) {
     const cache = await caches.open(CACHE_NAMES.shell);
     try {
         const response = await fetch(request);
-        if (response.ok) await cache.put('/', response.clone());
+        if (response.ok) await cache.put(BASE_PATH, response.clone());
         return response;
     } catch {
-        return (await cache.match(request)) || (await cache.match('/')) || new Response('Offline', { status: 503 });
+        return (await cache.match(request)) || (await cache.match(BASE_PATH)) || new Response('Offline', { status: 503 });
     }
 }

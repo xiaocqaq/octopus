@@ -102,7 +102,7 @@ func TestForwardRequestCancellation(t *testing.T) {
 					requestID = state.ID
 					switch scenario {
 					case "image_selection", "chat_selection":
-						ready = len(state.RetryErrors) > 0
+						ready = state.Round > 0 && state.Error != ""
 					case "image_wait_body":
 						ready = state.Status == StatusCommitted
 					case "image_wait_headers":
@@ -139,7 +139,7 @@ func TestForwardRequestCancellation(t *testing.T) {
 			if state.Status != want || clientCtx.Err() != nil {
 				t.Fatalf("status=%s want=%s client context=%v", state.Status, want, clientCtx.Err())
 			}
-			if strings.HasSuffix(scenario, "selection") && len(state.RetryErrors) == 0 {
+			if strings.HasSuffix(scenario, "selection") && state.Error == "" {
 				t.Fatal("selection failure disappeared on cancellation")
 			}
 		})

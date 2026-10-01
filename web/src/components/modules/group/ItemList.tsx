@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { HeartPulse, Layers, GripVertical, LoaderCircle, X, Trash2 } from 'lucide-react';
+import { HeartPulse, Layers, GripVertical, LoaderCircle, X, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/common/IconButton';
 import { useTranslations } from 'use-intl';
 import type { Group } from '@/api/group';
 import { MemberStatus } from './MemberStatus';
@@ -41,9 +42,12 @@ type MemberItemDnd = {
     isDragging: boolean;
 };
 
-// MemberItem 渲染可拖拽成员及其删除确认状态。
+// MemberItem 渲染可拖拽成员、编辑排序操作及删除确认状态。
 function MemberItem({
     member,
+    members,
+    index,
+    onReorder,
     onRemove,
     onActivate,
     onProbe,
@@ -57,6 +61,9 @@ function MemberItem({
     dnd,
 }: {
     member: SelectedMember;
+    members: SelectedMember[]; // 完整成员顺序，用于首尾移动。
+    index: number; // 当前成员在排序数组中的位置。
+    onReorder: (members: SelectedMember[]) => void; // 更新成员顺序。
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
     onProbe?: (itemId: number) => void;
@@ -171,6 +178,31 @@ function MemberItem({
                     </Tooltip>
                 )}
 
+                {!group && (
+                    <>
+                        <IconButton
+                            disabled={index === 0 || isRemoving || dnd.isDragging}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onReorder(reorderList(members, index, 0));
+                            }}
+                            className="size-5 shrink-0 rounded hover:bg-muted"
+                        >
+                            <ArrowUp className="size-3" />
+                        </IconButton>
+                        <IconButton
+                            disabled={index === members.length - 1 || isRemoving || dnd.isDragging}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onReorder(reorderList(members, index, members.length - 1));
+                            }}
+                            className="size-5 shrink-0 rounded hover:bg-muted"
+                        >
+                            <ArrowDown className="size-3" />
+                        </IconButton>
+                    </>
+                )}
+
                 {(!showConfirmDelete || !confirmDelete) && (
                     <motion.button
                         layoutId={`delete-btn-member-${layoutScope ?? 'default'}-${member.id}`}
@@ -180,7 +212,7 @@ function MemberItem({
                             if (showConfirmDelete) setConfirmDelete(true);
                             else onRemove(member.id);
                         }}
-                        className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
+                        className="p-1 rounded hover:text-destructive transition-colors"
                         transition={{ duration: 0.15 }}
                         style={{ pointerEvents: 'auto' }}
                     >
@@ -360,6 +392,9 @@ export function MemberList({
                         renderClone={(draggableProvided, snapshot, rubric) => (
                             <MemberItem
                                 member={members[rubric.source.index]}
+                                members={members}
+                                index={rubric.source.index}
+                                onReorder={onReorder}
                                 onRemove={onRemove}
                                 onActivate={onActivate}
                                 onProbe={onProbe}
@@ -395,6 +430,9 @@ export function MemberList({
                                         {(draggableProvided, snapshot) => (
                                             <MemberItem
                                                 member={member}
+                                                members={members}
+                                                index={index}
+                                                onReorder={onReorder}
                                                 onRemove={onRemove}
                                                 onActivate={onActivate}
                                                 onProbe={onProbe}

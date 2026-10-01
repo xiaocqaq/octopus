@@ -35,11 +35,12 @@ export function setAPIKey(value: string | null) {
     apiKey = value;
 }
 
+// 相对于当前页面目录发送 API 请求，保留反向代理的子路径前缀。
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const headers = new Headers(options.body === undefined ? undefined : { 'Content-Type': 'application/json' });
     if (apiKey) headers.set('Authorization', `Bearer ${apiKey}`);
 
-    const response = await fetch(path, {
+    const response = await fetch(new URL(`.${path}`, document.baseURI), {
         method: options.method ?? 'GET',
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),

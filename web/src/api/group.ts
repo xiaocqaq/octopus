@@ -212,7 +212,7 @@ function useGroupEventStream(enabled: boolean) {
 
         groupEventRefCount++;
         if (!groupEventSource) {
-            const source = new EventSource('/api/v1/group/events', { withCredentials: true });
+            const source = new EventSource('./api/v1/group/events', { withCredentials: true });
             groupEventSource = source;
             source.addEventListener('changed', (event) => {
                 writeGroupCache(JSON.parse((event as MessageEvent<string>).data) as Group);

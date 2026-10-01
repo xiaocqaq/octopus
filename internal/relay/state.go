@@ -2,9 +2,7 @@ package relay
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,27 +25,25 @@ const (
 
 // 客户端请求的完整进程内状态, 同时作为状态流的消息形状; 上半部分在请求到达时写入并在结束时定稿, 下半部分每轮循环覆盖。
 type RequestState struct {
-	ID        uint64        `json:"id"`
-	Status    Status        `json:"status"`
-	StartedAt time.Time     `json:"started_at"`
-	Duration  time.Duration `json:"duration"`
-	// FirstTokenDuration 从请求到达到首字节提交, 包括选路、等待与重试; 非流式同样记录。
-	FirstTokenDuration time.Duration  `json:"first_token_duration"`
-	StreamDuration     time.Duration  `json:"stream_duration"`
-	ResponseDuration   time.Duration  `json:"response_duration"`
-	Model              string         `json:"model"`
-	Protocol           model.Protocol `json:"protocol"`
-	GroupID            int            `json:"group_id"`
-	APIKeyName         string         `json:"api_key_name"`
-	Reasoning          string         `json:"reasoning,omitempty"`
-	Usage              llm.Usage      `json:"usage"`
-	Cost               float64        `json:"cost"`
-	OutputChars        int            `json:"output_chars"`
-	RetryErrors        []RetryError   `json:"retry_errors,omitempty"`
+	ID                 uint64         `json:"id"`                   // 请求在当前进程内的唯一标识。
+	Status             Status         `json:"status"`               // 请求当前状态。
+	StartedAt          time.Time      `json:"started_at"`           // 请求到达时间。
+	Duration           time.Duration  `json:"duration"`             // 请求从到达到结束的总耗时, 未结束时为零。
+	FirstTokenDuration time.Duration  `json:"first_token_duration"` // 流式正确响应轮次开始到首字节提交的耗时, 非流式响应为零。
+	StreamDuration     time.Duration  `json:"stream_duration"`      // 流式响应从首字节提交到响应结束的耗时, 非流式响应为零。
+	ResponseDuration   time.Duration  `json:"response_duration"`    // 非流式正确响应轮次开始到完整响应提交的耗时, 流式响应为零。
+	Model           string         `json:"model"`            // 客户端请求的模型名称, 即分组名称。
+	ReasoningEffort string         `json:"reasoning_effort"` // 客户端请求的思考等级, 未指定时为空。
+	Protocol        model.Protocol `json:"protocol"`        // 客户端请求使用的协议, 由入站格式定出, 单个协议位而非掩码组合。
+	GroupID         int            `json:"group_id"`        // 承载本请求的分组 ID, 供界面按主键直接定位分组而不必按名称回查。
+	APIKeyName      string         `json:"api_key_name"`    // 发起请求时的 API Key 名称。
+	Usage           llm.Usage      `json:"usage"`           // 请求结束时写入的展示用量。
+	Cost            float64        `json:"cost"`            // 请求结束时写入的累计费用。
+	OutputChars     int            `json:"output_chars"`    // 流式过程中按事件数量估算并实时累计的输出字符数, 仅用于界面展示, 不参与结算。
 
 	Round          int            `json:"round"`            // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
 	RoundStartedAt time.Time      `json:"round_started_at"` // 最新一轮上游请求的开始时间。
-	TargetChannel  string         `json:"target_channel"`   // 最新一轮选中的渠道名称。
+	TargetChannelKey string       `json:"target_channel_key"` // 最新一轮选中的渠道名称和 Key 名称, 以空格分隔。
 	TargetModel    string         `json:"target_model"`     // 最新一轮实际请求上游的模型名称。
 	TargetProtocol model.Protocol `json:"target_protocol"`  // 最新一轮实际请求上游的协议, 与 Protocol 不同即本轮做了跨协议转换; 0 表示尚未选出。
 	Sending        bool           `json:"sending"`          // 最新一轮是否仍在等待上游响应。
@@ -64,16 +60,6 @@ type RequestState struct {
 	streamStarted time.Time
 }
 
-// RetryError 保留失败轮次, 即使后续重试、成功或取消也不清除。
-type RetryError struct {
-	Round         int    `json:"round"`
-	TargetChannel string `json:"target_channel"`
-	TargetModel   string `json:"target_model"`
-	Error         string `json:"error"`
-}
-
-const maxRetryErrors = 20
-
 const streamBuffer = 16                              // 单个状态流连接的非阻塞消息缓冲容量。
 const maxFinished = 50                               // 进程内最多保留的已结束请求数量。
 const outputPublishInterval = 500 * time.Millisecond // 输出字符数实时推送的最短发布间隔。
@@ -86,23 +72,23 @@ var (
 )
 
 // newRequestState 分配请求 ID 并登记初始运行状态; 返回的记录是本请求后续全部状态写入的入口。
-func newRequestState(ctx context.Context, modelName string, groupID int, protocol model.Protocol, body string, apiKeyID int) *RequestState {
+func newRequestState(ctx context.Context, modelName, reasoningEffort string, groupID int, protocol model.Protocol, body string, apiKeyID int) *RequestState {
 	requestCtx, requestCancel := context.WithCancel(ctx)
 	mu.Lock()
 	defer mu.Unlock()
 
 	request := &RequestState{
-		ID:            idSeq.Add(1),
-		Status:        StatusRunning,
-		StartedAt:     time.Now(),
-		Model:         modelName,
-		Protocol:      protocol,
-		GroupID:       groupID,
-		Reasoning:     reasoningOf(body),
-		requestBody:   body,
-		apiKeyID:      apiKeyID,
-		requestCtx:    requestCtx,
-		requestCancel: requestCancel,
+		ID:              idSeq.Add(1),
+		Status:          StatusRunning,
+		StartedAt:       time.Now(),
+		Model:           modelName,
+		ReasoningEffort: reasoningEffort,
+		Protocol:        protocol,
+		GroupID:         groupID,
+		requestBody:     body,
+		apiKeyID:        apiKeyID,
+		requestCtx:      requestCtx,
+		requestCancel:   requestCancel,
 	}
 	// 登记时保存名称快照, 查询失败时留空。
 	if apiKey, err := op.APIKeyGet(apiKeyID, ctx); err == nil {
@@ -114,7 +100,7 @@ func newRequestState(ctx context.Context, modelName string, groupID int, protoco
 }
 
 // startRound 记录本轮选中的目标并进入上游请求, cancel 供人工中止本轮, 返回递增的轮次序号。
-func (r *RequestState) startRound(cancel context.CancelFunc, channel, modelName string, protocol model.Protocol) int {
+func (r *RequestState) startRound(cancel context.CancelFunc, channelKeyName, modelName string, protocol model.Protocol) int {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -122,7 +108,7 @@ func (r *RequestState) startRound(cancel context.CancelFunc, channel, modelName 
 	r.RoundStartedAt = time.Now()
 	r.OutputChars = 0 // 新一轮从头计数, 避免累计上一轮未提交的输出。
 	r.lastPublish = time.Time{}
-	r.TargetChannel = channel
+	r.TargetChannelKey = channelKeyName
 	r.TargetModel = modelName
 	r.TargetProtocol = protocol
 	r.Sending = true
@@ -139,27 +125,8 @@ func (r *RequestState) finishRound(errText string) {
 
 	r.Sending = false
 	r.Error = errText
-	r.appendRetryErrorLocked(errText)
 	r.roundCancel = nil
 	publishRequestLocked(r)
-}
-
-// appendRetryErrorLocked 使用新数组, 已发布的浅拷贝快照因此保持不可变。
-func (r *RequestState) appendRetryErrorLocked(errText string) {
-	if errText == "" {
-		return
-	}
-	failure := RetryError{Round: r.Round, TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, Error: errText}
-	for _, previous := range r.RetryErrors {
-		if previous == failure {
-			return
-		}
-	}
-	start := max(0, len(r.RetryErrors)-maxRetryErrors+1)
-	next := make([]RetryError, len(r.RetryErrors)-start+1)
-	copy(next, r.RetryErrors[start:])
-	next[len(next)-1] = failure
-	r.RetryErrors = next
 }
 
 // failSelection 为没有发起上游调用的选路失败保留独立轮次, 不沿用上一轮的目标。
@@ -352,41 +319,6 @@ func (r *RequestState) finishLocked(usage *llm.Usage) {
 	if finished > maxFinished {
 		delete(requests, oldest)
 	}
-}
-
-// reasoningOf 从客户端请求体中读出思维强度并归一为一段短文本, 未声明时返回空串。
-// 三种协议各有自己的字段, 一次全解: 入站格式在此不可知, 且各字段互不冲突, 谁有值就用谁。
-// Anthropic 的思考预算是 Token 数而非档位, 折成 k 以便与档位并列展示; 关闭思考按未声明处理。
-func reasoningOf(body string) string {
-	if body == "" {
-		return ""
-	}
-	var payload struct {
-		ReasoningEffort string `json:"reasoning_effort"` // OpenAI Chat Completions。
-		Reasoning       *struct {
-			Effort string `json:"effort"` // OpenAI Responses。
-		} `json:"reasoning"`
-		Thinking *struct {
-			Type         string `json:"type"`          // Anthropic: enabled 或 disabled。
-			BudgetTokens int64  `json:"budget_tokens"` // Anthropic 的思考预算。
-		} `json:"thinking"`
-	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return ""
-	}
-	if payload.ReasoningEffort != "" {
-		return payload.ReasoningEffort
-	}
-	if payload.Reasoning != nil && payload.Reasoning.Effort != "" {
-		return payload.Reasoning.Effort
-	}
-	if payload.Thinking != nil && payload.Thinking.Type != "disabled" && payload.Thinking.BudgetTokens > 0 {
-		if payload.Thinking.BudgetTokens >= 1000 {
-			return strconv.FormatInt(payload.Thinking.BudgetTokens/1000, 10) + "k"
-		}
-		return strconv.FormatInt(payload.Thinking.BudgetTokens, 10)
-	}
-	return ""
 }
 
 // usageMetrics 将统一用量按模型单价转换为 Token 与费用统计; 无用量或价格时对应费用为零。

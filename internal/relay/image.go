@@ -91,7 +91,7 @@ func ForwardImage(kind string) gin.HandlerFunc {
 			return
 		}
 
-		request := newRequestState(c.Request.Context(), groupName, group.ID, model.ProtocolOpenAIImage, fmt.Sprintf("<image request body omitted: %d bytes>", len(body)), c.GetInt("api_key_id"))
+		request := newRequestState(c.Request.Context(), groupName, "", group.ID, model.ProtocolOpenAIImage, fmt.Sprintf("<image request body omitted: %d bytes>", len(body)), c.GetInt("api_key_id"))
 		ctx := request.requestCtx
 		failedItemID := 0
 		failures := 0

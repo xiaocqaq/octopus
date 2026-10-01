@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { FormGrants } from './FormGrants';
 import { FormKeys } from './FormKeys';
 import { IconButton } from '@/components/common/IconButton';
+import { useSettingStore } from '@/stores/setting';
 import {
     emptyFormState,
     fromChannel,
@@ -55,6 +56,7 @@ export function ChannelForm({ channelId, onBack }: {
 // 模板给出地址与路径 -> 拉取需要地址与凭据 -> 授权引用凭据与模型。
 function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBack?: () => void }) {
     const t = useTranslations('channel.form');
+    const locale = useSettingStore((state) => state.locale);
     const { setIsOpen } = useMorphingDialog();
     const createChannel = useCreateChannel();
     const updateChannel = useUpdateChannel();
@@ -192,7 +194,10 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                     className="flex items-center gap-4 rounded-xl border border-border px-5 py-4 hover:bg-muted/50 transition-colors"
                                 >
                                     <preset.Icon className={`size-7 shrink-0 ${preset.iconClassName ?? ''}`} />
-                                    <span className="text-base font-medium truncate">{preset.label}</span>
+                                    <span className="min-w-0 text-left">
+                                        <span className="block truncate text-lg font-semibold">{preset.label}</span>
+                                        <span className="block truncate text-xs text-muted-foreground">{preset.description[locale]}</span>
+                                    </span>
                                 </button>
                             ))}
                         </div>
