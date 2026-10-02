@@ -22,25 +22,36 @@ import (
 // 为什么用数值题而不是选择题: 选择题可以被"猜", 数值题不能; 且数值答案在自由文本里
 // 容易被可靠地提取出来。
 //
-// 但"可靠地提取"有个前提 —— 模型得照要求只给数字。这一点写进了题面, 也写进了判分:
-// 见 parseIQAnswer 里对冗长回答的处理。
+// 但"可靠地提取"有个前提 —— 得先认出上游把回答放在哪儿。三家协议放的位置各不相同
+// (见 iqReplyOf), 推理模型还会把草稿一并吐出来; 取错位置的代价不是"少判一分", 而是把 token 数
+// 当成答案摆到界面上(真实踩过, 见 parseIQAnswer 的注释)。
 
-// iqAnswerPattern 匹配回答里的整数(可带负号)。
+// iqAnswerPattern 匹配文本里的整数(可带负号)。
 var iqAnswerPattern = regexp.MustCompile(`-?\d+`)
 
-// iqTerseAnswerRunes 是"还能当成直接作答"的回答长度上限。
+// iqAnswerMarkerPattern 匹配"模型自报答案"的说法, 取最后一处: 结论总落在推理之后。
+//
+// 题面要求只给数字, 但总有不听话的模型先写一段解释再落结论。对这种回答, 认它自报的那句
+// ("答案是 21"、"最少需要 21 个"、"answer is 21")比按位置瞎猜可靠得多 —— 中间允许几个
+// 非数字字符, 让"最少需要取出 21 个"这类正常说法也能命中, 但不跨行、不超过 10 个字符,
+// 免得把两句不相干的话接在一起。
+//
+// 这里只收"宣告结论"的词, 刻意不收"合计/总共/一共/total": 那些是求和词, 推理中间到处是
+// 合计, 而它们算出来的往往是中途的错数 —— 真实踩过的 5099 就是这么冒出来的("…12 个星, 合计 5099")。
+var iqAnswerMarkerPattern = regexp.MustCompile(`(?i)(?:答案|answer|最少|至少|minimum|at least)[^\d\n]{0,10}?(-?\d+)`)
+
+// iqTerseAnswerRunes 是"整段就是一次直接作答"的长度上限。
 //
 // 题面已明确"不需要任何思考, 只要答案的数字", 因此合规回答就是一个数字; 这条上限只用来
-// 容忍少量包装("答案是 21"、"21 个"), 不是给推理留位置 —— 一段推理里会接连冒出若干与最终
-// 答案无关的数字(题面里的 7、9、8、6、4 随便一算就是一堆), 那时唯一能确定的事实是
-// "它没照要求作答", 而不是"它答了其中某个数"。
+// 容忍少量包装("答案是 21"、"21 个")。超出上限的回答不是"作答"而是"论述", 改走自报答案与
+// 末行判断 —— 确认它有没有交代结论, 而不是从字里行间随便挑一个数。
 const iqTerseAnswerRunes = 24
 
 // iqProbeMaxTokens 是智商探针的响应上限。合规回答只有几个 token, 但这个上限不是按合规回答定的:
-// 思考型模型未必听话, 仍可能在内部推理上花掉一截预算, 上限太小会让它在说出数字之前就被截断,
-// 于是这一类模型全部判错, 分数失去区分度。512 容得下这种"不听话但不算太啰嗦"的情况,
-// 又封住了单次探针的成本 —— 一次最多几百 token。
-const iqProbeMaxTokens = 512
+// 思考型模型未必听话, 仍会在内部推理上花掉一截预算。真实响应取样里约四成的回答在 512 上限处
+// 被截断(stop_reason=max_tokens), 草稿写了一半、答案还没出口, 于是它们全被记成"没答出" ——
+// 那不是笨, 是预算不够, 结论失真。2048 让这类模型有机会把话说完, 同时仍封住单次探针的成本。
+const iqProbeMaxTokens = 2048
 
 // iqProbeTimeout 是智商探针的硬上限。
 // 比 probeTimeout(45s) 宽松一截: 45 秒是为"通道假死要快速失败"定的, 而思考型模型即便被要求
@@ -78,6 +89,11 @@ type IQQuestion struct {
 // 而 (9,11) 不可行: 对手可以摆成"圆里只有苹果桃子"(7+9=16≥9, 且不给西瓜)、
 // "星里只有苹果西瓜"(7+4=11), 此时圆苹果在手却无星桃子, 圆桃子在手却无星苹果。
 // 穷举验证脚本见 .probe-test/candy.js(模型B: 选 a 圆 + b 星, 最小可行 n = 21, a=9, b=12)。
+//
+// 注意 29 这个常见错答, 不要把标准答案改成它: 29 是"一次盲抓"读法的答案 —— 题面里
+// "不同的形状靠手感可以分辨"正是为了排除这个读法(摸得出形状就能分别取圆的与五角星的)。
+// 实测确实有模型按盲抓读法答 29, 那是它没读进形状可辨这个条件, 正是本题要区分的地方;
+// 若把答案改成 29, 读得仔细的模型反而判错(脚本 .probe-test/candy29.py 是按盲抓读法算的, 得 29)。
 var iqQuestions = []IQQuestion{
 	{
 		ID: "candy-21",
@@ -103,30 +119,49 @@ func iqQuestionByID(id string) (IQQuestion, bool) {
 
 // parseIQAnswer 从模型回答里提取它作答的数字。
 //
-// 只认"直接作答": 题面已明确要求只给数字, 所以合规回答本身就是答案(至多带一点包装, 如"答案是 21")。
-// 回答一旦超出 iqTerseAnswerRunes, 就不再从里面挑数字 —— 与其猜, 不如如实记"没答出可判读的数字"。
+// 要取的是"模型表态的那个数", 不是"文本里出现过的某个数"。因此取值分三层, 一层比一层保守:
 //
-// 这里曾经是"取全篇最后一个整数", 实测被咬过一次: 模型长篇输出后落在 5099 上,
-// 界面把 5099 当成"模型的答案"摆出来。取最后一个数只是碰运气 —— 推理里会冒出多少与最终答案
-// 无关的数字, 题面自己就给足了原料(7、9、8、6、4 随便一算就是一堆)。判错的结论不变,
+//  1. 整段回答很短(≤ iqTerseAnswerRunes): 它就是一次直接作答, 取其中的整数;
+//  2. 回答很长: 认它自报的结论("答案是 21"这类), 取最后一处 —— 结论总在推理之后;
+//  3. 回答很长但分了多行, 且末行本身很短: 按"最后一行只输出数字"的惯例取末行。
+//
+// 三层都不成立就返回 ("", false), 如实记"没答出可判读的数字"。
+//
+// 这里曾经是"取全篇最后一个整数", 实测被咬过一次: 模型长篇输出后落在 5099 上, 界面把 5099
+// 当成"模型的答案"摆出来。而 5099 根本不是模型说的话, 是它算式里的一个中间结果 —— 题面自己
+// 就给足了原料(7、9、8、6、4 随便一算就是一堆数字), 按位置取数等于碰运气。判错的结论不变,
 // 但理由必须是真的: "它没照要求作答"与"它答了 5099"是两件事。
 //
-// 先剥掉 JSON 外壳再提取: 部分上游把正文包成 {"content":"..."} 之类的结构,
-// 直接对整段做整数匹配会把结构里的数字(如 usage 的 token 数)当成答案。
+// 正文的外壳由 iqReplyOf 负责剥掉: 不先认信封就直接做整数匹配, 读出来的是 usage 里的 token 数。
 func parseIQAnswer(body []byte) (string, bool) {
-	text := strings.TrimSpace(iqTextOf(body))
+	text := strings.TrimSpace(iqReplyOf(body))
 	if text == "" {
 		return "", false
 	}
 	// 按字符数而不是字节数比较: 中文一个字三个字节, 按字节算会把"答案是 21"这种合规回答误杀。
-	if utf8.RuneCountInString(text) > iqTerseAnswerRunes {
-		return "", false
+	if utf8.RuneCountInString(text) <= iqTerseAnswerRunes {
+		return iqLastNumber(text)
 	}
+	if value, ok := iqLastMarkerNumber(text); ok {
+		return value, true
+	}
+	lines := strings.Split(text, "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if len(lines) > 1 && last != "" && utf8.RuneCountInString(last) <= iqTerseAnswerRunes {
+		if value, ok := iqLastNumber(last); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// iqLastNumber 取文本里最后一个整数。顺带规范化: "-0"、"007" 这类写法统一成标准整数字面量,
+// 使比对不受前导零影响。
+func iqLastNumber(text string) (string, bool) {
 	matches := iqAnswerPattern.FindAllString(text, -1)
 	if len(matches) == 0 {
 		return "", false
 	}
-	// 规范化: "-0" 与 "007" 这类写法统一成标准整数字面量, 使比对不受前导零影响。
 	value, err := strconv.ParseInt(matches[len(matches)-1], 10, 64)
 	if err != nil {
 		return "", false
@@ -134,68 +169,154 @@ func parseIQAnswer(body []byte) (string, bool) {
 	return strconv.FormatInt(value, 10), true
 }
 
-// iqTextOf 尽力从响应正文里取出"模型说的话"。
+// iqLastMarkerNumber 取最后一处"自报答案"里的数字: 推理在前、结论在后, 所以取最后一处。
+func iqLastMarkerNumber(text string) (string, bool) {
+	matches := iqAnswerMarkerPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return "", false
+	}
+	return iqLastNumber(matches[len(matches)-1][1])
+}
+
+// iqReplyOf 取出"模型给出的可见作答", 认不出就返回空串。
 //
-// 先尝试按 JSON 解析并挑出常见的内容字段(OpenAI 的 choices[].message.content,
-// Anthropic 风格的 content[].text, 以及若干窄接口的 content/text 字段);
-// 任一步失败就退回原始正文 —— 透传路径下正文未必是 JSON, 退回原文总比丢掉回答好。
-func iqTextOf(body []byte) string {
-	// Content 在两种常见形状里类型不同, 所以不能共用一个字段名直接映射:
-	// OpenAI 风格是 choices[].message.content 这类嵌套字符串, Anthropic 风格是顶层
-	// content 为 [{type:"text",text:"..."}] 这样的块数组。同名同标签写在同一个结构体里时,
-	// 编码器只认最外层那一个, 另一形状的分支永远不会被走到 —— 于是这里拆成两次解析。
-	var openAIShape struct {
+// 三种信封在真实上游里都出现过, 回答放的位置各不相同:
+//   - OpenAI chat completions: choices[].message.content(有的上游给字符串, 有的给 parts 数组)
+//     以及 choices[].text;
+//   - OpenAI Responses API:   output[] 里 type != "reasoning" 的项, 取其 content[].text;
+//   - Anthropic messages:     content[] 块数组里非 thinking 的 text 块;
+//   - 若干窄接口把正文直接放在顶层 content / text。
+//
+// 两条铁律:
+//   - 推理不是作答。reasoning_content、output[].summary、thinking 块都是草稿, 一律不取 ——
+//     草稿里全是中间数, 取它等于把"想到哪儿了"当成"答了什么"(实测: 推理里从不出现宣告结论的话)。
+//   - 是 JSON 就绝不退回原文。旧实现在解析未命中时 return string(body), 整段响应(含 usage)
+//     于是进入整数匹配, 读出 token 数当答案 —— 界面上的"答了 5099"就是这么来的。
+//     只有压根不是 JSON 的透传正文才按原文处理。
+func iqReplyOf(body []byte) string {
+	if !json.Valid(body) {
+		// 透传路径下正文未必是 JSON, 退回原文总比丢掉回答好。
+		return string(body)
+	}
+	// 合法 JSON 的字符串本身就是正文, 例如 `"21"`。
+	var bare string
+	if err := json.Unmarshal(body, &bare); err == nil {
+		return bare
+	}
+	var chat struct {
 		Content *string `json:"content"`
 		Text    *string `json:"text"`
 		Choices []struct {
 			Message struct {
-				Content   *string `json:"content"`
-				Reasoning *string `json:"reasoning_content"`
+				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 			Text *string `json:"text"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(body, &openAIShape); err == nil {
-		if len(openAIShape.Choices) > 0 {
-			choice := openAIShape.Choices[0]
-			// 正文优先, 正文为空时退回推理字段: 有些推理模型把全部输出放进 reasoning_content,
-			// 而它里面同样会落到末尾那个数字上。
-			if choice.Message.Content != nil && strings.TrimSpace(*choice.Message.Content) != "" {
-				return *choice.Message.Content
+	if err := json.Unmarshal(body, &chat); err == nil {
+		for _, choice := range chat.Choices {
+			if text := iqContentOf(choice.Message.Content); text != "" {
+				return text
 			}
 			if choice.Text != nil && strings.TrimSpace(*choice.Text) != "" {
 				return *choice.Text
 			}
-			if choice.Message.Reasoning != nil {
-				return *choice.Message.Reasoning
-			}
 		}
-		if openAIShape.Content != nil {
-			return *openAIShape.Content
+		if chat.Content != nil && strings.TrimSpace(*chat.Content) != "" {
+			return *chat.Content
 		}
-		if openAIShape.Text != nil {
-			return *openAIShape.Text
+		if chat.Text != nil && strings.TrimSpace(*chat.Text) != "" {
+			return *chat.Text
 		}
 	}
-	// Anthropic 风格: content 是块数组, 拼接其中的 text 块。
-	var anthropicShape struct {
-		Content []struct {
-			Text *string `json:"text"`
-		} `json:"content"`
+	// Anthropic 风格: content 是块数组, 拼接其中非 thinking 的 text 块。
+	var anthropic struct {
+		Content json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(body, &anthropicShape); err == nil {
+	if err := json.Unmarshal(body, &anthropic); err == nil {
+		if text := iqBlockTextOf(anthropic.Content); text != "" {
+			return text
+		}
+	}
+	// OpenAI Responses API: output[] 里的 reasoning 项整项跳过(它的 summary 是推理摘要)。
+	var responses struct {
+		Output []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Text *string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(body, &responses); err == nil {
 		var builder strings.Builder
-		for _, block := range anthropicShape.Content {
-			if block.Text != nil {
-				builder.WriteString(*block.Text)
+		for _, item := range responses.Output {
+			if item.Type == "reasoning" {
+				continue
+			}
+			for _, part := range item.Content {
+				if part.Text != nil {
+					builder.WriteString(*part.Text)
+				}
 			}
 		}
 		if builder.Len() > 0 {
 			return builder.String()
 		}
 	}
-	// 透传路径下正文未必是 JSON, 退回原文总比丢掉回答好。
-	return string(body)
+	// 是 JSON 但认不出正文: 返回空串, 绝不把整段响应(usage 等)当成模型说的话。
+	return ""
+}
+
+// iqContentOf 处理 message.content 的两种类型: 字符串, 或 parts 数组(其中的推理 part 跳过)。
+func iqContentOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []struct {
+		Type string  `json:"type"`
+		Text *string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, part := range parts {
+		if part.Type == "thinking" || part.Type == "reasoning" {
+			continue
+		}
+		if part.Text != nil {
+			builder.WriteString(*part.Text)
+		}
+	}
+	return builder.String()
+}
+
+// iqBlockTextOf 拼接 Anthropic 风格块数组里的 text 块, 跳过 thinking / redacted_thinking。
+func iqBlockTextOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var blocks []struct {
+		Type string  `json:"type"`
+		Text *string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, block := range blocks {
+		if block.Type == "thinking" || block.Type == "redacted_thinking" {
+			continue
+		}
+		if block.Text != nil {
+			builder.WriteString(*block.Text)
+		}
+	}
+	return builder.String()
 }
 
 // gradeIQAnswer 判定一次回答是否正确。
