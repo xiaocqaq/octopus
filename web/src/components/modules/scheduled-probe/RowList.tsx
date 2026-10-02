@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DragDropContext, Draggable, Droppable, type DraggableProvided, type DropResult } from '@hello-pangea/dnd';
-import { GripVertical, HeartCrack, HeartPulse, X, Zap } from 'lucide-react';
+import { Brain, BrainCircuit, GripVertical, HeartCrack, HeartPulse, X, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
@@ -12,7 +12,7 @@ import {
 import { IconButton } from '@/components/common/IconButton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { describeProbedAt } from './format';
+import { describeIQ, describeProbedAt } from './format';
 
 // 本文件负责卡片里的行列表：一行 = 一条凭据，可单独测、可单独删、可拖着排顺序。
 //
@@ -207,6 +207,33 @@ function Row({ probeId, row, now, dnd }: { probeId: number; row: ScheduledProbeR
                     <span className="tabular-nums">{row.latency_ms}ms</span>
                     <span className="text-muted-foreground/60">{describeProbedAt(row.probed_at, now, t)}</span>
                 </span>
+            )}
+
+            {/* 智商结论只在划过题的那一拍或手动点过糖果测试之后才有, 因此它按需出现, 不占独立一列:
+                大多数行还没有结论, 留出位置会让整张卡片看起来缺了一格。
+                按 iq_asked 而不是 iq_answer 判断"有没有测过": "问了但答不出数字"的答案也是空串,
+                按答案判空会把这一种状态整个吞掉 —— 模型胡言乱语反而在界面上不留痕迹。
+                正文只给「正常/降智」两档, 不显示它到底答了哪个数: 用户要的是能一眼扫过的结论,
+                具体答了什么放进悬停提示, 想核对时再看。 */}
+            {row.iq_asked && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <span
+                            className={cn(
+                                'flex shrink-0 items-center gap-0.5 text-[11px]',
+                                row.iq_correct
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : 'text-amber-600 dark:text-amber-400',
+                            )}
+                        >
+                            {row.iq_correct ? <Brain className="size-3.5" /> : <BrainCircuit className="size-3.5" />}
+                            {row.iq_correct ? t('iqNormal') : t('iqDumb')}
+                        </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" sideOffset={10}>
+                        {describeIQ(row, t)}
+                    </TooltipContent>
+                </Tooltip>
             )}
 
             {/* 行尾的闪电只测这一条凭据: 点击它的意图是"我想看清这条钥匙通不通"，

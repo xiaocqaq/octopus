@@ -15,6 +15,7 @@
     "intervalValue": "every {minutes} min",
     "probeNow": "Probe now",
     "probeThis": "Probe this one",
+    "iqNow": "Candy test: ask every credential the IQ question",
     "probing": "Probing…",
     "noCredential": "No available credential",
     "notProbed": "No result yet",
@@ -24,6 +25,11 @@
     "hoursShort": "{count} h",
     "probeOk": "Passed · {ms}ms",
     "probeFailed": "Failed",
+    "iqNormal": "Normal",
+    "iqDumb": "Degraded",
+    "iqNormalHint": "Candy question answered correctly: {answer}",
+    "iqDumbHint": "Candy question answered incorrectly: {answer}",
+    "iqDumbNoAnswerHint": "Candy question got no readable number",
     "noTarget": "No targets configured",
     "removeCredential": "Stop monitoring this credential",
     "dragToSort": "Drag to change probe order",
@@ -76,6 +82,8 @@
         "probeDone": "Probe finished",
         "probeFailed": "Probe did not pass: {message}",
         "probePartialFailed": "{count} more did not pass",
+        "iqDone": "Candy test finished: {normal} normal, {dumb} degraded",
+        "iqPartialFailed": "{count} more failed to respond, so no IQ verdict",
         "credentialRemoved": "Credential removed from this task"
     }
 }

@@ -18,6 +18,14 @@ export type ScheduledProbeRow = {
     latency_ms: number;
     message: string;
     probed_at: number;
+    // iq_asked 标记这一行有没有被问过智商题。它必须与 iq_answer 分开看：
+    // 「没问过」和「问了但答不出数字」的 iq_answer 都是空串，只看答案会把后一种吞成前一种。
+    iq_asked: boolean;
+    // iq_answer 是最近一次智商探针里模型给出的答案（后端已提取为末尾整数）；
+    // iq_correct 标记它是否与标准答案一致。二者只在 iq_asked 为真时有意义。
+    // 结论只在划到出题的那一拍或手动点糖果测试时刷新，因此它可能比 probed_at 显示的时间旧——这是正常的。
+    iq_answer: string;
+    iq_correct: boolean;
 };
 
 // ScheduledProbeTarget 是一个被监控目标：某个渠道下的某个模型。
@@ -138,6 +146,22 @@ export function useProbeScheduledNow() {
     return useMutation({
         mutationFn: (id: number) =>
             apiRequest<ScheduledProbeRow[]>(`/api/v1/scheduled-probe/probe/${id}`, { method: 'POST', body: {} }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// useProbeScheduledIQNow 手动把一条任务的每条凭据都问一遍智商题（卡片上的糖果按钮）。
+//
+// 与 useProbeScheduledNow 分成两个 mutation 而不是一个带开关的：两者返回的行形状相同，
+// 但点按钮的意图不同（一个问「通不通」，一个问「笨不笨」），按钮自己的 pending 状态也要各自独立——
+// 共用一个 isPending 会让糖果测试转圈时闪电按钮也跟着变灰。
+// body 同样必须传空对象，理由见上。
+export function useProbeScheduledIQNow() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (id: number) =>
+            apiRequest<ScheduledProbeRow[]>(`/api/v1/scheduled-probe/iq/${id}`, { method: 'POST', body: {} }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }

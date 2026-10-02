@@ -8,6 +8,7 @@ import {
     WeekdaySaturday,
     WeekdaySunday,
     type ScheduledProbe,
+    type ScheduledProbeRow,
 } from '@/api/scheduled-probe';
 
 // WEEKDAY_BITS 按界面顺序（周一在前）列出星期掩码位，与后端 model.Weekday* 的排位一致。
@@ -69,4 +70,20 @@ export function describeProbedAt(probedAt: number, now: number, t: (key: string,
     if (seconds < 60) return t('justNow');
     if (seconds < 3600) return t('probedAgo', { time: t('minutesShort', { count: Math.floor(seconds / 60) }) });
     return t('probedAgo', { time: t('hoursShort', { count: Math.floor(seconds / 3600) }) });
+}
+
+// describeIQ 把糖果题的结论说成一句话，供悬停提示使用。
+//
+// 行里只给「正常/降智」两档：结论是要一眼扫过去的，把答案数字摆在正文里反而让整行参差不齐。
+// 但人看到"降智"之后总会想问"它到底答了几"，所以答案补在提示里 —— 除了这一处，别的地方都看不到它。
+//
+// "没答出数字"单列一句：它与"答错"在结论上同属降智，原因却不同（一个是算错，一个是连数都没给），
+// 并成同一句话会让人以为模型至少交出了一个数，而实际拿到的是满篇废话。
+export function describeIQ(
+    row: Pick<ScheduledProbeRow, 'iq_correct' | 'iq_answer'>,
+    t: (key: string, values?: Record<string, string | number>) => string,
+) {
+    if (row.iq_correct) return t('iqNormalHint', { answer: row.iq_answer });
+    if (row.iq_answer === '') return t('iqDumbNoAnswerHint');
+    return t('iqDumbHint', { answer: row.iq_answer });
 }

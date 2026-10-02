@@ -15,6 +15,7 @@
     "intervalValue": "每 {minutes} 分鐘",
     "probeNow": "立刻測一次",
     "probeThis": "測這條",
+    "iqNow": "糖果測試：逐條問一遍智商題",
     "probing": "測活中…",
     "noCredential": "暫無可用憑證",
     "notProbed": "尚未測出結果",
@@ -24,6 +25,11 @@
     "hoursShort": "{count} 小時",
     "probeOk": "通過 · {ms}ms",
     "probeFailed": "失敗",
+    "iqNormal": "正常",
+    "iqDumb": "降智",
+    "iqNormalHint": "糖果題答對：{answer}",
+    "iqDumbHint": "糖果題答錯：答了 {answer}",
+    "iqDumbNoAnswerHint": "糖果題沒答出可判讀的數字",
     "noTarget": "暫無監控目標",
     "removeCredential": "不再監控這條憑據",
     "dragToSort": "拖動可調整測活順序",
@@ -76,6 +82,8 @@
         "probeDone": "測活完成",
         "probeFailed": "測活未通過：{message}",
         "probePartialFailed": "另有 {count} 條未通過",
+        "iqDone": "糖果測試完成：{normal} 條正常，{dumb} 條降智",
+        "iqPartialFailed": "另有 {count} 條請求失敗，未能測出智商",
         "credentialRemoved": "已從目前任務刪除這條憑據"
     }
 }

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Check, Pencil, Trash2, X, Zap } from 'lucide-react';
+import { Candy, Check, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
     useDeleteScheduledProbe,
+    useProbeScheduledIQNow,
     useProbeScheduledNow,
     useUpdateScheduledProbe,
     type ScheduledProbe,
@@ -52,6 +53,7 @@ export function Item({ probe, now }: { probe: ScheduledProbe; now: number }) {
     const updateProbe = useUpdateScheduledProbe();
     const deleteProbe = useDeleteScheduledProbe();
     const probeNow = useProbeScheduledNow();
+    const probeIQ = useProbeScheduledIQNow();
     const [confirmDelete, setConfirmDelete] = useState(false);
 
     const window = describeWindow(probe, t);
@@ -97,6 +99,37 @@ export function Item({ probe, now }: { probe: ScheduledProbe; now: number }) {
         });
     };
 
+    // handleProbeIQ 跑一次糖果测试：把这条任务的每条凭据都问一遍智商题。
+    //
+    // 汇报口径是"正常 / 降智"两档, 而不是把答案数字抛出来: 结论是要一眼扫过去的,
+    // 具体答了几留在行里的悬停提示, 谁想知道再去看。
+    // 三类要分开数: 请求失败的既不是正常也不是降智(它根本没答上话), 混进任何一档都是假结论。
+    // 全绿时用 success、出现降智时用 warning 而不是 error: 降智是"模型变笨了"这个观察结果,
+    // 不是一次失败的操作 —— 用报错色会让人以为测试本身没跑成。
+    const handleProbeIQ = () => {
+        probeIQ.mutate(probe.id, {
+            onSuccess: (rows) => {
+                // 按 iq_asked 而不是 ok 分档: 后端目前"成功即问过", 但这是两处实现之间的耦合,
+                // 界面读自己拿到的那三个字段就够了 —— 判据越少, 以后改后端时越不容易在这里悄悄错档。
+                const normal = rows.filter((row) => row.iq_asked && row.iq_correct).length;
+                const dumb = rows.filter((row) => row.iq_asked && !row.iq_correct).length;
+                const failed = rows.length - normal - dumb;
+                const summary = t('toast.iqDone', { normal, dumb });
+                const description = failed > 0 ? t('toast.iqPartialFailed', { count: failed }) : undefined;
+                if (dumb === 0 && failed === 0) {
+                    toast.success(summary);
+                    return;
+                }
+                if (dumb > 0) {
+                    toast.warning(summary, { description });
+                    return;
+                }
+                toast.error(summary, { description });
+            },
+            onError: (error) => toast.error(error.message),
+        });
+    };
+
     return (
         <article className="flex h-full flex-col gap-1.5 rounded-2xl border border-border bg-card p-2.5 text-card-foreground">
             <div className="flex items-center gap-1.5">
@@ -121,6 +154,19 @@ export function Item({ probe, now }: { probe: ScheduledProbe; now: number }) {
                         className="size-7"
                     >
                         <Zap className={cn('size-3.5', probeNow.isPending && 'animate-pulse')} />
+                    </IconButton>
+
+                    {/* 糖果按钮紧挨着闪电：两个都是"手动打一发"，区别只在问什么。
+                        放一起才看得出这是一对, 否则一颗糖孤零零挂在一排工具图标里, 看不出它和测活有关。
+                        用糖果而不是大脑图标: 大脑已经用在行里的结论上了, 同一个图标既表示"结论"又表示"去测"会让人读错。 */}
+                    <IconButton
+                        onClick={handleProbeIQ}
+                        disabled={probeIQ.isPending || probe.rows.length === 0}
+                        tip={t('iqNow')}
+                        aria-label={t('iqNow')}
+                        className="size-7"
+                    >
+                        <Candy className={cn('size-3.5', probeIQ.isPending && 'animate-pulse')} />
                     </IconButton>
 
                     {/* 编辑弹窗自带 provider，trigger 由 IconButton asChild 承载 motion.div 形变。 */}
