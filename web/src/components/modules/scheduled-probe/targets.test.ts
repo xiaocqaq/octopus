@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChannelGrantCandidate } from '@/api/channel';
-import { buildTargetOptions, targetFromKey, targetKey, targetValueForKey, targetsOf } from './targets';
+import { buildTargetOptions, targetFromKey, targetKey, targetValuesFor, targetsOf } from './targets';
 
 const SEP = '\u0000';
 
@@ -70,25 +70,50 @@ test('targetsOf 候选缺失时保持空排除项', () => {
     ]);
 });
 
-// 回填要挑该目标下真实存在、且没有被排除的那条凭据。
-test('targetValueForKey 优先挑未被排除的凭据', () => {
+// 回填要列出该目标在测的**每一把**钥匙：只回填一条的话，提交时其余凭据会被算成
+// "用户没勾"而写进 excluded_keys，于是原样打开、原样保存也会把监控范围改小。
+test('targetValuesFor 回填该目标所有未被排除的凭据', () => {
     const candidates: ChannelGrantCandidate[] = [
         { id: 1, channel_id: 66, channel_name: '仙人', model_name: 'gpt-6-astra', key_name: '0001', protocols: 1, available: true },
         { id: 2, channel_id: 66, channel_name: '仙人', model_name: 'gpt-6-astra', key_name: '0069', protocols: 1, available: true },
+        { id: 3, channel_id: 66, channel_name: '仙人', model_name: 'gpt-6-astra', key_name: '0089', protocols: 1, available: true },
+        // 同名凭据只回填一次（后端按名字定位凭据，重复勾只会让人以为漏了一条）。
+        { id: 4, channel_id: 66, channel_name: '仙人', model_name: 'gpt-6-astra', key_name: '0089', protocols: 1, available: true },
     ];
-    assert.equal(
-        targetValueForKey({ channel_id: 66, model_name: 'gpt-6-astra', excluded_keys: ['0001'] }, candidates),
-        targetKey(66, '0069', 'gpt-6-astra'),
+    assert.deepEqual(
+        targetValuesFor({ channel_id: 66, model_name: 'gpt-6-astra', excluded_keys: ['0069'] }, candidates),
+        [targetKey(66, '0001', 'gpt-6-astra'), targetKey(66, '0089', 'gpt-6-astra')],
     );
 });
 
-// 候选还没到（首次渲染）或该目标下一条凭据都不剩时，回填"整条目标"的空凭据值，
+// 回填与提交必须互逆：回填勾上的正好是原本没被排除的那些，提交回去的排除项应与最初一致。
+test('targetValuesFor 与 targetsOf 在同一目标上往返恒等', () => {
+    const candidates: ChannelGrantCandidate[] = [
+        { id: 1, channel_id: 8, channel_name: '林夕', model_name: 'claude-opus-5', key_name: 'default', protocols: 1, available: true },
+        { id: 2, channel_id: 8, channel_name: '林夕', model_name: 'claude-opus-5', key_name: 'free', protocols: 1, available: true },
+        { id: 3, channel_id: 8, channel_name: '林夕', model_name: 'claude-opus-5', key_name: 'free2', protocols: 1, available: true },
+    ];
+    const target = { channel_id: 8, model_name: 'claude-opus-5', excluded_keys: ['free'] };
+    assert.deepEqual(targetsOf(targetValuesFor(target, candidates), candidates), [target]);
+});
+
+// 候选还没到（首次渲染）或该 (渠道, 模型) 在候选里查不到时，回填"整条目标"的空凭据值，
 // 至少让用户看见目标还在，而不是整条消失。
-test('targetValueForKey 在候选缺失时回填空凭据值', () => {
-    assert.equal(
-        targetValueForKey({ channel_id: 7, model_name: 'deepseek-chat' }, []),
+test('targetValuesFor 在候选缺失时回填空凭据值', () => {
+    assert.deepEqual(targetValuesFor({ channel_id: 7, model_name: 'deepseek-chat' }, []), [
         targetKey(7, '', 'deepseek-chat'),
-    );
+    ]);
+});
+
+// 该目标下的凭据被全部排除时只回填第一条：全都勾上等于把用户明确排除掉的凭据又打开了。
+test('targetValuesFor 全被排除时只回填第一条', () => {
+    const candidates: ChannelGrantCandidate[] = [
+        { id: 1, channel_id: 9, channel_name: '甲', model_name: 'm', key_name: 'a', protocols: 1, available: true },
+        { id: 2, channel_id: 9, channel_name: '甲', model_name: 'm', key_name: 'b', protocols: 1, available: true },
+    ];
+    assert.deepEqual(targetValuesFor({ channel_id: 9, model_name: 'm', excluded_keys: ['a', 'b'] }, candidates), [
+        targetKey(9, 'a', 'm'),
+    ]);
 });
 
 // 同名凭据只出一条选项：后端按名字定位凭据，渲染两遍只会让人以为漏勾了其中一条。

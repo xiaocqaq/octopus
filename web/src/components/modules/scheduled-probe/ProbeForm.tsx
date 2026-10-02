@@ -17,7 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { formatHour } from './format';
 import { WeekdayPicker } from './WeekdayPicker';
 import { SearchMultiSelect, type SearchOption } from './SearchMultiSelect';
-import { buildTargetOptions, targetValueForKey, targetsOf } from './targets';
+import { buildTargetOptions, targetValuesFor, targetsOf } from './targets';
 
 // ProbeFormValues 是这张表单的产出，与后端的提交体同形状（主键除外）。
 export type ProbeFormValues = {
@@ -62,21 +62,28 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
         [options],
     );
 
-    // 初始回填（编辑）：目标上只记了 (渠道, 模型)，凭据那段要靠候选去补一条真实存在的 ——
-    // 否则编辑框里会出现一个空凭据名，用户以为监控丢了凭据，一保存就把范围改小。
+    // 初始回填（编辑）：目标上只记了 (渠道, 模型)，凭据那段要靠候选补回真实存在的钥匙 ——
+    // 而且要把该目标在测的**每一把**都补上（见 targetValuesFor）：只补一条的话，提交时
+    // 其余凭据会被算成"用户没勾"而写进 excluded_keys，等于编辑一次就把监控范围改小了。
     //
-    // 候选是异步到的：首次渲染时可能还是空的，只回填出"空凭据"的选项。
-    // 故这里跟着候选一起算，并在候选到达后把空凭据的选中项替换成真实的凭据名。
+    // 候选是异步到的：首次渲染时可能还是空的，只回填出"整条目标"的空凭据值（见 targetValueOf）。
+    // 因此选中项在用户动手之前一直跟着候选推导（picked 为 null 就用 initialValues）：
+    // 若在这里把它固化进 useState，候选到了也换不成真实凭据，而那个空凭据值提交时会被
+    // 折算成"一把钥匙都没勾"、于是所有凭据都进 excluded_keys —— 整条目标会被清空，
+    // 比少勾一条严重得多。
     const initialValues = useMemo(() => {
         const values: string[] = [];
         for (const target of initial?.targets ?? []) {
-            const value = targetValueForKey(target, candidates ?? []);
-            if (value && !values.includes(value)) values.push(value);
+            for (const value of targetValuesFor(target, candidates ?? [])) {
+                if (value && !values.includes(value)) values.push(value);
+            }
         }
         return values;
     }, [initial, candidates]);
 
-    const [selected, setSelected] = useState<string[]>(initialValues);
+    // picked 为 null 表示用户还没动过多选，此时选中项由候选推导。
+    const [picked, setPicked] = useState<string[] | null>(null);
+    const selected = picked ?? initialValues;
     const [name, setName] = useState(initial?.name ?? '');
     const [interval, setIntervalValue] = useState(String(initial?.interval_minutes ?? SCHEDULED_PROBE_DEFAULT_INTERVAL));
     // 新建默认开着糖果测试: 糖果题的响应本身就回答了"通不通、多快", 它同时是这条链路信息量最大的探针;
@@ -134,7 +141,7 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                             id="scheduled-probe-targets"
                             options={targetOptions}
                             selected={selected}
-                            onChange={setSelected}
+                            onChange={setPicked}
                             placeholder={t('form.targetPlaceholder')}
                             searchPlaceholder={t('form.searchTarget')}
                             emptyText={t('form.targetEmpty')}

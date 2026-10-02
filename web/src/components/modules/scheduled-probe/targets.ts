@@ -86,22 +86,29 @@ export function buildTargetOptions(candidates: ChannelGrantCandidate[]): {
     return options;
 }
 
-// targetValueForKey 在候选里给一个目标挑一条真实存在的凭据，用于回填。
+// targetValuesFor 列出一个目标"实际在测的每一把钥匙"，用于编辑框回填多选。
 //
-// 优先挑该目标下第一条未被 excluded_keys 排除的凭据：编辑框默认展示的应该是
-// "这条目标实际在测的那把钥匙"，而不是恰好排在最前、却早已被排除掉的那条。
-// 全都排除光了就退回第一条，让用户至少看得到目标还在、只是没有任何凭据在测。
-export function targetValueForKey(
+// 回填只给一条是不行的: 提交时没勾到的凭据会进 excluded_keys(见 targetsOf), 于是原样打开、
+// 原样保存也会把多凭据的目标收窄成一条 —— 用户只想改个间隔, 监控范围却被改小了。
+// 因此这里必须把"未被排除的凭据"全部回填, 让这次往返是恒等的。
+//
+// 两种退回情形都保持"只给一条", 因为多选值直接决定提交体:
+// 候选还没到(首次渲染)或该 (渠道, 模型) 在候选里查不到时, 回填整条目标的空凭据值;
+// 该目标下的凭据被全部排除时, 只回填第一条 —— 全填上等于把用户明确排除掉的凭据又打开。
+export function targetValuesFor(
     target: ScheduledProbeTarget,
     candidates: ChannelGrantCandidate[],
-): string | null {
-    const keys = candidates
-        .filter((candidate) => candidate.channel_id === target.channel_id && candidate.model_name === target.model_name)
-        .map((candidate) => candidate.key_name);
-    if (keys.length === 0) return targetValueOf(target);
+): string[] {
+    const keys: string[] = [];
+    for (const candidate of candidates) {
+        if (candidate.channel_id !== target.channel_id || candidate.model_name !== target.model_name) continue;
+        if (!keys.includes(candidate.key_name)) keys.push(candidate.key_name);
+    }
+    if (keys.length === 0) return [targetValueOf(target)];
     const excluded = target.excluded_keys ?? [];
-    const first = keys.find((keyName) => !excluded.includes(keyName)) ?? keys[0];
-    return targetKey(target.channel_id, first, target.model_name);
+    const kept = keys.filter((keyName) => !excluded.includes(keyName));
+    if (kept.length === 0) return [targetKey(target.channel_id, keys[0], target.model_name)];
+    return kept.map((keyName) => targetKey(target.channel_id, keyName, target.model_name));
 }
 
 // targetsOf 把界面上的多选值折算成后端提交体。
