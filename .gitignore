@@ -6,3 +6,4 @@ static/out/*
 # IDE 与代码索引产物, 不属于源码
 .idea/
 .codegraph/
+/.probe-test/
