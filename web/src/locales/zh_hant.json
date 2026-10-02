@@ -322,7 +322,10 @@
             "monitorMerged": "「{name}」已併入 {count} 個新目標",
             "monitorNarrowed": "已按分組收窄「{name}」的監控範圍，{count} 個目標不再多測憑據",
             "monitorExists": "「{name}」已在模型監控中，沒有新目標可加",
-            "monitorFailed": "開啟模型監控失敗"
+            "monitorFailed": "開啟模型監控失敗",
+            "probeIQDone": "{normal} 個正常，{dumb} 個降智",
+            "probeIQPartialFailed": "另有 {count} 條請求失敗，未能測出智商",
+            "probeIQFailed": "糖果測試請求失敗"
         },
         "create": {
             "submit": "建立",
@@ -348,7 +351,17 @@
             "probeValidFor": "結論 {minutes} 分鐘內有效，逾期後需重新測活",
             "monitorHint": "開啟模型監控：把本組模型加到「模型監控」，用預設設定定時測活",
             "monitor": "開啟模型監控",
-            "monitorOnHint": "本組已在模型監控中，點擊可補齊新增的模型"
+            "monitorOnHint": "本組已在模型監控中，點擊可補齊新增的模型",
+            "probeIQ": "糖果測試（問一道智商題，看這個模型此刻笨不笨）",
+            "probingIQ": "測試中...",
+            "probeIQAll": "一鍵糖果測試",
+            "probingIQAll": "測試中",
+            "probeIQAllHint": "依次給本組每個成員出一道智商題；答錯只標顏色，不參與選路",
+            "probeNotYet": "尚未測過",
+            "iqNotYet": "尚未測過智商",
+            "iqNormalHint": "糖果題答對：{answer}",
+            "iqDumbHint": "糖果題答錯：答了 {answer}",
+            "iqDumbNoAnswerHint": "糖果題沒答出可判讀的數字"
         },
         "detail": {
             "actions": {

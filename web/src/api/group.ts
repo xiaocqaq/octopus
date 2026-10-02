@@ -117,6 +117,18 @@ export interface GroupProbeResult {
     // expires_at 是结论失效的时刻（Unix 毫秒）：定时测活按所属任务的轮转周期给出，
     // 指令触发的手动测活为 0，由 PROBE_RESULT_TTL_MS 兜底（见 probeDeadline）。
     expires_at: number;
+    // iq 是这次探测顺带问的智商题结论，没问或问不出可判分的答案时为 undefined。
+    // 与 ok 并列而不是取代它：ok 回答"通道通不通"，iq 回答"模型答得对不对"，
+    // 答错不会被记成 ok=false —— 把"模型笨"当"通道坏"会让选路白白降档。
+    iq?: GroupIQResult;
+}
+
+// GroupIQResult 是一次智商探针的判分结论（对应后端 relay.IQResult）。
+// 只记题号、模型给出的答案与对错，不记回答全文：回答可能很长，而界面上要看的只是"答了什么、对不对"。
+export interface GroupIQResult {
+    question_id: string;
+    answer: string; // 从回答里提取出的末尾整数；答不出可判分的答案时为空。
+    correct: boolean;
 }
 
 // Group 是客户端模型名称对应的渠道分组。
@@ -302,6 +314,32 @@ export function useProbeGroup() {
             apiRequest<GroupProbeResult[]>(`/api/v1/group/probe/${groupId}`, {
                 method: 'POST',
                 body: { item_ids: itemIds ?? [], streaming: streaming ?? false },
+            }),
+    });
+}
+
+// useProbeGroupItemIQ 对单个成员出一道智商题（糖果测试）。
+//
+// 与 useProbeGroupItem 分成两个 mutation 而不是一个带开关的：两者返回同一种结论，
+// 但点按钮的意图不同（一个问「通不通」，一个问「笨不笨」），pending 状态也必须各自独立 ——
+// 共用一个 isPending 会让糖果转圈时心跳按钮也跟着变灰。
+export function useProbeGroupItemIQ() {
+    return useMutation({
+        mutationFn: ({ groupId, itemId }: { groupId: number; itemId: number }) =>
+            apiRequest<GroupProbeResult>(`/api/v1/group/iq/${groupId}/${itemId}`, {
+                method: 'POST',
+                body: {},
+            }),
+    });
+}
+
+// useProbeGroupIQ 一键糖果测试：不传 itemIds 时问分组内全部成员。
+export function useProbeGroupIQ() {
+    return useMutation({
+        mutationFn: ({ groupId, itemIds }: { groupId: number; itemIds?: number[] }) =>
+            apiRequest<GroupProbeResult[]>(`/api/v1/group/iq/${groupId}`, {
+                method: 'POST',
+                body: { item_ids: itemIds ?? [] },
             }),
     });
 }

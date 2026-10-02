@@ -15,6 +15,7 @@
     "intervalValue": "every {minutes} min",
     "probeNow": "Probe now",
     "probeThis": "Probe this one",
+    "iqThis": "Candy test: ask this credential one IQ question to see if it is degraded right now",
     "iqNow": "Candy test: ask every credential the IQ question",
     "probing": "Probing…",
     "noCredential": "No available credential",
@@ -24,7 +25,8 @@
     "minutesShort": "{count} min",
     "hoursShort": "{count} h",
     "probeOk": "Passed · {ms}ms",
-    "probeFailed": "Failed",
+    "probeFailed": "Failed: {message}",
+    "probeUnknownError": "unknown error",
     "iqNormal": "Normal",
     "iqDumb": "Degraded",
     "iqNormalHint": "Candy question answered correctly: {answer}",
@@ -84,6 +86,7 @@
         "probePartialFailed": "{count} more did not pass",
         "iqDone": "Candy test finished: {normal} normal, {dumb} degraded",
         "iqPartialFailed": "{count} more failed to respond, so no IQ verdict",
+        "iqFailed": "Candy test got no answer: {message}",
         "credentialRemoved": "Credential removed from this task"
     }
 }

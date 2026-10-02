@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { HeartPulse, Layers, GripVertical, LoaderCircle, X, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
+import { Candy, HeartPulse, Layers, GripVertical, X, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -12,9 +12,10 @@ import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { IconButton } from '@/components/common/IconButton';
+import { ResultIconButton, describeIQ, describeProbe } from '@/components/common/ProbeButtons';
 import { useTranslations } from 'use-intl';
 import type { Group } from '@/api/group';
-import { MemberStatus } from './MemberStatus';
+import { MemberStatus, freshProbe } from './MemberStatus';
 
 export interface SelectedMember {
     id: string;
@@ -52,6 +53,8 @@ function MemberItem({
     onActivate,
     onProbe,
     probing,
+    onProbeIQ,
+    probingIQ,
     isActive,
     group,
     now,
@@ -68,6 +71,8 @@ function MemberItem({
     onActivate?: (itemId: number) => void;
     onProbe?: (itemId: number) => void;
     probing?: boolean; // probing 表示该成员正在测活中, 按钮转为加载态并禁用重复提交。
+    onProbeIQ?: (itemId: number) => void; // onProbeIQ 问该成员一道智商题(糖果测试)。
+    probingIQ?: boolean; // probingIQ 表示该成员的糖果测试正在跑, 只让糖果按钮转圈, 不牵连心跳按钮。
     isActive?: boolean;
     group?: Group; // group 提供成员当前的冷却和亲和时间。
     now: number; // now 是成员列表共享的当前 Unix 毫秒时间。
@@ -77,6 +82,11 @@ function MemberItem({
     dnd: MemberItemDnd;
 }) {
     const t = useTranslations('group');
+    // 结论与徽标同源: 后端把测活和糖果测试都落在同一个成员槽位上, 所以两颗灯读同一个 probe,
+    // 区别只在要不要看它的 .iq。
+    const tCard = useTranslations('group.card');
+    const probe = group ? freshProbe(group, member.item_id, now) : undefined;
+    const iq = probe?.iq;
     const { Icon, className: iconClassName } = getModelIcon(member.name);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const isDisabled = member.enabled === false;
@@ -150,32 +160,43 @@ function MemberItem({
                     </span>
                 </div>
 
-                {group && <MemberStatus group={group} itemId={member.item_id} now={now} active={isActive} activeClassName="p-1" />}
+                {/* showProbe={false}: 这一行右侧自己带着会变色的心跳按钮, 结论已经在颜色里了。
+                    再挂一枚体检徽标就是同一行两颗心说同一件事, 还多占一份宽度。 */}
+                {group && <MemberStatus group={group} itemId={member.item_id} now={now} active={isActive} activeClassName="p-1" showProbe={false} />}
 
-                {/* 测活按钮只在成员已落库(item_id 存在)且调用方愿意接收时出现:
-                    编辑器里还没提交的新成员没有主键, 后端无从探测。 */}
+                {/* 两颗结论灯只在成员已落库(item_id 存在)且调用方愿意接收时出现:
+                    编辑器里还没提交的新成员没有主键, 后端无从探测。
+                    各管一件事: 心跳问"这条通道此刻通不通", 糖果问"它是不是变笨了"。
+                    结论只在颜色里(绿=通过/正常, 玫红=没答上话, 琥珀=答错降智, 灰=还没测过),
+                    耗时、上游报错正文、模型答了几 —— 全部只在悬停提示里, 不占这一行的正文位置。 */}
                 {onProbe && member.item_id !== undefined && (
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <button
-                                type="button"
-                                disabled={probing}
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    onProbe(member.item_id as number);
-                                }}
-                                className={cn(
-                                    'shrink-0 p-1 rounded transition-colors hover:bg-primary/10 hover:text-primary',
-                                    probing && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-inherit'
-                                )}
-                            >
-                                {probing ? <LoaderCircle className="size-3 animate-spin" /> : <HeartPulse className="size-3" />}
-                            </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" sideOffset={8} align="center">
-                            {t(probing ? 'card.probing' : 'card.probe')}
-                        </TooltipContent>
-                    </Tooltip>
+                    <ResultIconButton
+                        icon={HeartPulse}
+                        tone={!probe ? 'idle' : probe.ok ? 'ok' : 'bad'}
+                        tip={probe ? describeProbe(probe, tCard) : tCard('probeNotYet')}
+                        label={tCard('probe')}
+                        pending={probing}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onProbe(member.item_id as number);
+                        }}
+                    />
+                )}
+
+                {/* 糖果测试与心跳分成两个独立的 pending: 共用一颗会让人以为"测活还没回来",
+                    其实两条请求各跑各的, 一个转圈时另一个照样能点。 */}
+                {onProbeIQ && member.item_id !== undefined && (
+                    <ResultIconButton
+                        icon={Candy}
+                        tone={!iq ? 'idle' : iq.correct ? 'ok' : 'dumb'}
+                        tip={iq ? describeIQ({ correct: iq.correct, answer: iq.answer }, tCard) : tCard('iqNotYet')}
+                        label={tCard('probeIQ')}
+                        pending={probingIQ}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onProbeIQ(member.item_id as number);
+                        }}
+                    />
                 )}
 
                 {!group && (
@@ -263,6 +284,8 @@ interface MemberListProps {
     onActivate?: (itemId: number) => void;
     onProbe?: (itemId: number) => void;
     probingItemIds?: Set<number>;
+    onProbeIQ?: (itemId: number) => void; // onProbeIQ 问该成员一道智商题(糖果测试)。
+    probingIQItemIds?: Set<number>; // probingIQItemIds 记录糖果测试正在跑的成员, 与测活的集合分开。
     activeItemId?: number;
     group?: Group; // group 提供当前模式和成员运行状态。
     now?: number; // now 是页面共享的当前 Unix 毫秒时间，仅展示运行态时需要。
@@ -299,6 +322,8 @@ export function MemberList({
     onActivate,
     onProbe,
     probingItemIds = new Set(),
+    onProbeIQ,
+    probingIQItemIds = new Set(),
     activeItemId,
     group,
     now = 0,
@@ -399,6 +424,8 @@ export function MemberList({
                                 onActivate={onActivate}
                                 onProbe={onProbe}
                                 probing={members[rubric.source.index].item_id !== undefined && probingItemIds.has(members[rubric.source.index].item_id as number)}
+                                onProbeIQ={onProbeIQ}
+                                probingIQ={members[rubric.source.index].item_id !== undefined && probingIQItemIds.has(members[rubric.source.index].item_id as number)}
                                 isActive={members[rubric.source.index].item_id === activeItemId}
                                 group={group}
                                 now={now}
@@ -437,6 +464,8 @@ export function MemberList({
                                                 onActivate={onActivate}
                                                 onProbe={onProbe}
                                                 probing={member.item_id !== undefined && probingItemIds.has(member.item_id)}
+                                                onProbeIQ={onProbeIQ}
+                                                probingIQ={member.item_id !== undefined && probingIQItemIds.has(member.item_id)}
                                                 isActive={member.item_id === activeItemId}
                                                 group={group}
                                                 now={now}

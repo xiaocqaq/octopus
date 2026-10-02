@@ -12,6 +12,10 @@ interface MemberStatusProps {
     now: number; // now 是所属列表共享的当前 Unix 毫秒时间。
     active?: boolean; // active 表示该成员当前正在使用。
     activeClassName?: string; // activeClassName 调整原有选中图标在不同列表中的间距。
+    // showProbe 决定要不要显示这枚体检徽标。
+    // 分组页的成员行自己带着一颗会变色的心跳按钮(结论在颜色里, 详情在悬停里),
+    // 徽标再画一次就是同一行两颗心说同一件事; 日志页没有那颗按钮, 所以默认仍然显示。
+    showProbe?: boolean;
 }
 
 // useRuntimeClock 为一个或多个分组提供共享倒计时当前时间。
@@ -75,7 +79,7 @@ export function freshProbe(group: Group, itemId: number | undefined, now: number
 }
 
 // MemberStatus 展示成员的强制标记、体检结论、健康分偏移、冷却、亲和倒计时或当前使用圆点。
-export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
+export function MemberStatus({ group, itemId, now, active = false, activeClassName, showProbe = true }: MemberStatusProps) {
     const t = useTranslations('group.card');
     const isPinned = group.mode === 'failover' && itemId !== undefined && group.pinned_item_id === itemId;
     // 健康分只在故障转移模式累积; 手动模式没有进程内路由, 后端恒回空表。
@@ -103,7 +107,7 @@ export function MemberStatus({ group, itemId, now, active = false, activeClassNa
             return (
                 <span className="flex shrink-0 items-center gap-1">
                     {isPinned && <PinnedMark label={t('pinned')} />}
-                    {probe && <ProbeMark probe={probe} />}
+                    {showProbe && probe && <ProbeMark probe={probe} />}
                     <RankMark score={score} />
                     <Badge
                         variant="outline"

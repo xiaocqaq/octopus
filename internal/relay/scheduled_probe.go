@@ -459,6 +459,13 @@ func ProbeGrantNow(ctx context.Context, grantID int) ProbeResult {
 	return ProbeScheduledGrant(ctx, grantID, false)
 }
 
+// ProbeIQGrantNow 立即对单条渠道凭据出一道智商题, 供界面上那一行末尾的糖果按钮使用。
+// 与 ProbeGrantNow 并列: 同一行的两个按钮问的是两件事(通不通 / 笨不笨), 不该合成一个入口 ——
+// 点糖果却把整批凭据都问一遍, 既多打了上游, 也让"我点的是这一行"这个意图落空。
+func ProbeIQGrantNow(ctx context.Context, grantID int) ProbeResult {
+	return ProbeScheduledIQGrant(ctx, grantID, iqDefaultQuestionID)
+}
+
 // ProbeScheduledIQNow 手动把整条任务的每条凭据都问一遍智商题。
 //
 // 与 ProbeScheduledNow 并列而不是给它加个"要不要出题"的开关: 那两个按钮在界面上是两件事,

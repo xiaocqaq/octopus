@@ -142,31 +142,11 @@ func ProbeGroup(ctx context.Context, groupID int, itemIDs []int, streaming bool)
 		return nil, err
 	}
 
-	// 未指定成员时探测全部; 指定时按提交顺序探测, 且只探测确实属于该分组的成员。
-	targets := make([]int, 0, len(group.Items))
-	if len(itemIDs) == 0 {
-		for _, item := range group.Items {
-			targets = append(targets, item.ID)
-		}
-	} else {
-		for _, itemID := range itemIDs {
-			if itemOf(group, itemID).ID != 0 {
-				targets = append(targets, itemID)
-			}
-		}
-	}
+	targets := probeTargetsOf(group, itemIDs)
 	if len(targets) == 0 {
 		return []ProbeResult{}, nil
 	}
-
-	channelIDs := make([]int, len(targets))
-	for index, itemID := range targets {
-		item := itemOf(group, itemID)
-		if grant, err := op.ChannelGrantGet(item.ChannelGrantID); err == nil {
-			channelIDs[index] = grant.ChannelModel.ChannelID
-		}
-	}
-	return probeByChannel(channelIDs, func(index int) ProbeResult {
+	return probeByChannel(probeChannelIDsOf(group, targets), func(index int) ProbeResult {
 		itemID := targets[index]
 		result, err := ProbeItem(ctx, groupID, itemID, streaming)
 		if err != nil {
@@ -174,6 +154,38 @@ func ProbeGroup(ctx context.Context, groupID int, itemIDs []int, streaming bool)
 		}
 		return result
 	}), nil
+}
+
+// probeTargetsOf 取本轮要探测的成员 ID: 未指定时取分组内全部, 指定时按提交顺序取,
+// 且只保留确实属于该分组的成员 —— 传进来的 ID 可能来自已过期的界面状态。
+func probeTargetsOf(group model.Group, itemIDs []int) []int {
+	if len(itemIDs) == 0 {
+		targets := make([]int, 0, len(group.Items))
+		for _, item := range group.Items {
+			targets = append(targets, item.ID)
+		}
+		return targets
+	}
+	targets := make([]int, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		if itemOf(group, itemID).ID != 0 {
+			targets = append(targets, itemID)
+		}
+	}
+	return targets
+}
+
+// probeChannelIDsOf 取每个待测成员所属的渠道 ID, 供 probeByChannel 按渠道分批。
+// 取不到授权的成员留 0: 它自己会被单独分到"0 号渠道"那一批里串行执行, 不会因此漏测 ——
+// 它本来就该被测出一条"配置不完整"的结论, 而不是从批量里静默消失。
+func probeChannelIDsOf(group model.Group, targets []int) []int {
+	channelIDs := make([]int, len(targets))
+	for index, itemID := range targets {
+		if grant, err := op.ChannelGrantGet(itemOf(group, itemID).ChannelGrantID); err == nil && grant.ChannelModel != nil {
+			channelIDs[index] = grant.ChannelModel.ChannelID
+		}
+	}
+	return channelIDs
 }
 
 // buildProbeRequest 构造一次测活的上游请求。地址与认证取自出站转换器对占位请求的转换结果,

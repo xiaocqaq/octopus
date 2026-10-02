@@ -1,8 +1,8 @@
 import { memo, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Candy, Hand, HeartPulse, LoaderCircle, Shuffle, Trash2, X, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useProbeGroup, useProbeGroupItem } from '@/api/group';
+import { type Group, type GroupMode, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useProbeGroup, useProbeGroupIQ, useProbeGroupItem, useProbeGroupItemIQ } from '@/api/group';
 import { useMonitorGroup, useScheduledProbeList } from '@/api/scheduled-probe';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
@@ -328,6 +328,11 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     // 结论由后端写进路由状态并经事件流广播，前端不落本地副本 —— 单条与一键共用同一份结论展示。
     const probeOne = useProbeGroupItem();
     const probeAll = useProbeGroup();
+    // 糖果测试（智商）：同一个落点、同一种结论结构，只是问的问题从"hi"换成了一道要算的题。
+    // 与测活分成两个 mutation 是有意的：点心跳和点糖果是两件不同的事，
+    // 共用一个 isPending 会让糖果转圈时心跳按钮也跟着变灰。
+    const probeIQOne = useProbeGroupItemIQ();
+    const probeIQAll = useProbeGroupIQ();
 
     // 开启模型监控：把本分组下的模型按 (渠道, 模型) 归并后加进「模型监控」页。
     // 标题取分组名（分组名就是它对外提供的模型名），配置取默认值：用户要的是"盯上这些通道"，
@@ -358,6 +363,65 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             },
         );
     }, [group.id, probeOne, markProbing, t]);
+
+    // 正在跑糖果测试的成员集合。与测活的集合各存一份: 两条请求互不相干,
+    // 合成一个集合会让"糖果转圈"顺手把心跳按钮也按下去。
+    const [probingIQItemIds, setProbingIQItemIds] = useState<Set<number>>(() => new Set());
+    const markProbingIQ = useCallback((itemId: number, on: boolean) => {
+        setProbingIQItemIds((previous) => {
+            const next = new Set(previous);
+            if (on) next.add(itemId);
+            else next.delete(itemId);
+            return next;
+        });
+    }, []);
+
+    // handleProbeIQ 问单个成员一道智商题。
+    // 三档分说: 没答上话(请求失败)既不是正常也不是降智 —— 后端这时不返回判分结论,
+    // 所以只有拿到 iq 才能说"它笨"; 答错用 warning, 因为这是"模型变笨了"这个观察, 不是一次失败的操作。
+    const handleProbeIQ = useCallback((itemId: number) => {
+        markProbingIQ(itemId, true);
+        probeIQOne.mutate(
+            { groupId: group.id, itemId },
+            {
+                onSuccess: (result) => {
+                    if (!result.iq) {
+                        toast.error(t('toast.probeIQFailed'), { description: result.message || undefined });
+                        return;
+                    }
+                    const conclusion = result.iq.correct
+                        ? t('card.iqNormalHint', { answer: result.iq.answer })
+                        : result.iq.answer === ''
+                            ? t('card.iqDumbNoAnswerHint')
+                            : t('card.iqDumbHint', { answer: result.iq.answer });
+                    if (result.iq.correct) toast.success(conclusion);
+                    else toast.warning(conclusion);
+                },
+                onError: (error) => toast.error(t('toast.probeFailed'), { description: error.message }),
+                onSettled: () => markProbingIQ(itemId, false),
+            },
+        );
+    }, [group.id, probeIQOne, markProbingIQ, t]);
+
+    // 一键糖果测试: 不传成员即问全部。
+    // 分三档数而不是"通/不通": 没答上话的既不是正常也不是降智, 混进任何一档都是假结论;
+    // 有降智时用 warning 而不是 error —— 降智是观察结果, 不是这次操作失败了。
+    const handleProbeIQAll = useCallback(() => {
+        probeIQAll.mutate({ groupId: group.id }, {
+            onSuccess: (results) => {
+                if (results.length === 0) return;
+                const dumb = results.filter((result) => result.iq && !result.iq.correct).length;
+                const normal = results.filter((result) => result.iq?.correct).length;
+                const failed = results.length - normal - dumb;
+                const summary = t('toast.probeIQDone', { normal, dumb });
+                const description = failed > 0 ? t('toast.probeIQPartialFailed', { count: failed }) : undefined;
+                if (dumb > 0) toast.warning(summary, { description });
+                else if (failed > 0) toast.error(summary, { description });
+                else toast.success(summary);
+            },
+            onError: (error) => toast.error(t('toast.probeFailed'), { description: error.message }),
+        });
+    }, [group.id, probeIQAll, t]);
 
     // 一键测活：不传成员即测全部。结论本身由后端推送，这里只汇报"几条通几条不通"。
     const handleProbeAll = useCallback(() => {
@@ -573,28 +637,54 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                         >
                             <div className="mb-2 flex items-center justify-between gap-2 px-0.5">
                                 <span className="truncate text-[10px] font-medium text-muted-foreground">{t('form.items')}</span>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <button
-                                            type="button"
-                                            disabled={probeAll.isPending}
-                                            onClick={(e) => { e.stopPropagation(); handleProbeAll(); }}
-                                            className={cn(
-                                                'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
-                                                'text-muted-foreground hover:bg-primary/10 hover:text-primary',
-                                                probeAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
-                                            )}
-                                        >
-                                            {probeAll.isPending
-                                                ? <LoaderCircle className="size-3 animate-spin" />
-                                                : <HeartPulse className="size-3" />}
-                                            {t(probeAll.isPending ? 'card.probingAll' : 'card.probeAll')}
-                                        </button>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" sideOffset={8} align="center">
-                                        {t('card.probeAllHint')}
-                                    </TooltipContent>
-                                </Tooltip>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <button
+                                                type="button"
+                                                disabled={probeAll.isPending}
+                                                onClick={(e) => { e.stopPropagation(); handleProbeAll(); }}
+                                                className={cn(
+                                                    'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                                    'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+                                                    probeAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                                                )}
+                                            >
+                                                {probeAll.isPending
+                                                    ? <LoaderCircle className="size-3 animate-spin" />
+                                                    : <HeartPulse className="size-3" />}
+                                                {t(probeAll.isPending ? 'card.probingAll' : 'card.probeAll')}
+                                            </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top" sideOffset={8} align="center">
+                                            {t('card.probeAllHint')}
+                                        </TooltipContent>
+                                    </Tooltip>
+                                    {/* 一键糖果测试与一键测活并排, 各自独立转圈: 两个按钮问的是两件事, 
+                                        共用 loading 会让人以为"测活还没回来", 其实是糖果在跑。 */}
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <button
+                                                type="button"
+                                                disabled={probeIQAll.isPending}
+                                                onClick={(e) => { e.stopPropagation(); handleProbeIQAll(); }}
+                                                className={cn(
+                                                    'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                                    'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+                                                    probeIQAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                                                )}
+                                            >
+                                                {probeIQAll.isPending
+                                                    ? <LoaderCircle className="size-3 animate-spin" />
+                                                    : <Candy className="size-3" />}
+                                                {t(probeIQAll.isPending ? 'card.probingIQAll' : 'card.probeIQAll')}
+                                            </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top" sideOffset={8} align="center">
+                                            {t('card.probeIQAllHint')}
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </div>
                             </div>
 
                             {/* 移动端高度自适应: 内容少时不高, 内容多时限高并滚动。 */}
@@ -606,6 +696,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                                     onActivate={handleActivate}
                                     onProbe={handleProbe}
                                     probingItemIds={probingItemIds}
+                                    onProbeIQ={handleProbeIQ}
+                                    probingIQItemIds={probingIQItemIds}
                                     activeItemId={group.runtime.current_item_id}
                                     group={group}
                                     now={now}
@@ -682,6 +774,29 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                             {t('card.probeAllHint')}
                         </TooltipContent>
                     </Tooltip>
+                    {/* 浮层里没有卡片级的点击手势, 所以这里不需要 stopPropagation。 */}
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                disabled={probeIQAll.isPending}
+                                onClick={handleProbeIQAll}
+                                className={cn(
+                                    'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                    'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+                                    probeIQAll.isPending && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                                )}
+                            >
+                                {probeIQAll.isPending
+                                    ? <LoaderCircle className="size-3 animate-spin" />
+                                    : <Candy className="size-3" />}
+                                {t(probeIQAll.isPending ? 'card.probingIQAll' : 'card.probeIQAll')}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={8} align="center">
+                            {t('card.probeIQAllHint')}
+                        </TooltipContent>
+                    </Tooltip>
                 </div>
 
                 <div className="h-101 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
@@ -693,6 +808,8 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                         onActivate={handleActivate}
                         onProbe={handleProbe}
                         probingItemIds={probingItemIds}
+                        onProbeIQ={handleProbeIQ}
+                        probingIQItemIds={probingIQItemIds}
                         activeItemId={group.runtime.current_item_id}
                         group={group}
                         now={now}

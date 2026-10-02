@@ -322,7 +322,10 @@
             "monitorMerged": "Added {count} new targets to \"{name}\"",
             "monitorNarrowed": "Narrowed monitoring for \"{name}\": {count} targets no longer probe unused keys",
             "monitorExists": "\"{name}\" is already monitored; no new targets to add",
-            "monitorFailed": "Could not enable model monitoring"
+            "monitorFailed": "Could not enable model monitoring",
+            "probeIQDone": "{normal} normal, {dumb} degraded",
+            "probeIQPartialFailed": "{count} more requests failed, so no IQ could be measured",
+            "probeIQFailed": "Candy test request failed"
         },
         "create": {
             "submit": "Create",
@@ -348,7 +351,17 @@
             "probeValidFor": "Valid for {minutes} minutes — check again afterwards",
             "monitorHint": "Enable model monitoring: add this group's models to Model Monitor with default settings",
             "monitor": "Enable model monitoring",
-            "monitorOnHint": "This group is already monitored; click to add any newly added models"
+            "monitorOnHint": "This group is already monitored; click to add any newly added models",
+            "probeIQ": "Candy test (ask one IQ question to see if this model is degraded right now)",
+            "probingIQ": "Testing...",
+            "probeIQAll": "Candy test all",
+            "probingIQAll": "Testing",
+            "probeIQAllHint": "Ask every member of this group one IQ question; a wrong answer only colors the icon and never affects routing",
+            "probeNotYet": "Not checked yet",
+            "iqNotYet": "IQ not tested yet",
+            "iqNormalHint": "Candy question answered correctly: {answer}",
+            "iqDumbHint": "Candy question answered incorrectly: {answer}",
+            "iqDumbNoAnswerHint": "Candy question got no readable number"
         },
         "detail": {
             "actions": {

@@ -28,6 +28,20 @@ export type ScheduledProbeRow = {
     iq_correct: boolean;
 };
 
+// ScheduledProbeVerdict 是单条凭据的一次测试结论（后端 relay.ProbeResult）。
+// 行内的两个按钮都返回它：心跳只填 ok/latency_ms/message，糖果另外填 iq。
+export type ScheduledProbeVerdict = {
+    grant_id?: number;
+    item_id: number;
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    probed_at: number;
+    expires_at?: number;
+    // iq 缺席表示这次请求根本没答上话（与「答错」不同）：前端据此把这一格留成"没测过"。
+    iq?: { question_id: string; answer: string; correct: boolean };
+};
+
 // ScheduledProbeTarget 是一个被监控目标：某个渠道下的某个模型。
 export type ScheduledProbeTarget = {
     channel_id: number;
@@ -174,6 +188,21 @@ export function useProbeGrantNow() {
     return useMutation({
         mutationFn: (grantId: number) =>
             apiRequest<unknown>(`/api/v1/scheduled-probe/probe-grant/${grantId}`, { method: 'POST', body: {} }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
+    });
+}
+
+// useProbeGrantIQNow 只对一条凭据出一道智商题，供卡片里那一行末尾的糖果按钮使用。
+//
+// 与 useProbeGrantNow 分成两个 mutation：同一行上两个按钮，pending 必须各转各的，
+// 否则糖果测试期间心跳图标也会一起变灰，看起来像两个测试都被按下去了。
+// 同样必须带 body，理由见 useProbeScheduledNow。
+export function useProbeGrantIQNow() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (grantId: number) =>
+            apiRequest<ScheduledProbeVerdict>(`/api/v1/scheduled-probe/iq-grant/${grantId}`, { method: 'POST', body: {} }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: scheduledProbeListQueryOptions.queryKey }),
     });
 }

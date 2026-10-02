@@ -55,6 +55,16 @@ func init() {
 				Handle(probeGroup),
 		).
 		AddRoute(
+			// 智商探针单条成员: 与测活并列的第二件事 —— 那条问"通不通", 这条问"笨不笨"。
+			router.NewRoute("/iq/:id/:itemId", http.MethodPost).
+				Handle(probeGroupItemIQ),
+		).
+		AddRoute(
+			// 一键糖果测试: 把整组挨个问一遍智商题。
+			router.NewRoute("/iq/:id", http.MethodPost).
+				Handle(probeGroupIQ),
+		).
+		AddRoute(
 			// 兼容已有分组页接口; 渠道首页不再使用此入口, 但保留接口避免旧客户端断裂。
 			router.NewRoute("/add-channel/:id/:channelId", http.MethodPost).
 				Handle(addChannelToGroup),
@@ -262,14 +272,8 @@ type probeRequest struct {
 
 // probeGroupItem 测活单个成员, 供成员行上的按钮使用; 结论同时落进路由状态并由事件流推给所有界面。
 func probeGroupItem(c *gin.Context) {
-	groupID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		resp.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	itemID, err := strconv.Atoi(c.Param("itemId"))
-	if err != nil {
-		resp.Error(c, http.StatusBadRequest, err.Error())
+	groupID, itemID, ok := probeParams(c)
+	if !ok {
 		return
 	}
 
@@ -285,6 +289,59 @@ func probeGroupItem(c *gin.Context) {
 	// 结论已写进路由状态, 推一次状态让所有打开的界面同步看到这次体检结果。
 	publishProbeEvent(groupID)
 	resp.Success(c, result)
+}
+
+// probeGroupItemIQ 对单个成员出一道智商题, 供成员行上的糖果按钮使用。
+// 与 probeGroupItem 同形(入参、错误码、结论形状都一致), 差别只在发出去的请求问什么。
+func probeGroupItemIQ(c *gin.Context) {
+	groupID, itemID, ok := probeParams(c)
+	if !ok {
+		return
+	}
+
+	result, err := relay.ProbeItemIQ(c.Request.Context(), groupID, itemID, relay.DefaultIQQuestionID())
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	publishProbeEvent(groupID)
+	resp.Success(c, result)
+}
+
+// probeGroupIQ 一键糖果测试: 不带 item_ids 时问分组内全部成员, 带了就只问其中一部分。
+func probeGroupIQ(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req probeRequest
+	_ = c.ShouldBindJSON(&req)
+
+	results, err := relay.ProbeGroupIQ(c.Request.Context(), groupID, req.ItemIDs, relay.DefaultIQQuestionID())
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	publishProbeEvent(groupID)
+	resp.Success(c, results)
+}
+
+// probeParams 取出测活类接口共用的两个路径参数(分组 ID 与成员 ID)。
+// 抽出来只为让测活与糖果测试这两对入口的前置校验逐字一致: 它们只差发出去的请求。
+func probeParams(c *gin.Context) (int, int, bool) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return 0, 0, false
+	}
+	itemID, err := strconv.Atoi(c.Param("itemId"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return 0, 0, false
+	}
+	return groupID, itemID, true
 }
 
 // probeGroup 一键测活: 不带 item_ids 时测分组内全部成员, 带了就只测其中一部分。

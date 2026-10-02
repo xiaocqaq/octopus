@@ -46,6 +46,11 @@ func init() {
 				Handle(probeScheduledIQNow),
 		).
 		AddRoute(
+			// 单条凭据的糖果测试: 供卡片里那一行末尾的糖果按钮使用。
+			router.NewRoute("/iq-grant/:grantID", http.MethodPost).
+				Handle(probeIQGrantNow),
+		).
+		AddRoute(
 			router.NewRoute("/credential/:id", http.MethodPost).
 				Handle(setScheduledProbeCredential),
 		).
@@ -123,6 +128,18 @@ func probeGrantNow(c *gin.Context) {
 		return
 	}
 	result := relay.ProbeGrantNow(c.Request.Context(), grantID)
+	resp.Success(c, result)
+}
+
+// probeIQGrantNow 立即对一条凭据出一道智商题, 供界面上一行末尾的糖果按钮使用。
+// 与 probeGrantNow 同形: 同一个 grantID 参数、同一种返回(一整行结论), 差别只在发出去的是糖果题。
+func probeIQGrantNow(c *gin.Context) {
+	grantID, err := strconv.Atoi(c.Param("grantID"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	result := relay.ProbeIQGrantNow(c.Request.Context(), grantID)
 	resp.Success(c, result)
 }
 

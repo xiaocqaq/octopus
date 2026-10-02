@@ -1,18 +1,20 @@
 import { useState } from 'react';
 import { DragDropContext, Draggable, Droppable, type DraggableProvided, type DropResult } from '@hello-pangea/dnd';
-import { Brain, BrainCircuit, GripVertical, HeartCrack, HeartPulse, X, Zap } from 'lucide-react';
+import { Candy, GripVertical, HeartPulse, X } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { toast } from 'sonner';
 import {
+    useProbeGrantIQNow,
     useProbeGrantNow,
     useSetScheduledProbeCredential,
     useSetScheduledProbeOrder,
     type ScheduledProbeRow,
 } from '@/api/scheduled-probe';
 import { IconButton } from '@/components/common/IconButton';
+import { ResultIconButton, describeIQ, describeProbe } from '@/components/common/ProbeButtons';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { describeIQ, describeProbedAt } from './format';
+import { describeProbedAt } from './format';
 
 // 本文件负责卡片里的行列表：一行 = 一条凭据，可单独测、可单独删、可拖着排顺序。
 //
@@ -119,17 +121,39 @@ export function RowList({ probeId, rows, now }: { probeId: number; rows: Schedul
     );
 }
 
-// Row 渲染一条凭据：左侧是「渠道名/凭据名」(大字)、中间是结论、右侧是只测这一条的闪电与只删这一条的 ×。
+// Row 渲染一条凭据：左侧是「渠道名/凭据名」(大字)、右侧是「心跳 + 糖果」两颗结论灯与只删这一条的 ×。
 // 行首的握把是拖动的落点: 整行可拖会和行内的两个按钮抢手势, 也会把文字选择一起吞掉。
 function Row({ probeId, row, now, dnd }: { probeId: number; row: ScheduledProbeRow; now: number; dnd?: RowDnd }) {
     const t = useTranslations('scheduledProbe');
     const probeGrant = useProbeGrantNow();
+    const probeIQGrant = useProbeGrantIQNow();
     const setCredential = useSetScheduledProbeCredential();
     const label = row.key_name || `#${row.grant_id}`;
 
     const handleProbe = () => {
         probeGrant.mutate(row.grant_id, {
             onSuccess: () => toast.success(t('toast.probeDone')),
+            onError: (error) => toast.error(error.message),
+        });
+    };
+
+    // handleProbeIQ 只问这一条凭据一道智商题。
+    // 三类分开汇报: 请求失败的既不是正常也不是降智(它根本没答上话), 混进任何一档都是假结论;
+    // 出现降智用 warning 而不是 error: 降智是"模型变笨了"这个观察结果, 不是一次失败的操作。
+    const handleProbeIQ = () => {
+        probeIQGrant.mutate(row.grant_id, {
+            onSuccess: (verdict) => {
+                if (!verdict.iq) {
+                    toast.error(t('toast.iqFailed', { message: verdict.message || t('probeUnknownError') }));
+                    return;
+                }
+                const conclusion = describeIQ(verdict.iq, t);
+                if (verdict.iq.correct) {
+                    toast.success(conclusion);
+                    return;
+                }
+                toast.warning(conclusion);
+            },
             onError: (error) => toast.error(error.message),
         });
     };
@@ -197,55 +221,33 @@ function Row({ probeId, row, now, dnd }: { probeId: number; row: ScheduledProbeR
                 </TooltipContent>
             </Tooltip>
 
-            {row.probed && (
-                <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                    {row.ok ? (
-                        <HeartPulse className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-                    ) : (
-                        <HeartCrack className="size-3.5 text-rose-600 dark:text-rose-400" />
-                    )}
-                    <span className="tabular-nums">{row.latency_ms}ms</span>
-                    <span className="text-muted-foreground/60">{describeProbedAt(row.probed_at, now, t)}</span>
-                </span>
-            )}
-
-            {/* 智商结论只在划过题的那一拍或手动点过糖果测试之后才有, 因此它按需出现, 不占独立一列:
-                大多数行还没有结论, 留出位置会让整张卡片看起来缺了一格。
-                按 iq_asked 而不是 iq_answer 判断"有没有测过": "问了但答不出数字"的答案也是空串,
-                按答案判空会把这一种状态整个吞掉 —— 模型胡言乱语反而在界面上不留痕迹。
-                正文只给「正常/降智」两档, 不显示它到底答了哪个数: 用户要的是能一眼扫过的结论,
-                具体答了什么放进悬停提示, 想核对时再看。 */}
-            {row.iq_asked && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <span
-                            className={cn(
-                                'flex shrink-0 items-center gap-0.5 text-[11px]',
-                                row.iq_correct
-                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                    : 'text-amber-600 dark:text-amber-400',
-                            )}
-                        >
-                            {row.iq_correct ? <Brain className="size-3.5" /> : <BrainCircuit className="size-3.5" />}
-                            {row.iq_correct ? t('iqNormal') : t('iqDumb')}
-                        </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={10}>
-                        {describeIQ(row, t)}
-                    </TooltipContent>
-                </Tooltip>
-            )}
-
-            {/* 行尾的闪电只测这一条凭据: 点击它的意图是"我想看清这条钥匙通不通"，
-                而不是把整个任务都拧起来一起测。 */}
-            <IconButton
+            {/* 两颗结论灯: 心跳在前(原来的闪电就站在这个位置, 职责也相同 —— 只测这一条凭据),
+                糖果在后。两个都是"既是按钮又是结论": 点它发起测试, 颜色说上一次的结论。
+                正文一律不进这一行: 行里已经塞了「渠道/凭据/模型」三段身份, 再写"通过 · 6792ms"
+                就会把身份挤没(实测过), 所以耗时、过期时间、模型答了几全部只在悬停提示里出现。 */}
+            <ResultIconButton
+                icon={HeartPulse}
+                tone={!row.probed ? 'idle' : row.ok ? 'ok' : 'bad'}
+                tip={
+                    row.probed
+                        ? `${describeProbe(row, t)} · ${describeProbedAt(row.probed_at, now, t)}`
+                        : t('probeThis')
+                }
+                label={t('probeThis')}
+                pending={probeGrant.isPending}
                 onClick={handleProbe}
-                disabled={probeGrant.isPending}
-                tip={t('probeThis')}
-                className="size-6"
-            >
-                <Zap className={cn('size-3', probeGrant.isPending && 'animate-pulse')} />
-            </IconButton>
+            />
+
+            {/* 糖果测试按 iq_asked 而不是 iq_answer 判断"测过没有": "问了但答不出数字"的答案也是空串,
+                按答案判空会把这一种状态整个吞掉 —— 模型胡言乱语反而在界面上不留痕迹。 */}
+            <ResultIconButton
+                icon={Candy}
+                tone={!row.iq_asked ? 'idle' : row.iq_correct ? 'ok' : 'dumb'}
+                tip={row.iq_asked ? describeIQ({ correct: row.iq_correct, answer: row.iq_answer }, t) : t('iqThis')}
+                label={t('iqThis')}
+                pending={probeIQGrant.isPending}
+                onClick={handleProbeIQ}
+            />
 
             {/* 行尾的 × 只删这一条凭据；删除后该行从任务中消失。 */}
             <IconButton

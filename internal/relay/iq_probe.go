@@ -38,6 +38,11 @@ const iqProbeMaxTokens = 512
 // 推理再作答, 思考型模型在 45 秒内未必收尾。90 秒既容得下推理, 又不至于让一次探针无限占着连接。
 const iqProbeTimeout = 90 * time.Second
 
+// DefaultIQQuestionID 返回当前默认抽的那道题。
+// 导出给处理器: 题号属于题库的内部约定, 处理器只该转述"测的是哪道题", 不该自己写死一个字符串 ——
+// 将来题库变长、出题策略改成轮换时, 只有这里要动。
+func DefaultIQQuestionID() string { return iqDefaultQuestionID }
+
 // IQQuestion 是一道智商探针题。
 //
 // 题目, 答案与判分口径放在同一条记录里, 新增题目只需往题库追加一条, 不必改判分逻辑:
@@ -249,4 +254,53 @@ func ProbeIQGrant(ctx context.Context, grantID int, questionID string) ProbeResu
 		result.IQ = &IQResult{QuestionID: question.ID, Correct: false}
 	}
 	return result
+}
+
+// ProbeItemIQ 对分组内的单个成员出一道智商题, 并把结论落进路由状态。
+//
+// 与 ProbeItem 并列而不是给它加个"要不要出题"的开关: 两者问的是两件事 ——
+// 那条问"这条通道此刻通不通"(结论是通/不通, 快不快), 这条问"这个模型此刻笨不笨"(结论是对/错)。
+// 合成一个入口就得让调用方先想清楚自己要哪种语义, 而界面上的两个按钮本来就已经想清楚了。
+//
+// 落点复用 landProbe(..., false): 与人工测活同一条路径 —— 结论进 route.Probes 供界面与选路消费,
+// 但失败不冷却。一次答错不该把成员关进小黑屋, 那是"模型能力"而不是"通道故障"。
+func ProbeItemIQ(ctx context.Context, groupID, itemID int, questionID string) (ProbeResult, error) {
+	group, err := op.GroupGet(groupID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	item := itemOf(group, itemID)
+	if item.ID == 0 {
+		return ProbeResult{}, fmt.Errorf("group item not found")
+	}
+
+	result := ProbeIQGrant(ctx, item.ChannelGrantID, questionID)
+	result.GroupID = group.ID
+	result.ItemID = itemID
+	// 有效期与人工测活同一条规则: 有任务在监控这条授权时挂到下一轮复测之前, 否则用兜底值。
+	return landProbe(group, itemID, withProbeExpiry(result, item.ChannelGrantID), false), nil
+}
+
+// ProbeGroupIQ 一键把分组内全部成员(或指定子集)各问一道智商题, 顺序与目标顺序一致。
+//
+// 与 ProbeGroup 走同一条并发约束(probeByChannel): 智商题的响应体是测活的上百倍,
+// 一个分组几十个成员全并发打出去, 上游那边看到的就是一次突发。
+// 单个成员失败不影响其余成员: 一个模型答不出来, 不该让整轮测试没有结论。
+func ProbeGroupIQ(ctx context.Context, groupID int, itemIDs []int, questionID string) ([]ProbeResult, error) {
+	group, err := op.GroupGet(groupID)
+	if err != nil {
+		return nil, err
+	}
+	targets := probeTargetsOf(group, itemIDs)
+	if len(targets) == 0 {
+		return []ProbeResult{}, nil
+	}
+	return probeByChannel(probeChannelIDsOf(group, targets), func(index int) ProbeResult {
+		itemID := targets[index]
+		result, err := ProbeItemIQ(ctx, groupID, itemID, questionID)
+		if err != nil {
+			result = ProbeResult{GroupID: groupID, ItemID: itemID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
+		}
+		return result
+	}), nil
 }
