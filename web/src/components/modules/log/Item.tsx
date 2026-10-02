@@ -68,14 +68,15 @@ function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; 
     const cachedTokens = log.usage.prompt_tokens_details?.cached_tokens ?? 0;
     // 缓存率取输入缓存占全部输入 Token 的比例, 无输入时为零。
     const cacheRate = log.usage.prompt_tokens > 0 ? Math.round((cachedTokens / log.usage.prompt_tokens) * 100) : 0;
-    // 请求进行中显示实时总耗时; 结束后只显示实际响应阶段耗时, 提交前结束时回退到总耗时。
+    // 总耗时保持端到端口径: 请求到达至响应结束, 进行中按当前时刻实时推算。
     const requestActive = log.status === 'running' || log.status === 'committed';
     const elapsedMs = requestActive
         ? now - new Date(log.started_at).getTime()
         : log.duration / 1_000_000;
+    const duration = formatMilliseconds(elapsedMs);
+    // 响应阶段耗时(首字节至结束)只用于折算速度, 不再充当「总耗时」。
     const responseMs = (log.stream_duration || log.response_duration) / 1_000_000;
-    const duration = formatMilliseconds(!requestActive && responseMs > 0 ? responseMs : elapsedMs);
-    // 首字时间仅流式响应存在, 非流式或尚未提交时留空。
+    // 首字耗时从请求到达算起(含选路与重试), 非流式同样记录; 未提交前为零, 显示占位而不是形似真实的 0ms。
     const firstToken = log.first_token_duration > 0 ? formatMilliseconds(log.first_token_duration / 1_000_000) : '-';
     // 请求进行中使用同一份服务端快照中的字符数和流式传输时长, 结束后改用最终 Token 数。
     const outputCount = requestActive ? log.output_chars : log.usage.completion_tokens;

@@ -29,7 +29,7 @@ type RequestState struct {
 	Status             Status         `json:"status"`               // 请求当前状态。
 	StartedAt          time.Time      `json:"started_at"`           // 请求到达时间。
 	Duration           time.Duration  `json:"duration"`             // 请求从到达到结束的总耗时, 未结束时为零。
-	FirstTokenDuration time.Duration  `json:"first_token_duration"` // 流式正确响应轮次开始到首字节提交的耗时, 非流式响应为零。
+	FirstTokenDuration time.Duration  `json:"first_token_duration"` // 请求到达到首字节写出客户端的耗时, 含选路与重试; 非流式同样记录。
 	StreamDuration     time.Duration  `json:"stream_duration"`      // 流式响应从首字节提交到响应结束的耗时, 非流式响应为零。
 	ResponseDuration   time.Duration  `json:"response_duration"`    // 非流式正确响应轮次开始到完整响应提交的耗时, 流式响应为零。
 	Model           string         `json:"model"`            // 客户端请求的模型名称, 即分组名称。
