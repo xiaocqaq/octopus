@@ -31,7 +31,7 @@
     "iqDumb": "Degraded",
     "iqNormalHint": "Candy question answered correctly: {answer}",
     "iqDumbHint": "Candy question answered incorrectly: {answer}",
-    "iqDumbNoAnswerHint": "Candy question got no readable number",
+    "iqDumbNoAnswerHint": "The candy question was not answered with a single number",
     "noTarget": "No targets configured",
     "removeCredential": "Stop monitoring this credential",
     "dragToSort": "Drag to change probe order",

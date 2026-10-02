@@ -31,7 +31,7 @@
     "iqDumb": "降智",
     "iqNormalHint": "糖果題答對：{answer}",
     "iqDumbHint": "糖果題答錯：答了 {answer}",
-    "iqDumbNoAnswerHint": "糖果題沒答出可判讀的數字",
+    "iqDumbNoAnswerHint": "糖果題沒按要求只給一個數字",
     "noTarget": "暫無監控目標",
     "removeCredential": "不再監控這條憑據",
     "dragToSort": "拖動可調整測活順序",

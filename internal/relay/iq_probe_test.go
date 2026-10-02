@@ -2,7 +2,7 @@ package relay
 
 import "testing"
 
-// TestParseIQAnswer 覆盖"末尾整数"提取的各种形态。
+// TestParseIQAnswer 覆盖"直接作答"提取的各种形态。
 // 判分口径是精确匹配, 因此提取环节的每一次偏差都会直接变成一次误判 —— 这些用例守的就是这条口径。
 func TestParseIQAnswer(t *testing.T) {
 	cases := []struct {
@@ -18,11 +18,19 @@ func TestParseIQAnswer(t *testing.T) {
 			ok:   true,
 		},
 		{
-			// 关键用例: 推理过程中先出现若干数字, 必须取末尾那个。取第一个会得到 7, 判错。
-			name: "带推理过程的回答取末尾数字",
-			body: `{"choices":[{"message":{"content":"圆苹果7 + 星桃子12 = 19, 但还要考虑西瓜8。最少需要 21 个。"}}]}`,
+			// 关键用例: 题面允许"答案是 21"这类少量包装, 但包装不能长到把推理装进来。
+			name: "答题式短句仍然认",
+			body: `{"choices":[{"message":{"content":"最少需要取出 21 个糖果。"}}]}`,
 			want: "21",
 			ok:   true,
+		},
+		{
+			// 回归用例: 真实踩过的坑 —— 模型长篇输出后落在 5099 上, 旧口径"取末尾整数"把 5099
+			// 当成它的答案摆在界面上。冗长回答一律不判分: "没照要求作答"与"答了 5099"是两件事。
+			name: "冗长回答不判分",
+			body: `{"choices":[{"message":{"content":"圆苹果7 + 星桃子12 = 19, 但还要考虑西瓜8。若对手把西瓜都摆在圆里, 则需要 9 个圆 12 个星, 合计 5099。"}}]}`,
+			want: "",
+			ok:   false,
 		},
 		{
 			name: "末尾带句号和换行",
@@ -129,9 +137,10 @@ func TestIQTextOfAnthropicBlocks(t *testing.T) {
 	if got := iqTextOf(body); got != "先取 9 个圆再取 12 个星, 最少 21 个。" {
 		t.Fatalf("块数组应拼接全部 text 块, 实际取到 %q", got)
 	}
-	// 拼出来的文本同样要能判分: 这才是这条路存在的意义。
-	if answer, ok := parseIQAnswer(body); !ok || answer != "21" {
-		t.Fatalf("块数组正文应提取出 21, 实际 ok=%v answer=%q", ok, answer)
+	// 块数组同样要能走到判分: 合规回答被上游拆成多个块时(Anthropic 常见), 拼接后仍应是可判读的直接作答。
+	terse := []byte(`{"content":[{"type":"text","text":"答案是 "},{"type":"text","text":"21"}]}`)
+	if answer, ok := parseIQAnswer(terse); !ok || answer != "21" {
+		t.Fatalf("块数组里的直接作答应提取出 21, 实际 ok=%v answer=%q", ok, answer)
 	}
 }
 
