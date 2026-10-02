@@ -32,6 +32,18 @@
     "iqNormalHint": "Candy question answered correctly: {answer}",
     "iqDumbHint": "Candy question answered incorrectly: {answer}",
     "iqDumbNoAnswerHint": "Candy question got no readable number",
+    "iqSettings": {
+        "open": "Candy test settings",
+        "title": "Candy test settings",
+        "prompt": "Question",
+        "promptPlaceholder": "The full question sent to the model",
+        "promptHint": "Edit this to swap the question. The next candy test uses the new question; verdicts already shown stay as they are.",
+        "answer": "Expected answer",
+        "answerPlaceholder": "e.g. 21",
+        "answerHint": "The reply passes when it contains this: numeric answers are compared as numbers (210 is not 21), other answers as a case-insensitive substring.",
+        "save": "Save",
+        "saved": "Candy test settings saved"
+    },
     "noTarget": "No targets configured",
     "removeCredential": "Stop monitoring this credential",
     "dragToSort": "Drag to change probe order",

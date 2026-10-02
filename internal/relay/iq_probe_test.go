@@ -136,7 +136,7 @@ func TestParseIQAnswer(t *testing.T) {
 	}
 }
 
-// TestGradeIQAnswer 守的是"答案精确匹配"这条口径本身: 只有与标准答案完全一致才算对。
+// TestGradeIQAnswer 守"回答里出现标准答案就算过"这条口径: 判的是说没说对, 不是有没有守格式。
 func TestGradeIQAnswer(t *testing.T) {
 	question, ok := iqQuestionByID(iqDefaultQuestionID)
 	if !ok {
@@ -151,12 +151,44 @@ func TestGradeIQAnswer(t *testing.T) {
 		t.Fatalf("答 %s 应判对, 实际 ok=%v result=%+v", question.Answer, ok, correct)
 	}
 
+	// 话多也算对: 结论夹在解释里同样是一次正确作答(这正是本轮要兼容的形状)。
+	verbose := "先看最坏情况, 圆形里只放苹果和桃子, 五角星里只放苹果和西瓜, 这样拿不到目标组合。" +
+		"所以要分别取 9 个圆和 12 个星, 最少 " + question.Answer + " 个。"
+	graded, ok := gradeIQAnswer(question, []byte(`{"choices":[{"message":{"content":"`+verbose+`"}}]}`))
+	if !ok || !graded.Correct {
+		t.Fatalf("长篇回答里出现了 %s 应判对, 实际 ok=%v result=%+v", question.Answer, ok, graded)
+	}
+
 	wrong, ok := gradeIQAnswer(question, []byte(`{"choices":[{"message":{"content":"999999"}}]}`))
 	if !ok || wrong.Correct {
 		t.Fatalf("答 999999 应判错, 实际 ok=%v result=%+v", ok, wrong)
 	}
 	if wrong.QuestionID != question.ID {
 		t.Fatalf("判分结论应带题号 %q, 实际 %q", question.ID, wrong.QuestionID)
+	}
+}
+
+// TestIQAnswerIn 守模糊匹配的边界: 整数答案按整数比, 文字答案按忽略大小写的子串比。
+func TestIQAnswerIn(t *testing.T) {
+	cases := []struct {
+		name   string
+		reply  string
+		answer string
+		want   bool
+	}{
+		{name: "整数夹在句子里算命中", reply: "最少需要取出 21 个糖果。", answer: "21", want: true},
+		{name: "整数按整数比而不是子串", reply: "我算出来是 210 个", answer: "21", want: false},
+		{name: "前导零写法仍算命中", reply: "答案是 021", answer: "21", want: true},
+		{name: "没提到答案就不算", reply: "这道题我不会", answer: "21", want: false},
+		{name: "文字答案忽略大小写", reply: "答案是 apple", answer: "APPLE", want: true},
+		{name: "空答案不算通过", reply: "21", answer: "  ", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := iqAnswerIn(tc.reply, tc.answer); got != tc.want {
+				t.Fatalf("iqAnswerIn(%q, %q) = %v, want %v", tc.reply, tc.answer, got, tc.want)
+			}
+		})
 	}
 }
 

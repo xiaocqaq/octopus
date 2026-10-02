@@ -65,56 +65,45 @@ func DefaultIQQuestionID() string { return iqDefaultQuestionID }
 
 // IQQuestion 是一道智商探针题。
 //
-// 题目, 答案与判分口径放在同一条记录里, 新增题目只需往题库追加一条, 不必改判分逻辑:
-// 这是"预留题库结构"的最小形态 —— 一个切片加一个字段。
+// 题目, 标准答案与判分口径放在同一条记录里: 判分只认这条记录里的 Answer,
+// 换题, 换答案都不用动判分逻辑。
 type IQQuestion struct {
-	// ID 是题目的稳定标识(用作结论里的题号), 题库重排也不应改变它。
+	// ID 是题目的稳定标识(用作结论里的题号), 目前只有一道题, 因此它是一个常量。
 	ID string `json:"id"`
-	// Prompt 是发给模型的完整题面。含"只输出数字"的指令, 使提取环节尽量少歧义。
+	// Prompt 是发给模型的完整题面。
 	Prompt string `json:"prompt"`
-	// Answer 是标准答案, 以字符串存放: 判分是文本层面的精确匹配, 用它做同口径的比较。
+	// Answer 是标准答案, 以字符串存放: 判分是"回答里有没有出现它"的模糊匹配,
+	// 纯整数的答案按整数相等比较, 其余按忽略大小写的子串比较(见 iqAnswerIn)。
 	Answer string `json:"answer"`
 }
 
-// iqQuestions 是内置题库。目前只有一道题 —— 用户原始那道"糖果题":
-// 黑色袋子里三种口味(苹果/桃子/西瓜)各有圆与五角星两种形状, 形状可凭手感分辨,
-// 问最少取几个才能保证同时拿到"不同形状的苹果味和桃子味"。
+// iqQuestion 返回当前这道智商题: 题面与标准答案都来自设置, 界面上可改。
 //
-// 答案 21 的推导(供后来者核对, 也是这道题唯一的判分依据):
-// 因为形状摸得出来, 取的人可以**分别决定**取几个圆形、几个五角星, 所以要从"对手最优地摆放"
-// 的角度找最小可行对 (a, b), 使任意 a 个圆形 + b 个五角星里都必然出现"圆苹果+星桃子"或"圆桃子+星苹果"。
-// 可证 (a,b) = (9,12) 可行: 三个口味合计 24 圆 17 星, 取 9 圆 12 星时,
-// 若拿不到目标组合, 则"有圆苹果 ⟹ 无星桃子"且"有圆桃子 ⟹ 无星苹果";
-// 星桃子与星苹果都缺时星至多只有 4 个西瓜, 与取了 12 个星矛盾, 故必然出现目标组合。
-// 而 (9,11) 不可行: 对手可以摆成"圆里只有苹果桃子"(7+9=16≥9, 且不给西瓜)、
-// "星里只有苹果西瓜"(7+4=11), 此时圆苹果在手却无星桃子, 圆桃子在手却无星苹果。
-// 穷举验证脚本见 .probe-test/candy.js(模型B: 选 a 圆 + b 星, 最小可行 n = 21, a=9, b=12)。
-//
-// 注意 29 这个常见错答, 不要把标准答案改成它: 29 是"一次盲抓"读法的答案 —— 题面里
-// "不同的形状靠手感可以分辨"正是为了排除这个读法(摸得出形状就能分别取圆的与五角星的)。
-// 实测确实有模型按盲抓读法答 29, 那是它没读进形状可辨这个条件, 正是本题要区分的地方;
-// 若把答案改成 29, 读得仔细的模型反而判错(脚本 .probe-test/candy29.py 是按盲抓读法算的, 得 29)。
-var iqQuestions = []IQQuestion{
-	{
-		ID: "candy-21",
-		Prompt: "在一个黑色的袋子里放有三种口味的糖果, 每种糖果有两种不同的形状(圆形和五角星形, 不同的形状靠手感可以分辨)。" +
-			"现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目, 那么, 最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖?" +
-			"(圆形苹果配五角星桃子, 或圆形桃子配五角星苹果, 均满足要求)" +
-			"圆形糖果: 苹果味 7 个, 桃子味 9 个, 西瓜味 8 个; 五角星形糖果: 苹果味 7 个, 桃子味 6 个, 西瓜味 4 个。" +
-			"只要给我答案, 你不需要任何思考, 我只需要答案的数字。",
-		Answer: "21",
-	},
+// 为什么不写死在代码里: 题目本身是"随便问一道"的探针, 换题、换答案属于日常调整,
+// 不该为了改一句话重新编译部署; 而且不同的模型对同一道题的熟悉程度不同,
+// 能换题才谈得上"这一批模型此刻笨不笨"的横向比较。
+// 库里没值(首次启动前、或被人清空)时退回出厂题面与答案, 保证探针任何时候都有题可问、有分可判。
+func iqQuestion() IQQuestion {
+	prompt, err := op.SettingGetString(model.SettingKeyIQProbePrompt)
+	if err != nil || strings.TrimSpace(prompt) == "" {
+		prompt = model.DefaultIQProbePrompt
+	}
+	answer, err := op.SettingGetString(model.SettingKeyIQProbeAnswer)
+	if err != nil || strings.TrimSpace(answer) == "" {
+		answer = model.DefaultIQProbeAnswer
+	}
+	return IQQuestion{ID: iqDefaultQuestionID, Prompt: prompt, Answer: strings.TrimSpace(answer)}
 }
 
-// iqQuestionByID 按 ID 取题, 题库里没有该 ID 时返回 false。
-// 结论里记的是题号而非题面: 题面可能随措辞调整, 题号不会, 拿题号才能把历史结论与当时的题对上。
+// iqQuestionByID 按 ID 取题, 题号对不上时返回 false。
+// 结论里记的是题号而非题面: 题面随时可改, 题号不会, 拿题号才能把历史结论与当时的题对上。
+// 目前只有一道可配置的题, 所以这里只核对题号, 题面与答案都从设置里现取;
+// 将来真要出多道题轮换, 这里才是分岔点。
 func iqQuestionByID(id string) (IQQuestion, bool) {
-	for _, question := range iqQuestions {
-		if question.ID == id {
-			return question, true
-		}
+	if id != iqDefaultQuestionID {
+		return IQQuestion{}, false
 	}
-	return IQQuestion{}, false
+	return iqQuestion(), true
 }
 
 // parseIQAnswer 从模型回答里提取它作答的数字。
@@ -320,13 +309,46 @@ func iqBlockTextOf(raw json.RawMessage) string {
 }
 
 // gradeIQAnswer 判定一次回答是否正确。
-// 判分口径就是用户选定的"末尾数字精确匹配": 提取末尾整数, 与标准答案做字符串比较(两边都已规范化)。
+//
+// 判分口径是"模糊匹配": 回答正文里出现了标准答案就算过 —— 标准答案是纯整数时按整数比较
+// (回答里任意一个整数等于它即可), 其余答案按忽略大小写的子串比较。
+//
+// 为什么不再要求"整段回答就是一个数字": 题面里那句"只要给我答案"是提示, 不是判分依据。
+// 模型话多不等于答错 —— 它可能先数了一遍再给出结论。按格式判分会把"答对了但没听话"记成降智,
+// 而我们要测的是智商, 不是服从性; 真正该判错的是"没说对答案"(以及压根没答出可判读的数字)。
 func gradeIQAnswer(question IQQuestion, body []byte) (IQResult, bool) {
-	extracted, ok := parseIQAnswer(body)
-	if !ok {
+	reply := strings.TrimSpace(iqReplyOf(body))
+	if reply == "" {
 		return IQResult{}, false
 	}
-	return IQResult{QuestionID: question.ID, Answer: extracted, Correct: extracted == question.Answer}, true
+	if iqAnswerIn(reply, question.Answer) {
+		return IQResult{QuestionID: question.ID, Answer: question.Answer, Correct: true}, true
+	}
+	// 没命中: 尽力取出"它答的是什么"给悬停详情看, 取不到就留空(界面显示"没答出可判读的数字")。
+	// 展示仍走 parseIQAnswer 而不是"最后一个整数": 后者会把长篇推理里的中间数当成它的答案(真实踩过 5099)。
+	answer, _ := parseIQAnswer(body)
+	return IQResult{QuestionID: question.ID, Answer: answer, Correct: false}, true
+}
+
+// iqAnswerIn 判断回答正文里是否出现了标准答案。
+//
+// 纯整数的答案按整数相等比较, 而不是子串: 标准答案 21 时, "答了 210"、"21 个" 与 "21" 的子串关系
+// 分不出对错, 但整数比较能 —— 210 不等于 21, 所以不算过。这比字符串包含更严格也更不容易误判。
+// 非整数答案(文字、小数)没有整数边界可比, 按忽略大小写的子串比较, 这就是用户要的模糊匹配。
+func iqAnswerIn(reply string, answer string) bool {
+	want := strings.TrimSpace(answer)
+	if want == "" {
+		return false
+	}
+	if wantValue, err := strconv.ParseInt(want, 10, 64); err == nil {
+		for _, token := range iqAnswerPattern.FindAllString(reply, -1) {
+			if value, err := strconv.ParseInt(token, 10, 64); err == nil && value == wantValue {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(strings.ToLower(reply), strings.ToLower(want))
 }
 
 // ProbeIQGrant 对一条渠道授权出一道智商题并判分。

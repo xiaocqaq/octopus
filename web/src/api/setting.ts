@@ -15,6 +15,8 @@ export const SettingKey = {
     ModelInfoUpdateInterval: 'model_info_update_interval',
     CORSAllowOrigins: 'cors_allow_origins',
     ModelFilter: 'model_filter',
+    IQProbePrompt: 'iq_probe_prompt',
+    IQProbeAnswer: 'iq_probe_answer',
 } as const;
 
 /**

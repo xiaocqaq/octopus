@@ -11,17 +11,21 @@ import { Plus } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
 import { useScheduledProbeList } from '@/api/scheduled-probe';
 import { CreateDialogContent } from './Create';
+import { IQSettingsButton } from './IQSettings';
 import { Item } from './Item';
 import { useProbeClock } from './clock';
 
-// ScheduledProbeActions 向稳定顶栏提供新建入口。
+// ScheduledProbeActions 向稳定顶栏提供新建入口与糖果测试设置入口。
 // 这里没有搜索与视图选项: 列表是'几条到几十条'的手工维护清单, 排序由后端的轮转顺序定稿,
 // 加上排序与筛选反而会让人以为改的是轮转次序。
+//
+// 设置(题面与标准答案)是全局的、只此一份, 所以放在顶栏: 挂到某张卡片上会让人以为改的是那一条。
 export function ScheduledProbeActions() {
     const t = useTranslations('scheduledProbe');
 
     return (
         <div className="flex items-center gap-2">
+            <IQSettingsButton />
             <MorphingDialog>
                 <MorphingDialogTrigger
                     className={buttonVariants({ variant: 'ghost', size: 'icon', className: 'rounded-xl transition-none text-muted-foreground hover:bg-transparent hover:text-foreground' })}

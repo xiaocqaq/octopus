@@ -32,6 +32,18 @@
     "iqNormalHint": "糖果题答对：{answer}",
     "iqDumbHint": "糖果题答错：答了 {answer}",
     "iqDumbNoAnswerHint": "糖果题没答出可判读的数字",
+    "iqSettings": {
+        "open": "糖果测试设置",
+        "title": "糖果测试设置",
+        "prompt": "题面",
+        "promptPlaceholder": "发给模型的完整题目",
+        "promptHint": "改这里就能换题；保存后下一次测糖果就用新题，已经测过的结论不回溯。",
+        "answer": "标准答案",
+        "answerPlaceholder": "例如 21",
+        "answerHint": "回答里出现它就算通过：纯数字按数字比较（答 210 不算答 21），其他答案按文字包含、忽略大小写。",
+        "save": "保存",
+        "saved": "糖果测试设置已保存"
+    },
     "noTarget": "暂无监控目标",
     "removeCredential": "不再监控这条凭据",
     "dragToSort": "拖动可调整测活顺序",
