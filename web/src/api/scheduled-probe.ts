@@ -58,6 +58,11 @@ export type ScheduledProbe = {
     targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
+    // iq_disabled 为真表示这条任务跳过糖果测试，只发 "hi" 测可用性。
+    // 字段名记的是"关掉"而不是"打开"：缺省（假）即测糖果，于是任何没带这个字段的提交
+    // 都落在"照常测糖果"上，不会因为漏传而把糖果悄悄关掉。开着时每一拍发的就是糖果题，
+    // 因为它同时给出心跳结论（通不通、多快），不需要再发一次 "hi"。
+    iq_disabled: boolean;
     // weekdays 是星期掩码（周一为第 0 位，周日为第 6 位），0 表示不限星期。
     // start_hour 与 end_hour 是每天的整点窗口；两者相等视为整天，start > end 表示跨午夜。
     weekdays: number;
@@ -98,6 +103,9 @@ export type ScheduledProbeInput = {
     targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
+    // iq_disabled 见 ScheduledProbe：缺省即测糖果，关掉才只发 "hi"；提交时不要漏传这一个字段，
+    // 后端是整体替换，漏传等于按"没关"写回去。
+    iq_disabled: boolean;
     weekdays: number;
     start_hour: number;
     end_hour: number;
@@ -390,6 +398,8 @@ export function useMonitorGroup() {
                     targets: [...kept, ...missing],
                     interval_minutes: existing.interval_minutes,
                     enabled: existing.enabled,
+                    // 更新是整体替换: 漏传 iq_disabled 会把用户关掉的糖果测试又打开。
+                    iq_disabled: existing.iq_disabled,
                     weekdays: existing.weekdays,
                     start_hour: existing.start_hour,
                     end_hour: existing.end_hour,

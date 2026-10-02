@@ -103,3 +103,17 @@ func TestWindowOpenAllWeekdays(t *testing.T) {
 		t.Fatalf("七天全选仍应受时段约束")
 	}
 }
+
+// TestIQProbeEnabledDefaultsToOn 零值即"测糖果"。
+//
+// 这是这条链路唯一的承重约定: 老任务(新增列后落在零值)、老请求体、以及任何没带 iq_disabled
+// 的调用方都必须继续测糖果。若反过来以"打开"记录, 一次升级就会让所有在跑的任务静默退回
+// 纯测活 —— 界面上看不出异常, 只是糖果灯永远停在旧结论上, 排查时最费时间的就是这种沉默。
+func TestIQProbeEnabledDefaultsToOn(t *testing.T) {
+	if !(ScheduledProbe{}).IQProbeEnabled() {
+		t.Fatal("零值应视为开启糖果测试")
+	}
+	if (ScheduledProbe{IQDisabled: true}).IQProbeEnabled() {
+		t.Fatal("IQDisabled 为真时应跳过糖果测试")
+	}
+}

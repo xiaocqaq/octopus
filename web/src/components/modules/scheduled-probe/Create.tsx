@@ -22,6 +22,7 @@ export function CreateDialogContent() {
             // 新建时忽略 enabled 开关：用户点了创建就是要它跑起来，
             // 不该在停用状态下躺进列表，还得再去翻卡片开一次。
             enabled: true,
+            iq_disabled: values.iq_disabled,
             weekdays: values.weekdays,
             start_hour: values.start_hour,
             end_hour: values.end_hour,

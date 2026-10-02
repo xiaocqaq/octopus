@@ -25,6 +25,7 @@ export function EditDialogContent({ initial }: EditDialogContentProps) {
             // 编辑保留提交过来的 enabled：开关在卡片上，表单不参与启停，
             // 否则勾一下框又被表单悄悄关掉，就看不懂为什么了。
             enabled: values.enabled,
+            iq_disabled: values.iq_disabled,
             weekdays: values.weekdays,
             start_hour: values.start_hour,
             end_hour: values.end_hour,
@@ -48,6 +49,7 @@ export function EditDialogContent({ initial }: EditDialogContentProps) {
                     targets: initial.targets,
                     interval_minutes: initial.interval_minutes,
                     enabled: initial.enabled,
+                    iq_disabled: initial.iq_disabled,
                     weekdays: initial.weekdays,
                     start_hour: initial.start_hour,
                     end_hour: initial.end_hour,

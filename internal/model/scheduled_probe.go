@@ -40,6 +40,15 @@ type ScheduledProbe struct {
 	Name string `json:"name" gorm:"not null;default:''"`       // 任务的自定义名字, 界面上通常就是模型名。
 	IntervalMinutes int `json:"interval_minutes" gorm:"not null;default:10"` // 两次探测之间的间隔分钟数。
 	Enabled         bool `json:"enabled" gorm:"not null;default:true"`       // 是否参与调度; 停用后不再探测, 配置保留。
+	// IQDisabled 标记这条任务是否跳过糖果测试, 只发"hi"测可用性。
+	//
+	// 记"关掉"而不是"打开": 零值即"测糖果", 于是老任务、老请求体、以及任何没带这个字段的调用方
+	// 都落在"照常测糖果"上 —— 一个默认把功能关掉的字段, 会让"升级后糖果灯不再更新"看起来像故障。
+	// 这也是本仓库既有的偏好(见 ExcludedKeys 的注释: 记排除谁而不是只留谁)。
+	//
+	// 开着时每一拍都直接发糖果题, 不再额外发 "hi": 糖果题的响应本身就带"通不通、多快",
+	// 一次请求同时给出心跳与糖果两个结论, 而分成两种请求只会让同一段时间里多一倍上游流量。
+	IQDisabled bool `json:"iq_disabled" gorm:"not null;default:false"`
 	// Weekdays 是时间窗的星期掩码, 0 表示不限制星期(全天可测)。
 	Weekdays int `json:"weekdays" gorm:"not null;default:0"`
 	// StartHour 与 EndHour 是时间窗的起止整点(0-23), 只在 Weekdays 非 0 时有意义。
@@ -65,6 +74,14 @@ type ScheduledProbe struct {
 	// 用户后来新增的目标或凭据会自然接在末尾, 不必回头再拖一次; 记录里已经消失的项留着也无害 ——
 	// 读的时候只认此刻仍然存在的那些, 不必在删除凭据时回头维护这张表。
 	CreditOrder []string `json:"credit_order" gorm:"serializer:json"`
+}
+
+// IQProbeEnabled 返回这条任务这一拍该问糖果题还是该问 "hi"。
+//
+// 用一个取反的访问器而不是让调用方各自写 !probe.IQDisabled: 调度器判断的是"问什么",
+// 而字段存的是"关没关", 这个转换只该有一处; 将来若再加一层全局开关, 也只改这里。
+func (probe ScheduledProbe) IQProbeEnabled() bool {
+	return !probe.IQDisabled
 }
 
 // ScheduledProbeTarget 是任务下的一个被监控目标: 某个渠道下的某个模型。
@@ -197,6 +214,7 @@ type ScheduledProbeRequest struct {
 	Targets         []ScheduledProbeTargetRequest `json:"targets" binding:"required,min=1,dive"`
 	IntervalMinutes int                           `json:"interval_minutes" binding:"required,min=1,max=1440"` // 探测间隔分钟数。
 	Enabled         bool                          `json:"enabled"`                                            // 是否启用; 创建时忽略该字段, 新建任务一律先启用。
+	IQDisabled      bool                          `json:"iq_disabled"`                                        // 是否跳过糖果测试; 缺省(假)即测糖果, 见 ScheduledProbe.IQDisabled。
 	Weekdays        int                           `json:"weekdays" binding:"min=0,max=127"`                   // 时间窗星期掩码, 0 表示不限制。
 	StartHour       int                           `json:"start_hour" binding:"min=0,max=23"`                  // 时间窗起始整点。
 	EndHour         int                           `json:"end_hour" binding:"min=0,max=23"`                    // 时间窗结束整点。

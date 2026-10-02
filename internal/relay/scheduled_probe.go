@@ -161,10 +161,15 @@ func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
 	credit := credits[scheduledProbeCreditCursor(target.ID)%len(credits)]
 	// 非流式: 定时测活只问"这条通道此刻能不能出结果", 非流式响应体最短, 也不会占着上游连接等首字节;
 	// 界面上那个徽标只看成败, 与流式与否无关。
-	// 到了出题的那一拍, 这一拍就不发 "hi" 而是发智商题: 两者都是"打一次上游要一次响应",
-	// 合并成一拍比各发一次省一次请求, 也让分数的产生时刻与卡片行上的那条结论重合, 界面上不会出现
-	// "徽标刚更新、分数还是上一次"的错位。
-	result := probeScheduledCredit(credit, scheduledProbeIQDue(target.ID))
+	//
+	// 这条任务开着糖果测试时, 每一拍发的都是智商题而不是 "hi": 糖果题的响应本身就带"通不通、多快",
+	// 一次请求同时给出心跳与糖果两个结论, 分成两种请求只会让同一段时间里多一倍上游流量。
+	// 关掉糖果才回到发 "hi" 的纯测活。
+	//
+	// 不再有"每几拍夹一道题"的节流: 糖果开着时它就是这条链路唯一的探针, 夹着测反而会让一部分
+	// 心跳没有糖果结论。糖果题的响应体是 "hi" 的上百倍, 所以这条链路的花销现在由任务的间隔决定 ——
+	// 间隔就是节流阀, 嫌密就调大间隔, 或关掉这条任务的糖果。
+	result := probeScheduledCredit(credit, target.IQProbeEnabled())
 	if result.OK {
 		log.Debugf("scheduled probe ok: task=%d channel=%d model=%s key=%s grant=%d latency=%dms",
 			target.ID, credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName, credit.GrantID, result.LatencyMS)
@@ -181,40 +186,13 @@ func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
 	advanceScheduledProbe(target, now, true)
 }
 
-// iqProbeEveryRounds 是"每几拍测活里夹一道智商题"的节流系数。
-//
-// 不每一拍都问: 智商题的响应体是测活的上百倍(要完整作答而不是一声 "hi"), 成本也随之上去;
-// 而智商分数是个几乎不动的量 —— 同一个模型同一个渠道, 今天答对明天还是答对, 高频复测没有信息量。
-// 每 6 拍问一次意味着最常见的配置(10 分钟间隔、单条凭据)下大约每小时一道题,
-// 分数一天之内就能收敛, 成本却仍是零头。
-const iqProbeEveryRounds = 6
-
-// scheduledProbeIQDue 判断这一拍是否该顺带出智商题。
-//
-// 依据是任务的轮次计数而不是墙上时钟: 轮次是调度器自己的进度量, 与"多久测一次"的配置解耦,
-// 用户把间隔从 10 分钟改成 1 分钟, 出题频率跟着间隔一起变密 —— 这正是想要的效果(测得多就问得多)。
-//
-// 用轮次取模而非"探测成败"决定: 出题与否不该取决于上一拍的结果, 否则一条时好时坏的通道
-// 会随机地出题, 分数也就没法横向比较。只跳过"根本没测通"的情形(见下方调用点)。
-func scheduledProbeIQDue(id int) bool {
-	scheduledProbeMu.Lock()
-	defer scheduledProbeMu.Unlock()
-
-	state := scheduledProbeStates[id]
-	if state == nil {
-		// 无状态即本进程还没测过这条任务, 当前这一拍就是它的第一拍; 从 0 出发时 0%6==0 同样成立。
-		return true
-	}
-	return state.round%iqProbeEveryRounds == 0
-}
-
-// probeScheduledCredit 是定时链路每次探测的统一入口: 到点问智商题, 不到点问可用性。
+// probeScheduledCredit 是定时链路每次探测的统一入口: asksIQ 为真问智商题, 为假问可用性。
 //
 // 两条路都必须经过 ProbeScheduledGrant 的落点动作(记结论 + 落路由状态 + 推增量), 否则
-// 界面上那张卡片不会更新 —— 出题的那一拍如果只发请求不落结论, 用户就会看到"每隔几拍徽标卡住不动"。
+// 界面上那张卡片不会更新 —— 只发请求不落结论, 用户就会看到"徽标卡住不动"。
 // 因此这里不复刻落点逻辑, 而是把"发什么"做成参数传进同一条流水线。
-func probeScheduledCredit(credit op.ScheduledProbeCredit, iqDue bool) ProbeResult {
-	if iqDue {
+func probeScheduledCredit(credit op.ScheduledProbeCredit, asksIQ bool) ProbeResult {
+	if asksIQ {
 		if question, ok := iqQuestionByID(iqDefaultQuestionID); ok {
 			// ProbeScheduledIQGrant 内部就是 ProbeIQGrant + 与 ProbeScheduledGrant 相同的落点三件事。
 			return ProbeScheduledIQGrant(context.Background(), credit.GrantID, question.ID)

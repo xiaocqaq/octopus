@@ -34,6 +34,9 @@ function toInput(probe: ScheduledProbe, enabled: boolean): ScheduledProbeInput {
         targets: probe.targets,
         interval_minutes: probe.interval_minutes,
         enabled,
+        // 糖果开关也要带上: 更新是整体替换, 漏了它就等于按"没关"提交, 用户明明关掉的糖果
+        // 会被卡片上那个启停开关顺手打开 —— 而且没有任何提示。
+        iq_disabled: probe.iq_disabled,
         weekdays: probe.weekdays,
         start_hour: probe.start_hour,
         end_hour: probe.end_hour,

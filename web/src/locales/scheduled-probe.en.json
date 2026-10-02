@@ -79,6 +79,8 @@
         "channelDisabled": "disabled",
         "interval": "Interval (minutes)",
         "intervalHint": "How long one full round takes: every credential is probed once per interval. The interval is divided across the credentials so only one upstream call is made at a time. Each probe is offset by a small jitter (up to ±30s, and never more than a quarter of the interval) so separate tasks do not hit upstream together.",
+        "iq": "Candy test",
+        "iqHint": "While on, every probe sends the candy question instead of 'hi': the answer itself says whether the channel is alive and how fast, so one request yields both the heartbeat and the candy verdict. Turn it off to send only 'hi'. A candy reply is far larger than 'hi', so widen the interval or turn it off if traffic matters.",
         "window": "Probe window",
         "windowHint": "Pick no weekday to probe all day; with weekdays selected, probing happens only inside the window and is skipped outside it.",
         "startHour": "Start hour",

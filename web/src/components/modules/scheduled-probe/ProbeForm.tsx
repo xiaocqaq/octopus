@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { formatHour } from './format';
 import { WeekdayPicker } from './WeekdayPicker';
 import { SearchMultiSelect, type SearchOption } from './SearchMultiSelect';
@@ -25,6 +26,9 @@ export type ProbeFormValues = {
     targets: ScheduledProbeTarget[];
     interval_minutes: number;
     enabled: boolean;
+    // iq_disabled 关掉这条任务的糖果测试：开着时每一拍发的都是糖果题（题目的响应本身就带"通不通、多快"），
+    // 关掉才回到只发 "hi" 的纯测活。字段名记的是"关掉"而不是"打开"，与后端一致：缺省即测糖果。
+    iq_disabled: boolean;
     weekdays: number;
     start_hour: number;
     end_hour: number;
@@ -75,6 +79,9 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
     const [selected, setSelected] = useState<string[]>(initialValues);
     const [name, setName] = useState(initial?.name ?? '');
     const [interval, setIntervalValue] = useState(String(initial?.interval_minutes ?? SCHEDULED_PROBE_DEFAULT_INTERVAL));
+    // 新建默认开着糖果测试: 糖果题的响应本身就回答了"通不通、多快", 它同时是这条链路信息量最大的探针;
+    // 关掉只在"不想为这条通道花糖果题的钱"时才需要。
+    const [iqDisabled, setIqDisabled] = useState(initial?.iq_disabled ?? false);
     const [weekdays, setWeekdays] = useState(initial?.weekdays ?? SCHEDULED_PROBE_DEFAULT_WEEKDAYS);
     const [startHour, setStartHour] = useState(initial?.start_hour ?? SCHEDULED_PROBE_DEFAULT_START_HOUR);
     const [endHour, setEndHour] = useState(initial?.end_hour ?? SCHEDULED_PROBE_DEFAULT_END_HOUR);
@@ -94,6 +101,7 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
             interval_minutes: intervalMinutes,
             // 编辑时保留原有的启停状态：开关在卡片上，表单不该顺手把它打开。
             enabled: initial?.enabled ?? true,
+            iq_disabled: iqDisabled,
             weekdays,
             start_hour: startHour,
             end_hour: endHour,
@@ -150,6 +158,21 @@ export function ProbeForm({ initial, submitText, submittingText, isSubmitting, o
                         />
                         <FieldDescription>{t('form.intervalHint')}</FieldDescription>
                     </Field>
+
+                    {/* 糖果开关紧跟在间隔之后: 它决定的是"这一拍发什么", 与上面那个"多久发一次"是同一组问题;
+                        两者一起看才知道这条任务要花多少上游流量。 */}
+                    <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                            <FieldLabel htmlFor="scheduled-probe-iq">{t('form.iq')}</FieldLabel>
+                            <FieldDescription>{t('form.iqHint')}</FieldDescription>
+                        </div>
+                        <Switch
+                            id="scheduled-probe-iq"
+                            checked={!iqDisabled}
+                            onCheckedChange={(checked) => setIqDisabled(!checked)}
+                            className="mt-0.5"
+                        />
+                    </div>
 
                     <Field>
                         <FieldLabel>{t('form.window')}</FieldLabel>
