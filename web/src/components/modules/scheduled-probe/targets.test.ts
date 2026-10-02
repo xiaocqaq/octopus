@@ -100,5 +100,5 @@ test('buildTargetOptions 去重同名凭据并保留三段标签', () => {
     ];
     const options = buildTargetOptions(candidates);
     assert.equal(options.length, 2);
-    assert.deepEqual(options.map((option) => option.label), ['百倍 default claude-opus-5', '百倍 free claude-opus-5']);
+    assert.deepEqual(options.map((option) => option.label), ['百倍/default/claude-opus-5', '百倍/free/claude-opus-5']);
 });

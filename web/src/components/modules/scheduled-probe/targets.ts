@@ -76,9 +76,11 @@ export function buildTargetOptions(candidates: ChannelGrantCandidate[]): {
             channelId: candidate.channel_id,
             keyName: candidate.key_name,
             modelName: candidate.model_name,
-            // 三段用空格分隔而不是斜杠：渠道名里出现斜杠时（"777云/华东"），
-            // 斜杠分隔就再也分不清哪一段是渠道、哪一段是模型。
-            label: `${candidate.channel_name} ${candidate.key_name} ${candidate.model_name}`,
+            // 三段用斜杠分隔，与卡片行(RowList)的「渠道名/凭据名/模型名」保持同一副面孔：
+            // 下拉里勾的东西，就该和勾完之后卡片上显示的东西长得一样。
+            // 斜杠有歧义（渠道名本身可能带斜杠），但标签只用于展示与搜索；
+            // 选项的身份是上面那个 \u0000 分隔的 value，展示上的歧义不会串到数据里。
+            label: `${candidate.channel_name}/${candidate.key_name}/${candidate.model_name}`,
         });
     }
     return options;
