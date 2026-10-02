@@ -161,7 +161,10 @@ func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
 	credit := credits[scheduledProbeCreditCursor(target.ID)%len(credits)]
 	// 非流式: 定时测活只问"这条通道此刻能不能出结果", 非流式响应体最短, 也不会占着上游连接等首字节;
 	// 界面上那个徽标只看成败, 与流式与否无关。
-	result := ProbeScheduledGrant(context.Background(), credit.GrantID, false)
+	// 到了出题的那一拍, 这一拍就不发 "hi" 而是发智商题: 两者都是"打一次上游要一次响应",
+	// 合并成一拍比各发一次省一次请求, 也让分数的产生时刻与卡片行上的那条结论重合, 界面上不会出现
+	// "徽标刚更新、分数还是上一次"的错位。
+	result := probeScheduledCredit(credit, scheduledProbeIQDue(target.ID))
 	if result.OK {
 		log.Debugf("scheduled probe ok: task=%d channel=%d model=%s key=%s grant=%d latency=%dms",
 			target.ID, credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName, credit.GrantID, result.LatencyMS)
@@ -169,8 +172,73 @@ func runScheduledProbe(target model.ScheduledProbe, now time.Time) {
 		log.Warnf("scheduled probe failed: task=%d channel=%d model=%s key=%s grant=%d latency=%dms message=%s",
 			target.ID, credit.Target.ChannelID, credit.Target.ModelName, credit.KeyName, credit.GrantID, result.LatencyMS, result.Message)
 	}
+	if result.IQ != nil {
+		// 分数单独记原因: IQ 的正确与否不改变可用性结论, 但答错和答对在排查时是两种完全不同的信号
+		// (答错说明模型能力或提示词有问题, 与通道质量无关)。
+		log.Infof("scheduled iq probe: task=%d grant=%d question=%s answer=%q correct=%t latency=%dms",
+			target.ID, credit.GrantID, result.IQ.QuestionID, result.IQ.Answer, result.IQ.Correct, result.LatencyMS)
+	}
 	advanceScheduledProbe(target, now, true)
 }
+
+// iqProbeEveryRounds 是"每几拍测活里夹一道智商题"的节流系数。
+//
+// 不每一拍都问: 智商题的响应体是测活的上百倍(要完整作答而不是一声 "hi"), 成本也随之上去;
+// 而智商分数是个几乎不动的量 —— 同一个模型同一个渠道, 今天答对明天还是答对, 高频复测没有信息量。
+// 每 6 拍问一次意味着最常见的配置(10 分钟间隔、单条凭据)下大约每小时一道题,
+// 分数一天之内就能收敛, 成本却仍是零头。
+const iqProbeEveryRounds = 6
+
+// scheduledProbeIQDue 判断这一拍是否该顺带出智商题。
+//
+// 依据是任务的轮次计数而不是墙上时钟: 轮次是调度器自己的进度量, 与"多久测一次"的配置解耦,
+// 用户把间隔从 10 分钟改成 1 分钟, 出题频率跟着间隔一起变密 —— 这正是想要的效果(测得多就问得多)。
+//
+// 用轮次取模而非"探测成败"决定: 出题与否不该取决于上一拍的结果, 否则一条时好时坏的通道
+// 会随机地出题, 分数也就没法横向比较。只跳过"根本没测通"的情形(见下方调用点)。
+func scheduledProbeIQDue(id int) bool {
+	scheduledProbeMu.Lock()
+	defer scheduledProbeMu.Unlock()
+
+	state := scheduledProbeStates[id]
+	if state == nil {
+		// 无状态即本进程还没测过这条任务, 当前这一拍就是它的第一拍; 从 0 出发时 0%6==0 同样成立。
+		return true
+	}
+	return state.round%iqProbeEveryRounds == 0
+}
+
+// probeScheduledCredit 是定时链路每次探测的统一入口: 到点问智商题, 不到点问可用性。
+//
+// 两条路都必须经过 ProbeScheduledGrant 的落点动作(记结论 + 落路由状态 + 推增量), 否则
+// 界面上那张卡片不会更新 —— 出题的那一拍如果只发请求不落结论, 用户就会看到"每隔几拍徽标卡住不动"。
+// 因此这里不复刻落点逻辑, 而是把"发什么"做成参数传进同一条流水线。
+func probeScheduledCredit(credit op.ScheduledProbeCredit, iqDue bool) ProbeResult {
+	if iqDue {
+		if question, ok := iqQuestionByID(iqDefaultQuestionID); ok {
+			// ProbeScheduledIQGrant 内部就是 ProbeIQGrant + 与 ProbeScheduledGrant 相同的落点三件事。
+			return ProbeScheduledIQGrant(context.Background(), credit.GrantID, question.ID)
+		}
+	}
+	return ProbeScheduledGrant(context.Background(), credit.GrantID, false)
+}
+
+// ProbeScheduledIQGrant 出一道智商题, 并把结论当作一次定时测活的结论落地。
+//
+// 落点与 ProbeScheduledGrant 逐字相同(记凭据结论 / 落分组路由 / 推路由增量): 出题的那一拍
+// 在调度语义上就是这一拍的测活, 只是问了句更难的话, 结论理应走同一条发布路径。
+// 单独写出来而不是给 ProbeScheduledGrant 加个可选参数: 那个参数会被所有调用点带上,
+// 而"要不要问题"只是调度器在一处的判断, 不该扩散到整条调用链的签名里。
+func ProbeScheduledIQGrant(ctx context.Context, grantID int, questionID string) ProbeResult {
+	result := withProbeExpiry(ProbeIQGrant(ctx, grantID, questionID), grantID)
+	recordScheduledProbeResult(grantID, result)
+	notifyProbeLanded(landScheduledProbe(grantID, result))
+	return result
+}
+
+// iqDefaultQuestionID 是定时链路默认抽的题。目前题库只有一道, 因此"抽题"退化成取题;
+// 保留这个常量是为了将来题库变长时, 出题策略(轮换 / 固定 / 按难度)在一处改动即可。
+const iqDefaultQuestionID = "candy-21"
 
 // scheduledProbeCreditCursor 返回该任务轮转到的凭据下标; 无记录时为 0。
 func scheduledProbeCreditCursor(id int) int {
@@ -389,6 +457,32 @@ func ProbeScheduledNow(ctx context.Context, probe model.ScheduledProbe) ([]Probe
 // 既多打了上游, 也让"我点的是这一行"这个意图落空。
 func ProbeGrantNow(ctx context.Context, grantID int) ProbeResult {
 	return ProbeScheduledGrant(ctx, grantID, false)
+}
+
+// ProbeScheduledIQNow 手动把整条任务的每条凭据都问一遍智商题。
+//
+// 与 ProbeScheduledNow 并列而不是给它加个"要不要出题"的开关: 那两个按钮在界面上是两件事,
+// 用户点闪电是想知道"通道此刻通不通"(结论是通/不通), 点糖果是想知道"模型此刻笨不笨"
+// (结论是正常/降智)。合成一个入口就得让调用方先想清楚自己要哪种语义, 而按钮本来就已经想清楚了。
+//
+// 走 probeByChannel 与定时链路同一条并发约束: 糖果题的响应体是测活的上百倍,
+// 一个任务几十条凭据全并发打出去, 上游那边看到的就是一次突发。
+func ProbeScheduledIQNow(ctx context.Context, probe model.ScheduledProbe) ([]ProbeResult, error) {
+	question, ok := iqQuestionByID(iqDefaultQuestionID)
+	if !ok {
+		return nil, fmt.Errorf("iq question %q not found", iqDefaultQuestionID)
+	}
+	credits := op.ScheduledProbeCredits(probe)
+	if len(credits) == 0 {
+		return nil, fmt.Errorf("no available credential for this probe")
+	}
+	channelIDs := make([]int, len(credits))
+	for index, credit := range credits {
+		channelIDs[index] = credit.Target.ChannelID
+	}
+	return probeByChannel(channelIDs, func(index int) ProbeResult {
+		return ProbeScheduledIQGrant(ctx, credits[index].GrantID, question.ID)
+	}), nil
 }
 
 // landScheduledProbe 把结论落到引用该授权的每个分组成员上, 返回需要处理器补推事件的分组 ID。

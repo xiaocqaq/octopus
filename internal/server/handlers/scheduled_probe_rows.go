@@ -45,6 +45,7 @@ func probeRowsOf(probe model.ScheduledProbe, results []relay.ProbeResult) []mode
 		row.LatencyMS = result.LatencyMS
 		row.Message = result.Message
 		row.ProbedAt = result.ProbedAt
+		row.IQAsked, row.IQAnswer, row.IQCorrect = iqFieldsOf(result)
 		rows = append(rows, row)
 	}
 	return rows
@@ -72,7 +73,20 @@ func withProbeResult(row model.ScheduledProbeRow, results map[int]relay.ProbeRes
 	row.LatencyMS = result.LatencyMS
 	row.Message = result.Message
 	row.ProbedAt = result.ProbedAt
+	row.IQAsked, row.IQAnswer, row.IQCorrect = iqFieldsOf(result)
 	return row
+}
+
+// iqFieldsOf 把智商结论摊成三个平铺字段。
+//
+// 没问过(IQ 为 nil)与"问了但答不出可判分的答案"(IQ 非 nil、Answer 为空)在界面上是两种状态:
+// 前者这一格整个不出现, 后者要显示成"降智"。两者的 Answer 都是空串, 因此"问没问过"必须由
+// 单独一个布尔承担, 而不是靠 Answer 是否为空反推 —— 反推会把后一种状态静默吞成"没问过"。
+func iqFieldsOf(result relay.ProbeResult) (bool, string, bool) {
+	if result.IQ == nil {
+		return false, "", false
+	}
+	return true, result.IQ.Answer, result.IQ.Correct
 }
 
 // creditGrantIDs 取出凭据列表里的授权主键, 供一次性批量查结论。

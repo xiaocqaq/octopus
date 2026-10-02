@@ -151,6 +151,18 @@ type ScheduledProbeRow struct {
 	LatencyMS   int64  `json:"latency_ms"`   // 从发起到收到有效响应的耗时毫秒数。
 	Message     string `json:"message"`      // 成功时为空, 失败时为上游错误正文或本地配置错误。
 	ProbedAt    int64  `json:"probed_at"`    // 结论产生时间, Unix 毫秒。
+	// IQAsked 标记这一行有没有被问过智商题。它必须与 IQAnswer 分开:
+	// "没问过"和"问了但答不出可判分的答案"在界面上是两种状态(前者什么都不该显示, 后者要显示降智),
+	// 而两者的 IQAnswer 都是空串 —— 只看答案就把后一种状态吞掉了。
+	IQAsked bool `json:"iq_asked"`
+	// IQAnswer 是最近一次智商探针里模型给出的答案(提取末尾整数后的结果), 答不出可判分的答案时为空。
+	IQAnswer string `json:"iq_answer"`
+	// IQCorrect 标记那次回答是否与标准答案一致; 只在 IQAsked 为真时有意义。
+	//
+	// 平铺三个字段而不是嵌套一个可空对象, 与上面那批结论字段同一理由: 前端少一层判空。
+	// 分数本身不含"满分是多少" —— 题库每题一分, 判分口径是精确匹配, 所以对错就是全部信息,
+	// 把一个恒为 1 的分母下发给界面只会让两边各自去猜它的含义。
+	IQCorrect bool `json:"iq_correct"`
 }
 
 // ScheduledProbeView 是定时测活任务的列表项: 任务配置加两处现算的展示字段。

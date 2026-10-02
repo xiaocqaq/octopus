@@ -102,7 +102,7 @@ func ProbeItem(ctx context.Context, groupID, itemID int, streaming bool) (ProbeR
 		return recordProbe(group, itemID, false, err.Error(), 0), nil
 	}
 
-	request, err := buildProbeRequest(ctx, outbound, channel, channelModel.Name, streaming)
+	request, err := buildProbeRequest(ctx, outbound, channel, channelModel.Name, probePrompt, probeMaxTokens, streaming)
 	if err != nil {
 		return recordProbe(group, itemID, false, err.Error(), 0), nil
 	}
@@ -178,13 +178,17 @@ func ProbeGroup(ctx context.Context, groupID int, itemIDs []int, streaming bool)
 
 // buildProbeRequest 构造一次测活的上游请求。地址与认证取自出站转换器对占位请求的转换结果,
 // 与 buildPassthroughRequest 同源, 使测活与转发的地址拼接规则不会分歧; 请求体由本函数自己造, 不依赖客户端请求。
-func buildProbeRequest(ctx context.Context, outbound transformer.Outbound, channel model.Channel, modelName string, streaming bool) (*httpclient.Request, error) {
+//
+// prompt 与 maxTokens 由调用方给定: 普通测活只要"上游尽快出声", 给 probePrompt/probeMaxTokens;
+// 智商探针要模型完整作答, 给题面与 iqProbeMaxTokens。把这两项参数化而不是让本函数分辨测活类型,
+// 是因为"发什么话"属于调用方的意图, 不属于地址与认证的拼接规则。
+func buildProbeRequest(ctx context.Context, outbound transformer.Outbound, channel model.Channel, modelName string, prompt string, maxTokens int64, streaming bool) (*httpclient.Request, error) {
 	streamFlag := streaming
 	request, err := outbound.TransformRequest(ctx, &llm.Request{
 		Model:     modelName,
-		Messages:  []llm.Message{{Role: "user", Content: llm.MessageContent{Content: stringPtr(probePrompt)}}},
+		Messages:  []llm.Message{{Role: "user", Content: llm.MessageContent{Content: stringPtr(prompt)}}},
 		Stream:    &streamFlag,
-		MaxTokens: int64Ptr(probeMaxTokens),
+		MaxTokens: int64Ptr(maxTokens),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resolve upstream endpoint: %w", err)
@@ -201,6 +205,32 @@ func runProbe(ctx context.Context, outbound transformer.Outbound, channel model.
 		return probePassthrough(ctx, outbound, channel, modelName, request, streaming)
 	}
 	return probeConverted(ctx, outbound, channel, request, streaming)
+}
+
+// runProbeBody 与 runProbe 走同两条发送路径, 但把非流式响应的正文带回来。
+//
+// 存在的理由: runProbe 及它的两条实现只回答"通不通", 流式下更是拿到首事件就关流,
+// 正文从不流过手边。智商探针必须读到模型说的话才能判分, 于是需要一条"读完整正文"的路径。
+//
+// 只做非流式: 流式下要拼齐整个事件流才能得到完整回答, 而探针用非流式一次拿全更简单可靠 ——
+// 定时测活本来就是非流式(见 runScheduledProbe), 这条限制不牺牲任何现有能力。
+// streaming 为真时返回 nil 正文, 调用方据此把结论记为"未问出答案"而不是判错。
+func runProbeBody(ctx context.Context, outbound transformer.Outbound, channel model.Channel, modelName string, request *httpclient.Request, passthrough, streaming bool) ([]byte, error) {
+	if streaming {
+		return nil, runProbe(ctx, outbound, channel, modelName, request, passthrough, streaming)
+	}
+	if passthrough {
+		result, err := sendPassthrough(ctx, outbound.APIFormat(), request, channel, outbound, false, modelName)
+		if err != nil {
+			return nil, err
+		}
+		return result.body, nil
+	}
+	result, err := sendConverted(ctx, outbound.APIFormat(), request, channel, outbound, false)
+	if err != nil {
+		return nil, err
+	}
+	return result.body, nil
 }
 
 // probePassthrough 以同协议透传方式发一次测活请求并判定成败。
@@ -265,7 +295,7 @@ func ProbeChannelGrant(ctx context.Context, grantID int, streaming bool) ProbeRe
 	if err != nil {
 		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
 	}
-	request, err := buildProbeRequest(ctx, outbound, channel, channelModel.Name, streaming)
+	request, err := buildProbeRequest(ctx, outbound, channel, channelModel.Name, probePrompt, probeMaxTokens, streaming)
 	if err != nil {
 		return ProbeResult{ItemID: grantID, Message: err.Error(), ProbedAt: time.Now().UnixMilli()}
 	}

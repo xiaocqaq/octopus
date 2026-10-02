@@ -42,6 +42,10 @@ func init() {
 				Handle(probeGrantNow),
 		).
 		AddRoute(
+			router.NewRoute("/iq/:id", http.MethodPost).
+				Handle(probeScheduledIQNow),
+		).
+		AddRoute(
 			router.NewRoute("/credential/:id", http.MethodPost).
 				Handle(setScheduledProbeCredential),
 		).
@@ -120,6 +124,32 @@ func probeGrantNow(c *gin.Context) {
 	}
 	result := relay.ProbeGrantNow(c.Request.Context(), grantID)
 	resp.Success(c, result)
+}
+
+// probeScheduledIQNow 手动把整条任务的每条凭据都问一遍智商题, 供卡片上的糖果按钮使用。
+//
+// 与 probeScheduledNow 同形(入参、错误码、返回的行形状都一致), 差别只在发出去的请求:
+// 那一处发 "hi" 要一个可用性结论, 这一处发糖果题要一个能力结论。返回整行而不是只返回对错,
+// 是因为界面上要更新的正是那一行的智商那一格 —— 形状一致, 前端不必写第二套更新逻辑。
+func probeScheduledIQNow(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	probe, ok := op.ScheduledProbeGet(id)
+	if !ok {
+		resp.Error(c, http.StatusNotFound, "scheduled probe not found")
+		return
+	}
+
+	results, err := relay.ProbeScheduledIQNow(c.Request.Context(), probe)
+	if err != nil {
+		// 与立即测活同一口径: 没有可测凭据是配置状态而不是通道故障, 回请求错误让前端提示去检查渠道。
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp.Success(c, probeRowsOf(probe, results))
 }
 
 func createScheduledProbe(c *gin.Context) {
