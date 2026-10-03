@@ -62,11 +62,19 @@ func repoSlug(repo string) string {
 	return strings.Trim(parsed.Path, "/")
 }
 
+type LatestAsset struct {
+	Name string `json:"name"`
+	// URL 是 API 形式的资产地址 (https://api.github.com/repos/{owner}/{repo}/releases/assets/{id})。
+	// 它指向 api.github.com 而不是 github.com —— 后者在国内常被整段黑洞, 前者却能直连, 见 releaseAssetURL。
+	URL string `json:"url"`
+}
+
 type LatestInfo struct {
-	TagName     string `json:"tag_name"`
-	PublishedAt string `json:"published_at"`
-	Body        string `json:"body"`
-	Message     string `json:"message"`
+	TagName     string        `json:"tag_name"`
+	PublishedAt string        `json:"published_at"`
+	Body        string        `json:"body"`
+	Message     string        `json:"message"`
+	Assets      []LatestAsset `json:"assets"`
 }
 
 var github_pat = os.Getenv(strings.ToUpper(conf.APP_NAME) + "_GITHUB_PAT")
@@ -188,13 +196,22 @@ func newGetRequest(ctx context.Context, rawURL string) (*http.Request, error) {
 	return req, nil
 }
 
-// doGet 发起 GET 并校验状态码, 成功时返回未读取的响应, 由调用方负责关闭。
-func doGet(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
+// newDownloadRequest 与 newGetRequest 相同, 但为 API 形式的资产地址补上
+// Accept: application/octet-stream。少了这个头, GitHub 返回的是资产元数据 JSON 而不是归档本身,
+// 落盘后解压只会得到 "zip: not a valid zip file" 这类与真实原因无关的报错。
+func newDownloadRequest(ctx context.Context, rawURL string) (*http.Request, error) {
 	req, err := newGetRequest(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
+	if isReleaseAssetURL(rawURL) {
+		req.Header.Set("Accept", "application/octet-stream")
+	}
+	return req, nil
+}
 
+// fetch 发起请求并校验状态码, 成功时返回未读取的响应, 由调用方负责关闭。
+func fetch(client *http.Client, req *http.Request) (*http.Response, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -208,6 +225,15 @@ func doGet(ctx context.Context, client *http.Client, rawURL string) (*http.Respo
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	return resp, nil
+}
+
+// doGet 发起 GET 并校验状态码, 成功时返回未读取的响应, 由调用方负责关闭。
+func doGet(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
+	req, err := newGetRequest(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	return fetch(client, req)
 }
 
 // metadataCandidateBuilder / downloadCandidateBuilder 允许测试注入候选链。
@@ -249,11 +275,56 @@ func readMetadata(ctx context.Context, client *http.Client, rawURL string) ([]by
 	return io.ReadAll(resp.Body)
 }
 
-// download 把发布归档流式落到 dst: 依次尝试各条链路, 全部失败才报错。
+// isReleaseAssetURL 判断地址是否为 GitHub 的资产 API 形式。
+// 只有这种地址才需要 Accept: application/octet-stream, 传统地址 (github.com/.../download/...)
+// 直接就是归档, 多带这个头并不会改变返回内容, 但没必要。
+func isReleaseAssetURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(parsed.Path, "/releases/assets/")
+}
+
+// releaseAssetURL 从 releases/latest 的响应里挑出指定文件名的 API 资产地址。
+// 找不到(旧缓存里没有 assets 字段、或该平台归档缺失)时返回空字符串, 由调用方跳过这一档。
+func releaseAssetURL(info *LatestInfo, filename string) string {
+	if info == nil || filename == "" {
+		return ""
+	}
+	for _, asset := range info.Assets {
+		if asset.Name == filename && asset.URL != "" {
+			return asset.URL
+		}
+	}
+	return ""
+}
+
+// download 把发布归档流式落到 dst: 依次尝试给定地址, 每个地址再依次尝试各条链路。
 // 与元数据查询不同, 这里用 downloadTimeout, 且不把整包读进内存 —— 归档二十余兆,
 // 而更新只发生在服务端, 一次多占几十兆内存换不来任何好处。
-func download(rawURL, dst string) error {
-	return downloadWithCandidates(downloadCandidateBuilder(), rawURL, dst)
+//
+// 之所以要多个地址: 传统地址落在 github.com, 而国内它常被整段黑洞 —— TCP 握手耗满超时
+// 才报 connectex, 表现成"能看到新版本, 一点更新就失败"。api.github.com 的资产地址
+// (/repos/{owner}/{repo}/releases/assets/{id}) 走的是另一个域名, 常常仍能直连, 实测
+// 22 525 593 字节的归档可在 690 秒内完整下完(约 32 KB/s)。因此把它作为兜底地址。
+func download(urls []string, dst string) error {
+	cands := downloadCandidateBuilder()
+	var lastErr error
+	for _, rawURL := range urls {
+		if rawURL == "" {
+			continue
+		}
+		if err := downloadWithCandidates(cands, rawURL, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no download url available")
+	}
+	return lastErr
 }
 
 // downloadWithCandidates 按给定顺序尝试链路把归档流式落到 dst, 全部失败才报错。
@@ -284,7 +355,11 @@ func downloadVia(cand candidate, rawURL, dst string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
 	defer cancel()
 
-	resp, err := doGet(ctx, cand.client, rawURL)
+	req, err := newDownloadRequest(ctx, rawURL)
+	if err != nil {
+		return err
+	}
+	resp, err := fetch(cand.client, req)
 	if err != nil {
 		return err
 	}
@@ -304,32 +379,71 @@ func downloadVia(cand candidate, rawURL, dst string) error {
 	return nil
 }
 
+// progressReader 在每次真正读到数据后, 往 progress 里塞一个非阻塞信号。
+// 缓冲为 1 且发送不阻塞: 读取方只要看到"刚有过数据"就够了, 丢信号不影响判定。
+type progressReader struct {
+	reader   io.Reader
+	progress chan<- struct{}
+}
+
+func (p progressReader) Read(b []byte) (int, error) {
+	n, err := p.reader.Read(b)
+	if n > 0 {
+		select {
+		case p.progress <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
 // copyWithIdleTimeout 让下载同时受总超时和读空闲超时约束。
 // http.Client 的总超时只能限制整个请求, 对持续保持连接但不再发送数据的 CDN/代理无效;
-// 这里在空闲窗口到期时主动关闭响应体, 解除阻塞的 Read。
+// 这里自己盯住读取进度: 每读到一段数据就把空闲计时器整个往后推, 只有连续 idle 时长内
+// 一个字节都没读到, 才关掉响应体解除阻塞的 Read 并判定失败。
+//
+// 有数据时必须重置计时器。早期实现只在开始时启动一次性计时器, 从不重置, 于是 idle 事实上
+// 变成整包下载的硬上限: 45 秒内传不完二十余兆(即吞吐低于约 500 KB/s)就必然失败。
+// 国内直连实测只有 40~70 KB/s, 需要约 8 分钟, 因此与版本无关地永远更新不了 ——
+// 表现正是"点了更新等半天, 版本号还是旧的"。注意这个缺陷与网络是否可用无关。
 func copyWithIdleTimeout(dst io.Writer, src io.ReadCloser, idle time.Duration) (int64, error) {
 	type result struct {
 		written int64
 		err     error
 	}
 	resultCh := make(chan result, 1)
+	progress := make(chan struct{}, 1)
+
 	go func() {
-		written, err := io.Copy(dst, src)
+		written, err := io.Copy(dst, progressReader{reader: src, progress: progress})
 		resultCh <- result{written: written, err: err}
 	}()
 
 	timer := time.NewTimer(idle)
 	defer timer.Stop()
-	select {
-	case result := <-resultCh:
-		return result.written, result.err
-	case <-timer.C:
-		_ = src.Close()
-		result := <-resultCh
-		if result.err != nil {
+
+	for {
+		select {
+		case result := <-resultCh:
+			return result.written, result.err
+		case <-progress:
+			// 有数据流动, 把整个空闲窗口重新计时。
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idle)
+		case <-timer.C:
+			_ = src.Close()
+			result := <-resultCh
+			if result.err == nil {
+				// 竞态: 计时器到期的同一刻数据也读完了, 按成功处理, 不误报超时。
+				return result.written, nil
+			}
 			return result.written, fmt.Errorf("download idle timeout after %s: %w", idle, result.err)
 		}
-		return result.written, fmt.Errorf("download idle timeout after %s", idle)
 	}
 }
 

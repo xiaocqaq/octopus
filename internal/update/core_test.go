@@ -38,6 +38,67 @@ func TestCopyWithIdleTimeoutStopsStalledDownload(t *testing.T) {
 	}
 }
 
+// 回归测试: 只要有数据持续流动, 空闲计时器就必须被不断推后。
+// 早期实现只启动一次性计时器且从不重置, 于是 idle 变成整包下载的硬上限,
+// 45 秒内传不完包的慢速链路(国内直连约 40~70 KB/s, 二十余兆需要约 8 分钟)必然失败。
+func TestCopyWithIdleTimeoutAllowsSlowButSteadyDownload(t *testing.T) {
+	const chunks = 20
+	const idle = 30 * time.Millisecond
+
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	go func() {
+		for i := 0; i < chunks; i++ {
+			if _, err := writer.Write([]byte("x")); err != nil {
+				return
+			}
+			// 每次间隔远小于 idle, 但总体耗时(chunks*10ms=200ms)远超 idle。
+			time.Sleep(10 * time.Millisecond)
+		}
+		_ = writer.Close()
+	}()
+
+	var dst bytes.Buffer
+	written, err := copyWithIdleTimeout(&dst, reader, idle)
+	if err != nil {
+		t.Fatalf("slow but steady download must not time out, got %v", err)
+	}
+	if written != chunks || dst.Len() != chunks {
+		t.Fatalf("expected %d bytes copied, got %d/%d", chunks, written, dst.Len())
+	}
+}
+
+// 计时器到期的同一刻数据也读完时, 不能把成功的下载误报成超时。
+// 用一个"一次读完就 EOF"的源, 配合极短 idle, 让 resultCh 与 timer 同时就绪,
+// select 会在两者间随机选择; 无论选到哪支都必须返回成功。
+type oneShotReader struct {
+	data []byte
+	done bool
+}
+
+func (r *oneShotReader) Read(b []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(b, r.data), io.EOF
+}
+
+func (r *oneShotReader) Close() error { return nil }
+
+func TestCopyWithIdleTimeoutDoesNotMisreportCompletion(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		var dst bytes.Buffer
+		written, err := copyWithIdleTimeout(&dst, &oneShotReader{data: []byte("done")}, time.Nanosecond)
+		if err != nil {
+			t.Fatalf("iteration %d: completed download must not fail, got %v", i, err)
+		}
+		if written != 4 || dst.String() != "done" {
+			t.Fatalf("iteration %d: expected 4 bytes %q, got %d %q", i, "done", written, dst.String())
+		}
+	}
+}
+
 func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {

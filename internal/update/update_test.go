@@ -1,6 +1,7 @@
 package update
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -142,6 +143,82 @@ func TestGetLatestInfoServesStaleOnRateLimit(t *testing.T) {
 	}
 	if second.TagName != "v0.13.10" {
 		t.Fatalf("stale result wrong: %s", second.TagName)
+	}
+}
+
+func TestReleaseAssetURLPicksMatchingAsset(t *testing.T) {
+	payload, err := json.Marshal(LatestInfo{
+		TagName: "v0.13.10",
+		Assets: []LatestAsset{
+			{Name: "octopus-darwin-arm64.zip", URL: "https://api.github.com/repos/o/r/releases/assets/1"},
+			{Name: "octopus-linux-amd64.zip", URL: "https://api.github.com/repos/o/r/releases/assets/2"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info LatestInfo
+	if err := json.Unmarshal(payload, &info); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := releaseAssetURL(&info, "octopus-linux-amd64.zip"); got != "https://api.github.com/repos/o/r/releases/assets/2" {
+		t.Fatalf("unexpected asset url: %q", got)
+	}
+	// 该平台没有归档时必须返回空串, 让调用方跳过这一档, 而不是拼出一个必然 404 的地址。
+	if got := releaseAssetURL(&info, "octopus-windows-amd64.zip"); got != "" {
+		t.Fatalf("expected empty url for missing asset, got %q", got)
+	}
+	if got := releaseAssetURL(nil, "octopus-linux-amd64.zip"); got != "" {
+		t.Fatalf("expected empty url for nil info, got %q", got)
+	}
+}
+
+func TestIsReleaseAssetURL(t *testing.T) {
+	cases := map[string]bool{
+		"https://api.github.com/repos/o/r/releases/assets/605946988":                true,
+		"https://github.com/o/r/releases/latest/download/octopus-linux-amd64.zip":   false,
+		"https://github.com/o/r/releases/download/v0.13.10/octopus-linux-amd64.zip": false,
+	}
+	for in, want := range cases {
+		if got := isReleaseAssetURL(in); got != want {
+			t.Errorf("isReleaseAssetURL(%q)=%v want %v", in, got, want)
+		}
+	}
+}
+
+// 传统地址(github.com)被黑洞时, 必须能退到 api.github.com 的资产地址 —— 这是本次修复的核心路径。
+func TestDownloadFallsBackToSecondURL(t *testing.T) {
+	payload := strings.Repeat("y", 4096)
+	asset := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 资产 API 地址必须带 Accept: application/octet-stream, 否则拿到的是元数据 JSON。
+		if r.Header.Get("Accept") != "application/octet-stream" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+			return
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer asset.Close()
+
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer dead.Close()
+
+	stubCandidates(t, []candidate{stubCandidate("test", asset)})
+
+	dst := t.TempDir() + "/archive.zip"
+	urls := []string{dead.URL + "/octopus-linux-amd64.zip", asset.URL + "/repos/o/r/releases/assets/2"}
+	if err := download(urls, dst); err != nil {
+		t.Fatalf("download should fall back to the asset url, got %v", err)
+	}
+	got, err := readFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(payload) {
+		t.Fatalf("expected %d bytes, got %d", len(payload), len(got))
 	}
 }
 

@@ -38,8 +38,20 @@ func UpdateCore() error {
 		return err
 	}
 
-	downloadUrl := updateUrl + "/" + filename
-	log.Infof("download url: %s", downloadUrl)
+	// 下载地址按"最可能成功"排序: 传统地址 (github.com/.../releases/latest/download/{asset}) 在前,
+	// 保留了配了代理的机器原有的快速路径; api.github.com 的资产地址作为兜底 —— 它落在另一个域名上,
+	// 国内 github.com 被整段黑洞时它往往仍能直连(实测可完整下完, 约 32 KB/s)。
+	downloadUrls := []string{updateUrl + "/" + filename}
+	if info, err := GetLatestInfo(); err == nil {
+		if assetURL := releaseAssetURL(info, filename); assetURL != "" {
+			downloadUrls = append(downloadUrls, assetURL)
+		} else {
+			log.Debugf("no api asset url for %s in latest release; only trying %s", filename, downloadUrls[0])
+		}
+	} else {
+		log.Warnf("get latest info failed, cannot fall back to the api asset url: %v", err)
+	}
+	log.Infof("download urls: %s", strings.Join(downloadUrls, ", "))
 
 	execPath, err := currentExecutablePath()
 	if err != nil {
@@ -58,7 +70,7 @@ func UpdateCore() error {
 
 	// 落盘再解压: 归档二十余兆, 直接读进内存没有意义, 而解压需要读到文件尾部。
 	archivePath := filepath.Join(tmpDir, filename)
-	if err := download(downloadUrl, archivePath); err != nil {
+	if err := download(downloadUrls, archivePath); err != nil {
 		log.Warnf("download failed: %v", err)
 		log.Warnf("if this host cannot reach the GitHub release CDN, set a proxy in Settings (proxy_url); the download timeout is %s", downloadTimeout)
 		return err
