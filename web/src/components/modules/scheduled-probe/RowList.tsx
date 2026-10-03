@@ -221,10 +221,18 @@ function Row({ probeId, row, now, dnd }: { probeId: number; row: ScheduledProbeR
                 </TooltipContent>
             </Tooltip>
 
+            {/* 结论产生于多久以前必须留在正文里: 只看两颗灯的颜色, 分不出"刚才测的"和"昨天测的"——
+                颜色一样, 但可信度完全不同(结论不设有效期, 只会被下一次测活覆盖)。
+                只写相对时间, 不写耗时: "6792ms" 属于详情, 写在行里会把身份挤没, 它留在悬停提示里。 */}
+            {row.probed && (
+                <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
+                    {describeProbedAt(row.probed_at, now, t)}
+                </span>
+            )}
+
             {/* 两颗结论灯: 心跳在前(原来的闪电就站在这个位置, 职责也相同 —— 只测这一条凭据),
                 糖果在后。两个都是"既是按钮又是结论": 点它发起测试, 颜色说上一次的结论。
-                正文一律不进这一行: 行里已经塞了「渠道/凭据/模型」三段身份, 再写"通过 · 6792ms"
-                就会把身份挤没(实测过), 所以耗时、过期时间、模型答了几全部只在悬停提示里出现。 */}
+                耗时、过期时间、模型答了几仍然只在悬停提示里 —— 正文只留"多久以前"。 */}
             <ResultIconButton
                 icon={HeartPulse}
                 tone={!row.probed ? 'idle' : row.ok ? 'ok' : 'bad'}
