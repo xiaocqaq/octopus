@@ -2,7 +2,14 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.9.7
+// Version v0.13.9.8
+// 修复内置更新(core): 下载的空闲超时原来是在开始处起的一次性计时器、整个拷贝过程从不重置,
+// 于是 45 秒实际成了整包下载的硬上限 —— 二十余兆的归档在 45 秒内传不完(吞吐低于约 500 KB/s)
+// 就必然失败, 国内直连实测约 32 KB/s、需要约 690 秒。现在每读到数据就重置计时器。
+// 下载地址也从单一地址改为「传统地址 (github.com/.../releases/latest/download) + api.github.com
+// 资产地址」两档: 前者落在被黑洞的域名上时, 后者往往仍能直连(资产地址需要 Accept:
+// application/octet-stream, 否则拿到的是资产元数据 JSON)。
+// 模型监控的行内恢复显示结论时间(多久以前), 只看两颗灯的颜色分不出「刚才测的」和「昨天测的」。
 // 「模型监控」接入糖果(智商)测试: 每条任务一个开关, 开着时每一拍直接发糖果题(题目响应本身就带
 // 通不通与耗时), 关掉只发 "hi" 心跳; 题面与标准答案在设置里可改, 判分按"回答里出现答案"算通过
 // (整数按数值比较、文本按包含), 并认全 OpenAI Chat / Anthropic Messages / OpenAI Responses
