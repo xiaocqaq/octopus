@@ -5,16 +5,16 @@ import JsonView from '@uiw/react-json-view';
 import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
 import { githubLightTheme } from '@uiw/react-json-view/githubLight';
 import { useTheme } from '@/provider/theme';
-import { type RelayLogOverview, useLogRequestBody, useLogResponseBody, useStopRequest } from '@/api/log';
+import { type RelayLogOverview, getRetryErrors, useLogRequestBody, useLogResponseBody, useStopRequest } from '@/api/log';
 import { useGroup, useUpdateGroup } from '@/api/group';
 import { Protocol } from '@/api/channel';
 import { getModelIcon } from '@/lib/model-icons';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { CopyIconButton } from '@/components/common/CopyButton';
 import { toast } from 'sonner';
 import { MemberStatus } from '@/components/modules/group/MemberStatus';
+import { RetryHistory, RetryHistoryPending } from '@/components/modules/log/RetryHistory';
 import {
     MorphingDialog,
     MorphingDialogTrigger,
@@ -108,15 +108,6 @@ function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; 
     ));
 }
 
-// ObservedRound 保存弹窗打开期间观察到的一轮上游请求状态。
-interface ObservedRound {
-    round: number; // 当前请求内递增的轮次序号。
-    channelKey: string; // 本轮实际请求的渠道名称和 Key 名称, 以空格分隔。
-    error: string; // 本轮最近一次上游错误。
-    sending: boolean; // 本轮是否仍在等待上游响应。
-    startedAt: string; // 服务端记录的本轮开始时间。
-}
-
 // JsonContent 渲染请求或响应正文, 能解析为 JSON 时使用折叠视图, 否则按纯文本展示。
 function JsonContent({ content, fallbackText }: { content: string | object | undefined; fallbackText: string }) {
     const { resolvedTheme } = useTheme();
@@ -166,12 +157,10 @@ function JsonContent({ content, fallbackText }: { content: string | object | und
 }
 
 // LogDetail 渲染日志详情弹窗内容, 仅在弹窗打开期间挂载, 由此避免列表中的卡片持有详情查询和状态。
-function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: number; errorRounds: ObservedRound[] }) {
+function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
     const t = useTranslations('log.card');
     const statusT = useTranslations('log.status');
     const [leftTab, setLeftTab] = useState<'request' | 'group'>('group');
-    const [rounds, setRounds] = useState<ObservedRound[]>(errorRounds);
-    const [observedRoundKey, setObservedRoundKey] = useState(''); // observedRoundKey 是已记入 rounds 的最近一次日志快照, 用于跳过重复渲染。
     const [detailReady, setDetailReady] = useState(false); // 展开动画结束后才允许加载详情数据。
     const [switchingItemId, setSwitchingItemId] = useState<number | null>(null);
     const requestBody = useLogRequestBody(log.id, log.started_at, detailReady && leftTab === 'request');
@@ -185,7 +174,11 @@ function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: numb
     const requestFailed = log.status === 'failed' || log.status === 'canceled';
     const responseCommitted = log.status === 'committed';
     const requestActive = log.status === 'running' || responseCommitted;
-    const showRounds = log.status === 'running' || (requestFailed && rounds.length > 0);
+    // retryErrors 是本次请求全部失败轮次的服务端历史, 重开详情或进入下一轮都不会丢。
+    const retryErrors = getRetryErrors(log);
+    // showRounds 只在请求进行中为真: 那时面板主体展示正在等待上游的当前轮次,
+    // 已结束的失败轮次统一交给面板底部的失败历史, 避免同一批轮次显示两遍。
+    const showRounds = log.status === 'running';
     const isWaitingForSelection = log.status === 'running' && !log.sending && activeGroup?.mode === 'manual' && activeGroup.runtime.current_item_id === 0; // isWaitingForSelection 表示手动模式请求正等待选择渠道。
 
     // 让弹窗先完成展开动画, 避免详情请求及其状态更新占用动画起步帧。
@@ -193,28 +186,6 @@ function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: numb
         const timer = window.setTimeout(() => setDetailReady(true), 600);
         return () => window.clearTimeout(timer);
     }, []);
-
-    // 按轮次记录本次打开期间观察到的上游请求状态, 最新一轮排在最前。
-    // 轮次来自逐次推送的日志, 需在渲染期比对已记录的快照累积, 不能仅由当前 log 推导。
-    const roundKey = log.round === 0 ? '' : `${log.round}:${log.target_channel_key}:${log.sending}:${errorText}`;
-    if (roundKey !== '' && roundKey !== observedRoundKey) {
-        setObservedRoundKey(roundKey);
-        setRounds((current) => {
-            if (!log.sending && current.every((item) => item.round !== log.round)) return current;
-            const previous = current.find((item) => item.round === log.round);
-            const startedAt = previous?.startedAt ?? log.round_started_at;
-            return [
-                {
-                    round: log.round,
-                    channelKey: log.target_channel_key,
-                    error: errorText,
-                    sending: log.sending,
-                    startedAt,
-                },
-                ...current.filter((item) => item.round !== log.round),
-            ];
-        });
-    }
 
     return (
         <MorphingDialogContent className="relative w-[calc(100vw-2rem)] md:w-[80vw] bg-card text-card-foreground px-6 py-4 rounded-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
@@ -403,39 +374,15 @@ function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: numb
                                     {t('waitingChannelSelection')}
                                 </div>
                             ) : showRounds ? (
-                                rounds.length ? (
-                                    <div className="divide-y divide-border">
-                                        {rounds.map((round) => (
-                                            <div key={round.round} className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="shrink-0 tabular-nums text-muted-foreground">{formatRoundStartedAt(round.startedAt)}</span>
-                                                    <span className="shrink-0 text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
-                                                    <span className="shrink-0 font-semibold text-foreground">{round.channelKey || '-'}</span>
-                                                    {round.sending ? (
-                                                        <Loader2 className="ml-auto size-3.5 animate-spin text-muted-foreground" />
-                                                    ) : round.error ? (
-                                                        <CopyIconButton
-                                                            text={round.error}
-                                                            className="ml-auto p-1 rounded-md text-destructive/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                                            copyIconClassName="size-3.5"
-                                                            checkIconClassName="size-3.5"
-                                                        />
-                                                    ) : null}
-                                                </div>
-                                                {round.error && (
-                                                    <div className="text-[11px] leading-relaxed text-destructive/90 whitespace-pre-wrap wrap-break-word">
-                                                        {round.error}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
-                                        <Loader2 className="size-4 animate-spin" />
-                                        {t('waitingResponse')}
-                                    </div>
-                                )
+                                <div className="divide-y divide-border">
+                                    <RetryHistoryPending
+                                        round={log.round}
+                                        channelKey={log.target_channel_key}
+                                        startedAt={formatRoundStartedAt(log.round_started_at)}
+                                        sending={log.sending}
+                                        error={errorText}
+                                    />
+                                </div>
                             ) : responseCommitted ? (
                                 <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
                                     <Loader2 className="size-4 animate-spin" />
@@ -456,6 +403,9 @@ function LogDetail({ log, now, errorRounds }: { log: RelayLogOverview; now: numb
                                 <JsonContent content={responseBody.data} fallbackText={t('noResponseContent')} />
                             )}
                         </div>
+                        <div className="max-h-40 shrink-0 overflow-auto">
+                            <RetryHistory errors={retryErrors} active={log.status === 'running'} />
+                        </div>
                     </div>
                 </div>
             </MorphingDialogDescription>
@@ -473,18 +423,13 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
     const { isOpen } = useMorphingDialog();
     const [now, setNow] = useState(() => Date.now());
     const [displayError, setDisplayError] = useState(log.error ?? ''); // 保留重试期间最近一次错误, 直到响应真正开始。
-    const [errorRounds, setErrorRounds] = useState<ObservedRound[]>(() => log.error ? [{
-        round: log.round,
-        channelKey: log.target_channel_key,
-        error: log.error,
-        sending: log.sending,
-        startedAt: log.round_started_at,
-    }] : []); // 在概览卡片存留期间收集最近五次错误, 供详情打开时直接展示。
     const actualModel = log.target_model || log.model;
     const { Icon, className: iconClassName, color: brandColor } = getModelIcon(actualModel);
     const requestRunning = log.status === 'running' || log.status === 'committed';
     const errorText = log.error ?? '';
     const visibleError = log.status === 'committed' || log.status === 'success' ? '' : displayError;
+    // retryErrors 与详情面板取自同一份服务端历史, 所以卡片上的入口数与详情内容永远一致。
+    const retryErrors = getRetryErrors(log);
 
     // 仅在请求进行中或弹窗打开时按 500ms 刷新, 避免已完成日志持续触发重渲染。
     useEffect(() => {
@@ -501,20 +446,6 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
             setDisplayError(errorText);
         }
     }, [errorText, log.status]);
-
-    useEffect(() => {
-        if (!errorText) return;
-        setErrorRounds((current) => [
-            {
-                round: log.round,
-                channelKey: log.target_channel_key,
-                error: errorText,
-                sending: log.sending,
-                startedAt: log.round_started_at,
-            },
-            ...current.filter((round) => round.round !== log.round),
-        ].slice(0, 5));
-    }, [errorText, log.round, log.target_channel_key, log.sending, log.round_started_at]);
 
     return (
         <>
@@ -562,12 +493,15 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                                 <p className="text-xs text-destructive line-clamp-1 whitespace-pre-line">{log.status === 'running' ? `${t('retryIndex', { index: log.round })}: ` : ''}{visibleError}</p>
                             </div>
                         )}
+                        {log.status !== 'running' && retryErrors.length > 0 && (
+                            <p className="text-xs text-muted-foreground">{t('retryHistory', { count: retryErrors.length })}</p>
+                        )}
                     </div>
                 </div>
             </MorphingDialogTrigger>
 
             <MorphingDialogContainer>
-                <LogDetail log={log} now={now} errorRounds={errorRounds} />
+                <LogDetail log={log} now={now} />
             </MorphingDialogContainer>
         </>
     );

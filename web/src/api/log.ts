@@ -42,6 +42,31 @@ export interface RelayLogOverview {
     target_protocol: number;
     sending: boolean;
     error?: string;
+    // retry_errors 是本次请求全部失败轮次的历史, 只增不减, 由服务端随状态流推送。
+    retry_errors?: RelayRetryError[];
+}
+
+// RelayRetryError 是一轮已经失败的上游请求; 即使随后重试成功或请求被取消, 历史也不会被清除。
+export interface RelayRetryError {
+    round: number;
+    target_channel_key: string; // 本轮实际请求的渠道名称和 Key 名称; 选路失败轮次为空串。
+    target_model: string;
+    error: string;
+}
+
+// getRetryErrors 汇总一条日志的全部失败轮次, 最新一轮排在最前。
+// 服务端历史是权威来源; 请求仍在进行且本轮错误还没落进历史时, 用当前快照补上这一轮。
+export function getRetryErrors(log: RelayLogOverview): RelayRetryError[] {
+    const rounds = new Map((log.retry_errors ?? []).map((entry) => [entry.round, entry]));
+    if (log.status === 'running' && log.round > 0 && log.error && !rounds.has(log.round)) {
+        rounds.set(log.round, {
+            round: log.round,
+            target_channel_key: log.target_channel_key,
+            target_model: log.target_model,
+            error: log.error,
+        });
+    }
+    return [...rounds.values()].sort((a, b) => b.round - a.round);
 }
 
 // useClearLogs 清空已完成的内存日志。
