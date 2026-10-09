@@ -2,7 +2,7 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.10.1
+// Version v0.13.10
 // 合并上游 v0.13.10: 新增 `octopus passwd` 改密命令、修复数据库迁移 005(全新 MySQL/Postgres 安装
 // 不再因 channels 缺 base_url/key 两列而卡死)、axonhub 依赖升级。
 // 恢复「失败历史」: 上游在 2026-10-01 的合并里删掉了 fork 的 RetryErrors 后端机制与前端
