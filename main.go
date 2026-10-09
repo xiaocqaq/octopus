@@ -2,7 +2,12 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.9.8
+// Version v0.13.10.1
+// 合并上游 v0.13.10: 新增 `octopus passwd` 改密命令、修复数据库迁移 005(全新 MySQL/Postgres 安装
+// 不再因 channels 缺 base_url/key 两列而卡死)、axonhub 依赖升级。
+// 恢复「失败历史」: 上游在 2026-10-01 的合并里删掉了 fork 的 RetryErrors 后端机制与前端
+// RetryHistory, 日志卡片上的「失败历史(N) · 查看详情」随之消失; 现按服务端 retry_errors 恢复展示
+// (服务端权威、重开弹窗不丢), 仅展示层, 选路仍由 probeResultTTL 把关。
 // 修复内置更新(core): 下载的空闲超时原来是在开始处起的一次性计时器、整个拷贝过程从不重置,
 // 于是 45 秒实际成了整包下载的硬上限 —— 二十余兆的归档在 45 秒内传不完(吞吐低于约 500 KB/s)
 // 就必然失败, 国内直连实测约 32 KB/s、需要约 690 秒。现在每读到数据就重置计时器。
