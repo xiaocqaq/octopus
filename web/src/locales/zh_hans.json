@@ -381,7 +381,7 @@
             "retryCount": "总尝试次数",
             "retryCountHint": "单个成员包含首次请求的总尝试次数",
             "retryInterval": "重试间隔（秒）",
-            "retryIntervalHint": "同一成员相邻两次尝试的等待时间，填 0 表示失败后立即重试",
+            "retryIntervalHint": "同一成员相邻两次尝试的等待时间，最小 1 秒",
             "nonStreamTimeout": "非流式超时（秒）",
             "nonStreamTimeoutHint": "等待完整非流式响应的最长时间",
             "streamTimeout": "流式首事件超时（秒）",

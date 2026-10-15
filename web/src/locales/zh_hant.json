@@ -381,7 +381,7 @@
             "retryCount": "總嘗試次數",
             "retryCountHint": "單個成員包含首次請求的總嘗試次數",
             "retryInterval": "重試間隔（秒）",
-            "retryIntervalHint": "同一成員相鄰兩次嘗試的等待時間，填 0 表示失敗後立即重試",
+            "retryIntervalHint": "同一成員相鄰兩次嘗試的等待時間，最小 1 秒",
             "nonStreamTimeout": "非串流逾時（秒）",
             "nonStreamTimeoutHint": "等待完整非串流回應的最長時間",
             "streamTimeout": "串流首事件逾時（秒）",

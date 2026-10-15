@@ -381,7 +381,7 @@
             "retryCount": "Maximum Attempts",
             "retryCountHint": "Total attempts per member, including the first request",
             "retryInterval": "Retry Interval (s)",
-            "retryIntervalHint": "Wait time between attempts on the same member; 0 retries immediately",
+            "retryIntervalHint": "Wait time between attempts on the same member; minimum 1 second",
             "nonStreamTimeout": "Non-stream Timeout (s)",
             "nonStreamTimeoutHint": "Maximum wait for a complete non-stream response",
             "streamTimeout": "Stream First Event Timeout (s)",
