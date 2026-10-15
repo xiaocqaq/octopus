@@ -43,3 +43,25 @@ func TestNormalizeKeepsCustomStreamTotalTimeout(t *testing.T) {
 		t.Fatalf("已配置的 600 秒不应被覆盖, 实际 %d", config.MemberStreamTotalTimeoutSeconds)
 	}
 }
+
+// TestNormalizeKeepsImmediateRetry 显式配置 0 秒时应保持立即重试语义。
+func TestNormalizeKeepsImmediateRetry(t *testing.T) {
+	config := DefaultGroupRelayConfig()
+	config.MemberRetryIntervalSeconds = 0
+	NormalizeGroupRelayConfig(&config)
+
+	if config.MemberRetryIntervalSeconds != 0 {
+		t.Fatalf("显式配置的 0 秒应保持不变, 实际 %d", config.MemberRetryIntervalSeconds)
+	}
+}
+
+// TestNormalizeDefaultsNegativeRetryInterval 负数不是合法配置, 应回退到默认值。
+func TestNormalizeDefaultsNegativeRetryInterval(t *testing.T) {
+	config := DefaultGroupRelayConfig()
+	config.MemberRetryIntervalSeconds = -1
+	NormalizeGroupRelayConfig(&config)
+
+	if config.MemberRetryIntervalSeconds != 3 {
+		t.Fatalf("负数重试间隔应回退为 3 秒, 实际 %d", config.MemberRetryIntervalSeconds)
+	}
+}

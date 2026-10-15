@@ -492,12 +492,12 @@ export function GroupEditor({
                                         id="group-retry-interval"
                                         type="number"
                                         inputMode="numeric"
-                                        min={1}
+                                        min={0}
                                         step={1}
                                         value={String(relayConfig.member_retry_interval_seconds)}
                                         onChange={(event) => {
                                             const value = Number.parseInt(event.target.value, 10);
-                                            setRelayConfig((prev) => ({ ...prev, member_retry_interval_seconds: Number.isFinite(value) && value >= 1 ? value : 1 }));
+                                            setRelayConfig((prev) => ({ ...prev, member_retry_interval_seconds: Number.isFinite(value) && value >= 0 ? value : 0 }));
                                         }}
                                         className="rounded-xl"
                                     />

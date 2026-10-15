@@ -49,7 +49,8 @@ func NormalizeGroupRelayConfig(config *GroupRelayConfig) {
 	if config.MemberMaxAttempts < 1 {
 		config.MemberMaxAttempts = defaults.MemberMaxAttempts
 	}
-	if config.MemberRetryIntervalSeconds < 1 {
+	// 0 是显式配置的立即重试; 只有负值才回退为默认值。
+	if config.MemberRetryIntervalSeconds < 0 {
 		config.MemberRetryIntervalSeconds = defaults.MemberRetryIntervalSeconds
 	}
 	if config.MemberNonStreamResponseTimeoutSeconds < 1 {
