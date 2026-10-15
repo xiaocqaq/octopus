@@ -205,20 +205,20 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			roundStartedAt := time.Now() // 本轮上游调用的开始时间, 用于统计首个有效响应耗时。
 
-			// 请求上游并等待首个有效响应: 非流式等待完整响应, 流式等待首个事件。
+			// 请求上游并等待首个有效响应: 非流式等待完整响应, 流式暂存启动事件直到输出开始或成功结束。
 			// 同协议渠道原样直通, 跨协议渠道经转换后请求; 此时尚未写给客户端, 失败仍可换目标重试。
 			var result *upstreamResponse
 			// 只有真正发起上游调用后返回的快速错误才可能是思维凭据问题。
 			// buildOutbound 失败属于本地配置/协议错误, 不应触发剥离重试。
 			upstreamAttempted := err == nil
 			if err == nil {
-				timeoutSeconds := group.RelayConfig.MemberNonStreamResponseTimeoutSeconds // 非流式等待完整响应, 流式分支改为首事件超时。
+				timeoutSeconds := group.RelayConfig.MemberNonStreamResponseTimeoutSeconds // 非流式等待完整响应, 流式分支限制首个可提交响应的等待时间。
 				timeoutErr := errors.New("upstream non-stream response timeout")          // 具体错误用于区分超时与人工中止。
 				if metadata.Streaming {
 					timeoutSeconds = group.RelayConfig.MemberStreamFirstEventTimeoutSeconds
 					timeoutErr = errors.New("upstream stream first event timeout")
 				}
-				// 计时器取消本轮上下文, 让正在等待 HTTP 响应或首个流事件的调用及时返回。
+				// 计时器取消本轮上下文, 让等待 HTTP 响应或暂存启动事件的调用及时返回。
 				timeoutTimer := time.AfterFunc(time.Duration(timeoutSeconds)*time.Second, func() {
 					cancelRoundCause(timeoutErr)
 				})
@@ -336,7 +336,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.markCanceled(ctx.Err(), "", result.usage)
 				return
 			}
-			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
+			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应统计到启动事件可以提交为止。
 			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
 			for key, values := range result.header {
 				c.Writer.Header()[key] = values

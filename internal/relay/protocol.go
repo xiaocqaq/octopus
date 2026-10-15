@@ -45,6 +45,9 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 		Auth:      probe.Auth,
 		APIFormat: format.String(),
 	}, raw)
+	if userAgent := raw.Headers.Get("User-Agent"); userAgent != "" {
+		request.Headers.Set("User-Agent", userAgent)
+	}
 	request, err = httpclient.FinalizeAuthHeaders(request)
 	if err != nil {
 		return nil, err

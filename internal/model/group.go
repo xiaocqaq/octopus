@@ -11,7 +11,7 @@ const (
 // 分组 Relay 的持久化配置，数据库中以 JSON 存储。
 type GroupRelayConfig struct {
 	MemberMaxAttempts                     int `json:"member_max_attempts" binding:"omitempty,min=1"`                        // 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。
-	MemberRetryIntervalSeconds            int `json:"member_retry_interval_seconds" binding:"omitempty,min=1"`              // 同一成员相邻两次尝试之间的等待秒数。
+	MemberRetryIntervalSeconds            int `json:"member_retry_interval_seconds" binding:"omitempty,min=0"`              // 同一成员相邻两次尝试之间的等待秒数; 0 表示失败后立刻重试, 不等待。
 	MemberNonStreamResponseTimeoutSeconds int `json:"member_non_stream_response_timeout_seconds" binding:"omitempty,min=1"` // 单个成员返回完整非流式响应的超时秒数。
 	MemberStreamFirstEventTimeoutSeconds  int `json:"member_stream_first_event_timeout_seconds" binding:"omitempty,min=1"`  // 单个成员返回首个有效流事件的超时秒数。
 	// MemberStreamTotalTimeoutSeconds 是单个成员一轮流式响应从发起到收到终止事件的总时长上限。

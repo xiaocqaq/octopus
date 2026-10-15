@@ -17,14 +17,16 @@ import (
 // validatedUpstreamStream 在转换前确认上游协议终态。不能依赖转换后的 DONE：
 // 某些转换器会在正常 HTTP EOF 时补结束事件，或把失败 finish_reason 映射成 end_turn。
 // 收到真实终态后停止读取，不要求上游同时关闭 HTTP 连接。
+// committed 非 nil 时指向中间件的 committed 标志: 提交后不再拦截, 与上游合并版语义一致。
 type validatedUpstreamStream struct {
-	source   streams.Stream[*httpclient.StreamEvent]
-	format   llm.APIFormat
-	observe  func(*httpclient.StreamEvent)
-	current  *httpclient.StreamEvent
-	pending  []*httpclient.StreamEvent
-	terminal bool
-	err      error
+	source    streams.Stream[*httpclient.StreamEvent]
+	format    llm.APIFormat
+	observe   func(*httpclient.StreamEvent)
+	committed *bool
+	current   *httpclient.StreamEvent
+	pending   []*httpclient.StreamEvent
+	terminal  bool
+	err       error
 }
 
 func (s *validatedUpstreamStream) Next() bool {
@@ -73,6 +75,10 @@ func (s *validatedUpstreamStream) readEvent() *httpclient.StreamEvent {
 		}
 		if s.observe != nil {
 			s.observe(event)
+		}
+		// 提交后流已移交消费方, 不再做终态校验, 与上游合并版 committed 短路语义一致。
+		if s.committed != nil && *s.committed {
+			return event
 		}
 		last, err := inspectStreamEvent(s.format, event)
 		if err != nil {
