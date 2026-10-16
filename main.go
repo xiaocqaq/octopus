@@ -5,6 +5,11 @@ import "github.com/bestruirui/octopus/cmd"
 // Version v0.13.12
 // 合并上游 v0.13.10: 新增 `octopus passwd` 改密命令、修复数据库迁移 005(全新 MySQL/Postgres 安装
 // 不再因 channels 缺 base_url/key 两列而卡死)、axonhub 依赖升级。
+// 合并上游 v0.13.12: 请求头 UA 透传、流式响应更严格的启动事件校验(buffered startup events)、
+// axonhub 依赖升级; 冲突按「两侧能力都留」解决 —— conversionMiddleware 同时保留本地的用量与
+// 失败终态统计和上游的 userAgent/committed, sendConverted 保留本地流引用校验与上游重试策略。
+// 撤销「重试间隔 0 秒」: 0 会退化成背靠背无限重试(实测十秒打了两万五千多次上游请求), 现在
+// 归一化回默认 3 秒, 输入下限回到 1 秒。
 // 恢复「失败历史」: 上游在 2026-10-01 的合并里删掉了 fork 的 RetryErrors 后端机制与前端
 // RetryHistory, 日志卡片上的「失败历史(N) · 查看详情」随之消失; 现按服务端 retry_errors 恢复展示
 // (服务端权威、重开弹窗不丢), 仅展示层, 选路仍由 probeResultTTL 把关。
