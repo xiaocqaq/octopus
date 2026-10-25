@@ -2,7 +2,10 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.12
+// Version v0.13.13
+// 合并上游 v0.13.13: 修复 CVE-2026-111943 —— axonhub/llm 依赖升到 20261022142814-128e5d7f533e,
+// go 指令随之升到 1.26.10。上游这一版只动 go.mod/go.sum/main.go, 源码零冲突, 唯一冲突是
+// main.go 的版本注释块, 按「保留 fork 全部说明 + 采用上游版本号」解决。
 // 合并上游 v0.13.10: 新增 `octopus passwd` 改密命令、修复数据库迁移 005(全新 MySQL/Postgres 安装
 // 不再因 channels 缺 base_url/key 两列而卡死)、axonhub 依赖升级。
 // 合并上游 v0.13.12: 请求头 UA 透传、流式响应更严格的启动事件校验(buffered startup events)、
