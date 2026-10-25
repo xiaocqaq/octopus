@@ -6,6 +6,8 @@ on:
       - master
     paths:
       - main.go
+  # 手动补跑: 发版后补推 Docker 镜像等场景, 只重建并推送镜像, 不重复上传 Release 资产。
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -40,6 +42,10 @@ jobs:
         run: |
           VERSION=$(grep '^// Version ' main.go | sed 's|^// Version ||' | tr -d ' ')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Docker 构建镜像的 Go 版本取自 go.mod, 避免 go 指令升了而 Dockerfile 没跟上:
+          # 官方 golang 镜像 GOTOOLCHAIN=local, 版本低于 go 指令时 go mod download 直接失败。
+          GO_VERSION=$(sed -n 's/^go \([0-9.]*\)$/\1/p' go.mod | head -n 1)
+          echo "go-version=${GO_VERSION}" >> "$GITHUB_OUTPUT"
           # 如果 tag 已存在则跳过创建, 避免重复发版时失败
           if git rev-parse "${VERSION}" >/dev/null 2>&1; then
             echo "Tag ${VERSION} already exists, skipping tag creation"
@@ -93,16 +99,19 @@ jobs:
         run: bash scripts/build.sh
 
       - name: Generate changelog
+        if: github.event_name == 'push'
         run: npx changelogithub
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Verify release assets
+        if: github.event_name == 'push'
         run: |
           test -s build/archives/SHA256SUMS
           test "$(find build/archives -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 7
 
       - name: Upload Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -146,5 +155,6 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
+            GO_VERSION=${{ steps.version.outputs.go-version }}
             GITHUB_REPO=https://github.com/${{ github.repository }}
             BUILD_TIME=${{ steps.metadata.outputs.build-time }}

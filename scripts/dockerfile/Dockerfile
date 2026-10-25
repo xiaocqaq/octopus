@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.26.4
+# 必须与 go.mod 的 go 指令一致: 官方 golang 镜像设了 GOTOOLCHAIN=local, 构建期不会自动下载新工具链。
+ARG GO_VERSION=1.26.10
 ARG NODE_VERSION=24
 ARG ALPINE_VERSION=3.23
 
