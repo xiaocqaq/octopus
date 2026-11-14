@@ -18,6 +18,11 @@ func shouldStripReasoning(err error) bool {
 	if containsAny(message, "encrypted_content", "previous_response_id", "signature") {
 		return true
 	}
+	// 上游还有一种自然语言写法: "The encrypted content for item ... could not be verified".
+	// 它用空格而不是下划线, 字段名匹配不到; 也没有 resource/account 这类归属词, 归属判定同样漏掉。
+	if isEncryptedContentError(message) {
+		return true
+	}
 	// 资源归属类报错直接命中: 这类文案里既没有 reasoning 也没有 conversation,
 	// 走下面的"主体词 + 否定词"组合会整类漏掉 —— 而它正是历史引用属于另一个上游资源/账号时最先炸的那个。
 	if isResourceOwnershipError(message) {
@@ -37,6 +42,20 @@ var (
 	ownershipWords = []string{"different", "another", "other"}
 	presenceWords  = []string{"resource", "account", "organization", "organisation", "project"}
 )
+
+// isEncryptedContentError 判定"加密内容解不开"这类报错。
+//
+// 上游至少有两种写法: 字段名形态 encrypted_content, 与自然语言形态
+// "The encrypted content for item rs_... could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+// 后者既不含下划线字段名, 也不含 resource/account 这类归属词, 只看归属词会整类漏掉。
+// 因此自然语言形态必须同时出现"加密内容"与否定措辞才算命中, 避免把正常提到加密内容的文案当成故障。
+// 字段名形态 encrypted_content 不在此函数范围内: 它只剥思维凭据即可, 由 shouldStripReasoning 原路径处理。
+func isEncryptedContentError(message string) bool {
+	if !strings.Contains(message, "encrypted content") {
+		return false
+	}
+	return containsAny(message, "could not be verified", "could not be decrypted", "could not be parsed", "decrypted or parsed")
+}
 
 // isResourceOwnershipError 判定"请求里引用的东西属于另一个上游资源/账号"这类报错。
 //
@@ -61,7 +80,10 @@ func needsPortabilityScrub(err error) bool {
 	if err == nil {
 		return false
 	}
-	return isResourceOwnershipError(strings.ToLower(err.Error()))
+	message := strings.ToLower(err.Error())
+	// 加密内容解不开时, 同一个账号签发的 previous_response_id / 记录 id 也一并失效,
+	// 只剥思维凭据重试会再撞一次, 所以按可移植标准一次清完。
+	return isResourceOwnershipError(message) || isEncryptedContentError(message)
 }
 
 func containsAny(value string, candidates ...string) bool {

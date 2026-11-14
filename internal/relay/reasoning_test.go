@@ -85,6 +85,35 @@ func TestShouldStripReasoningOnlyForCredentialErrors(t *testing.T) {
 	}
 }
 
+// TestShouldStripReasoningOnSpacedEncryptedContent 上游用自然语言写 encrypted content 时同样要清洗。
+// 实测文案把字段名写成空格分隔, 既不含 encrypted_content 也不含 resource/account:
+// 修复前 shouldStripReasoning 返回 false, 这类错误会被当成真实故障, 让成员逐个冷却。
+func TestShouldStripReasoningOnSpacedEncryptedContent(t *testing.T) {
+	msg := "OpenAI Responses bad request: The encrypted content for item " +
+		"rs_0676228243af7c73016af251e5662887d2874a5aff9da0cdee could not be verified. " +
+		"Reason: Encrypted content could not be decrypted or parsed. " +
+		"[trace_id=c1002fae917ab8ef626b1e72a9d8928a]"
+	if !shouldStripReasoning(errors.New(msg)) {
+		t.Fatal("空格形态的 encrypted content 报错应触发清洗")
+	}
+	if !needsPortabilityScrub(errors.New(msg)) {
+		t.Fatal("加密内容解不开时应按可移植标准深清洗")
+	}
+
+	// 反向: 正常提到加密内容、没有否定措辞的文案不该触发, 否则每轮都会白丢上下文。
+	for _, normal := range []string{
+		"encrypted content is supported for this model",
+		"this request returns encrypted content",
+	} {
+		if shouldStripReasoning(errors.New(normal)) {
+			t.Errorf("正常的加密内容描述不该触发清洗: %s", normal)
+		}
+		if needsPortabilityScrub(errors.New(normal)) {
+			t.Errorf("正常的加密内容描述不该要求深清洗: %s", normal)
+		}
+	}
+}
+
 // responsesBody 构造一个带 reasoning 项的 Responses 请求体。
 func responsesBody() []byte {
 	return []byte(`{"model":"gpt-6","input":[{"role":"user","content":"hi"},{"type":"reasoning","id":"rs_1","encrypted_content":"gAAAAAB"},{"role":"assistant","content":"hello"}],"include":["reasoning.encrypted_content"]}`)
