@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FormGrants } from './FormGrants';
 import { FormKeys } from './FormKeys';
 import { IconButton } from '@/components/common/IconButton';
@@ -61,6 +62,15 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     const createChannel = useCreateChannel();
     const updateChannel = useUpdateChannel();
     const [state, setState] = useState<ChannelFormState>(channel ? fromChannel(channel) : emptyFormState);
+    // 草稿不进入自动保存状态；启用时才一次提交已确认的 Header。
+    const [sessionHeader, setSessionHeader] = useState(state.session_id_header || 'session-id');
+    const [sessionMaxRequestsDraft, setSessionMaxRequestsDraft] = useState(String(state.session_max_requests));
+    const [sessionMaxRequestsInvalid, setSessionMaxRequestsInvalid] = useState(false);
+    const sessionRotationEnabled = state.session_id_header !== '';
+    const sessionMaxRequests = Number(sessionMaxRequestsDraft);
+    const sessionMaxRequestsValid = /^\d+$/.test(sessionMaxRequestsDraft)
+        && Number.isInteger(sessionMaxRequests) && sessionMaxRequests >= 1 && sessionMaxRequests <= 99;
+    const sessionMaxRequestsBlocksSave = sessionRotationEnabled && !sessionMaxRequestsValid;
     const [step, setStep] = useState<StepID>(channel ? 'connection' : 'preset');
     const [channelId, setChannelId] = useState(channel?.id);
     const stateRef = useRef(state);
@@ -146,6 +156,10 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
     // 新建与编辑都一趟完成且都提交整份配置: 授权按名称引用, 与凭据和模型在同一次请求里原子生效。
     const submit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
+        if (sessionMaxRequestsBlocksSave) {
+            setSessionMaxRequestsInvalid(true);
+            return;
+        }
         if (!persistable(state)) return;
         void ensureSaved().then(() => setIsOpen(false)).catch(() => undefined);
     };
@@ -287,6 +301,82 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 />
                             </div>
 
+                            <div className="space-y-3 rounded-xl border border-border p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="space-y-1">
+                                        <Label htmlFor={`${idPrefix}-session-rotation`}>{t('sessionIdHeader')}</Label>
+                                        <p className="text-[11px] text-muted-foreground">{t('sessionRotationHint')}</p>
+                                    </div>
+                                    <Switch
+                                        id={`${idPrefix}-session-rotation`}
+                                        checked={sessionRotationEnabled}
+                                        onCheckedChange={(checked) => {
+                                            if (checked && !window.confirm(t('sessionRotationConfirm', { header: sessionHeader }))) return;
+                                            updateState({ ...state, session_id_header: checked ? sessionHeader : '' });
+                                        }}
+                                    />
+                                </div>
+                                <Select
+                                    value={sessionHeader}
+                                    onValueChange={(value) => {
+                                        if (value === sessionHeader) return;
+                                        if (sessionRotationEnabled) {
+                                            if (!window.confirm(t('sessionRotationConfirm', { header: value }))) return;
+                                            updateState({ ...state, session_id_header: value });
+                                        }
+                                        setSessionHeader(value);
+                                    }}
+                                >
+                                    <SelectTrigger aria-label={t('sessionHeaderName')} className="rounded-xl">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="session-id">session-id</SelectItem>
+                                        <SelectItem value="session_id">session_id</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {sessionRotationEnabled && (
+                                    <div className="space-y-1">
+                                        <Label htmlFor={`${idPrefix}-session-max-requests`}>{t('sessionMaxRequests')}</Label>
+                                        <Input
+                                            id={`${idPrefix}-session-max-requests`}
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={sessionMaxRequestsDraft}
+                                            onChange={(e) => {
+                                                setSessionMaxRequestsDraft(e.target.value);
+                                                setSessionMaxRequestsInvalid(false);
+                                            }}
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter') {
+                                                    event.preventDefault();
+                                                    event.currentTarget.blur();
+                                                }
+                                            }}
+                                            onBlur={() => {
+                                                if (!sessionMaxRequestsValid) {
+                                                    setSessionMaxRequestsInvalid(true);
+                                                    return;
+                                                }
+                                                setSessionMaxRequestsInvalid(false);
+                                                setSessionMaxRequestsDraft(String(sessionMaxRequests));
+                                                if (sessionMaxRequests !== state.session_max_requests) {
+                                                    updateState({ ...state, session_max_requests: sessionMaxRequests });
+                                                }
+                                            }}
+                                            aria-invalid={sessionMaxRequestsInvalid}
+                                            aria-describedby={sessionMaxRequestsInvalid ? `${idPrefix}-session-max-requests-error` : undefined}
+                                            className="rounded-xl"
+                                        />
+                                        {sessionMaxRequestsInvalid && (
+                                            <p id={`${idPrefix}-session-max-requests-error`} role="alert" className="text-xs text-destructive">
+                                                {t('sessionMaxRequestsInvalid')}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <Label>{t('customHeader')}</Label>
@@ -349,7 +439,7 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                     >
                         {t('cancel')}
                     </Button>
-                    <Button type="submit" disabled={isPending || !persistable(state)} className="rounded-xl h-9 px-4">
+                    <Button type="submit" disabled={isPending || !persistable(state) || sessionMaxRequestsBlocksSave} className="rounded-xl h-9 px-4">
                         {channel ? t('save') : t('submit')}
                     </Button>
                 </div>

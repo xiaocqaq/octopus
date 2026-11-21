@@ -140,7 +140,8 @@ func ChannelUpdate(detail *model.ChannelDetail, ctx context.Context) (*model.Cha
 			Select("name", "dialect", "enabled", "base_url",
 				"openai_chat_completion_path", "openai_response_path", "anthropic_message_path",
 				"openai_image_generation_path", "openai_image_edit_path",
-				"proxy", "channel_proxy", "custom_header", "param_override", "match_regex").
+				"proxy", "channel_proxy", "custom_header", "param_override", "match_regex",
+				"session_id_header", "session_max_requests").
 			Updates(&model.Channel{ChannelConfig: detail.ChannelConfig}).Error; err != nil {
 			return fmt.Errorf("failed to update channel: %w", err)
 		}
@@ -207,6 +208,18 @@ func normalizeChannelConfig(config model.ChannelConfig) (model.ChannelConfig, er
 	config.ChannelProxy = strings.TrimSpace(config.ChannelProxy)
 	config.ParamOverride = strings.TrimSpace(config.ParamOverride)
 	config.MatchRegex = strings.TrimSpace(config.MatchRegex)
+	config.SessionIDHeader = strings.ToLower(strings.TrimSpace(config.SessionIDHeader))
+	switch config.SessionIDHeader {
+	case "", "session-id", "session_id":
+	default:
+		return config, fmt.Errorf("session_id_header must be empty, session-id, or session_id")
+	}
+	if config.SessionMaxRequests == 0 {
+		config.SessionMaxRequests = model.DefaultSessionMaxRequests
+	}
+	if config.SessionMaxRequests < 1 || config.SessionMaxRequests > 99 {
+		return config, fmt.Errorf("session_max_requests must be between 1 and 99")
+	}
 	return config, nil
 }
 

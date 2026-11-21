@@ -80,12 +80,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		if parsed, parseErr := inbound.TransformRequest(c.Request.Context(), raw); parseErr == nil {
 			reasoningEffort = parsed.ReasoningEffort
 		}
-		request := newRequestState(c.Request.Context(), metadata.Model, reasoningEffort, group.ID, requestProtocol, string(raw.Body), c.GetInt("api_key_id"))
+		apiKeyID := c.GetInt("api_key_id")
+		request := newRequestState(c.Request.Context(), metadata.Model, reasoningEffort, group.ID, requestProtocol, string(raw.Body), apiKeyID)
 		ctx := request.requestCtx
 		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
 		failures := 0     // 该成员包含首次请求的连续失败次数。
 		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
 		reasoningStripped := false
+		sessionRetryUsed := false
 		// blockedRounds 是连续"一个可转发的目标都选不出来"的轮数: 没选中成员, 或选中了而它指向的授权/渠道已不可用。
 		// 这类等待原本没有出口, 客户端只能挂到超时: 等满一轮仍是同样结果就如实报错, 让客户端看到原因。
 		blockedRounds := 0
@@ -224,7 +226,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				})
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, channel, outbound, metadata.Streaming, channelModel.Name)
+					result, err = sendPassthrough(roundCtx, format, raw, channel, outbound, metadata.Streaming, channelModel.Name, apiKeyID, channelKey.ID, &sessionRetryUsed)
 				} else {
 					result, err = sendConverted(roundCtx, format, raw, channel, outbound, metadata.Streaming)
 				}

@@ -62,7 +62,7 @@ func resolveUpstreamClient(channel model.Channel) (*http.Client, func(), error) 
 }
 
 // sendPassthrough 以同协议透传方式请求上游, 取得的响应无需转换即可回给客户端。
-func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, modelName string) (*upstreamResponse, error) {
+func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, modelName string, apiKeyID, channelKeyID int, sessionRetryUsed *bool) (*upstreamResponse, error) {
 	request, err := buildPassthroughRequest(format, raw, channel, outbound, modelName)
 	if err != nil {
 		return nil, err
@@ -71,21 +71,21 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	if err != nil {
 		return nil, err
 	}
-	if streaming {
-		// 流式响应返回后仍在读上游连接, 归还入口随响应交给消费方; 取不到响应时就地归还。
-		result, err := sendPassthroughStream(ctx, format, request, httpClient)
-		if err != nil {
-			if closeIdle != nil {
-				closeIdle()
-			}
-			return nil, err
-		}
+	result, err := responseSessions.sendWithResponsesSession(ctx, format, raw, request, channel, apiKeyID, channelKeyID, sessionRetryUsed, func() (*upstreamResponse, error) {
+		return sendPreparedPassthrough(ctx, format, request, outbound, streaming, httpClient)
+	})
+	// 成功取得流时将连接归还入口交给消费者；其他情况就地归还。
+	if streaming && err == nil {
 		result.closeIdle = closeIdle
-		return result, nil
+	} else if closeIdle != nil {
+		closeIdle()
 	}
-	// 非流式响应在 Do 返回时正文已读完, 连接可以立即归还。
-	if closeIdle != nil {
-		defer closeIdle()
+	return result, err
+}
+
+func sendPreparedPassthrough(ctx context.Context, format llm.APIFormat, request *httpclient.Request, outbound transformer.Outbound, streaming bool, httpClient *http.Client) (*upstreamResponse, error) {
+	if streaming {
+		return sendPassthroughStream(ctx, format, request, httpClient)
 	}
 
 	response, err := httpclient.NewHttpClientWithClient(httpClient).Do(ctx, request)
@@ -140,6 +140,9 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 		response.Body.Close()
 		if readErr != nil {
 			return nil, readErr
+		}
+		if format == llm.APIFormatOpenAIResponse && hasResponseSessionLimitCode(response.StatusCode, failure) {
+			return nil, fmt.Errorf("upstream responded %s: %s: %w", response.Status, failure, errSessionRequestLimit)
 		}
 		return nil, fmt.Errorf("upstream responded %s: %s", response.Status, failure)
 	}

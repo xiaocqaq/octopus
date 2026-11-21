@@ -24,12 +24,16 @@ const (
 	DialectGeneric Dialect = "generic" // 标准协议, 不做任何厂商特化。
 )
 
+const DefaultSessionMaxRequests = 90
+
 // 渠道的可编辑配置; 落库时平铺成 channels 的各列, 出入 JSON 时平铺成渠道读写接口的各字段。
 // 单独成结构体是为了让库内实体, 读取副本与提交请求共用同一份定义: 这些字段在三处的形状本就一致,
 // 各写一遍只会让加字段时漏改其中一处。
 // 不带 binding 约束: 保存与探测都收这一份配置, 但两者的必填项不同 —— 探测发生在渠道尚未命名时,
 // 故必填校验分别由 normalizeChannelConfig 与 fetchUpstreamModels 按各自的需要给出。
 type ChannelConfig struct {
+	SessionIDHeader           string         `json:"session_id_header" gorm:"not null;default:''"`                                                           // 用于轮换的会话请求头, 留空禁用。
+	SessionMaxRequests        int            `json:"session_max_requests" gorm:"not null;default:90"`                                                        // 每个上游会话允许的转发尝试次数。
 	Name                      string         `json:"name" gorm:"unique;not null"`                                                                            // 渠道名称。
 	Dialect                   Dialect        `json:"dialect" gorm:"not null;default:generic"`                                                                // 上游方言, 决定出站转换器的厂商特化配置。
 	Enabled                   bool           `json:"enabled" gorm:"default:true"`                                                                            // 渠道是否可用。

@@ -17,6 +17,8 @@ export type ChannelFormState = {
     models: string[];
     grants: Map<string, number>; // 键为 grantKey(模型名, 凭据名), 值为 Protocol 位掩码。
     custom_header: ChannelDetail['custom_header'];
+    session_id_header: string;
+    session_max_requests: number;
     channel_proxy: string;
     param_override: string;
     match_regex: string;
@@ -58,6 +60,8 @@ export const emptyFormState: ChannelFormState = {
     models: [],
     grants: new Map(),
     custom_header: [],
+    session_id_header: '',
+    session_max_requests: 90,
     channel_proxy: '',
     param_override: '',
     match_regex: '',
@@ -80,6 +84,8 @@ export function fromChannel(channel: ChannelDetail): ChannelFormState {
         models: [...channel.models],
         grants: new Map(channel.grants.map((g) => [grantKey(g.model_name, g.key_name), g.protocols])),
         custom_header: channel.custom_header,
+        session_id_header: channel.session_id_header ?? '',
+        session_max_requests: channel.session_max_requests ?? 90,
         channel_proxy: channel.channel_proxy,
         param_override: channel.param_override,
         match_regex: channel.match_regex,
@@ -101,6 +107,8 @@ export function toChannelConfig(state: ChannelFormState) {
         openai_image_edit_path: state.openai_image_edit_path.trim(),
         proxy: state.proxy,
         custom_header: state.custom_header.filter((h) => h.header_key.trim() && h.header_value !== ''),
+        session_id_header: state.session_id_header,
+        session_max_requests: Math.min(99, Math.max(1, Math.trunc(Number.isFinite(state.session_max_requests) ? state.session_max_requests : 90))),
         channel_proxy: state.channel_proxy.trim(),
         param_override: state.param_override.trim(),
         match_regex: state.match_regex.trim(),

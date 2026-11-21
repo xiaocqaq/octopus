@@ -232,7 +232,7 @@ func runProbeBody(ctx context.Context, outbound transformer.Outbound, channel mo
 		return nil, runProbe(ctx, outbound, channel, modelName, request, passthrough, streaming)
 	}
 	if passthrough {
-		result, err := sendPassthrough(ctx, outbound.APIFormat(), request, channel, outbound, false, modelName)
+		result, err := sendPassthrough(ctx, outbound.APIFormat(), request, channel, outbound, false, modelName, 0, 0, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +249,7 @@ func runProbeBody(ctx context.Context, outbound transformer.Outbound, channel mo
 // 直接复用 sendPassthrough / sendPassthroughStream: 地址与认证的拼接规则, 以及
 // "HTTP 200 但正文是错误终态"的识别都在那里, 测活要验的就是这条路径。
 func probePassthrough(ctx context.Context, outbound transformer.Outbound, channel model.Channel, modelName string, request *httpclient.Request, streaming bool) error {
-	result, err := sendPassthrough(ctx, outbound.APIFormat(), request, channel, outbound, streaming, modelName)
+	result, err := sendPassthrough(ctx, outbound.APIFormat(), request, channel, outbound, streaming, modelName, 0, 0, nil)
 	if err != nil {
 		return err
 	}
