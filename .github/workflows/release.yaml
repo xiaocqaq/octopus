@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - main.go
+      - .github/workflows/release.yaml
 
 permissions:
   contents: write
@@ -93,8 +94,19 @@ jobs:
         run: bash scripts/build.sh
 
       - name: Generate changelog
-        run: npx changelogithub
+        run: |
+          for attempt in 1 2 3; do
+            if npx changelogithub --to "${VERSION}"; then
+              exit 0
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              echo "Release API failed, retrying in $((attempt * 10)) seconds (${attempt}/3)"
+              sleep "$((attempt * 10))"
+            fi
+          done
+          exit 1
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Verify release assets
