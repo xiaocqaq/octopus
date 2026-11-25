@@ -567,6 +567,7 @@
             "modelAddConfirm": "添加",
             "channelProxy": "渠道代理",
             "matchRegex": "匹配正则",
+            "responsesAutoCompact": "Responses 对话自动续接",
             "paramOverride": "参数覆盖",
             "customHeader": "自定义 Header",
             "customHeaderKey": "Header Key",

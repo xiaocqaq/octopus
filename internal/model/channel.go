@@ -44,6 +44,7 @@ type ChannelConfig struct {
 	CustomHeader              []CustomHeader `json:"custom_header" gorm:"serializer:json"`                                                                   // 追加到上游请求的 Header。
 	ParamOverride             string         `json:"param_override"`                                                                                         // 请求参数覆盖配置; 留空表示不覆盖。
 	MatchRegex                string         `json:"match_regex"`                                                                                            // 拉取模型列表时的过滤表达式; 留空表示不过滤。
+	ResponsesAutoCompact      bool           `json:"responses_auto_compact" gorm:"not null;default:false"`                                                   // Responses 会话接近上限时生成交接摘要并切换上游会话。
 }
 
 // 单个上游渠道的共享配置; 路径按协议分别配置, 凭据由 ChannelKey 提供。

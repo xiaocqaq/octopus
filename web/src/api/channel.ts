@@ -78,6 +78,7 @@ export type ChannelDetail = {
     param_override: string;
     channel_proxy: string;
     match_regex: string;
+    responses_auto_compact: boolean;
 };
 
 // ChannelModelStats 是单个渠道模型的累计统计，自带名称。

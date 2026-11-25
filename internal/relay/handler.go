@@ -86,6 +86,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		failures := 0     // 该成员包含首次请求的连续失败次数。
 		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
 		reasoningStripped := false
+		responsesCompactionAttempted := false
 		// blockedRounds 是连续"一个可转发的目标都选不出来"的轮数: 没选中成员, 或选中了而它指向的授权/渠道已不可用。
 		// 这类等待原本没有出口, 客户端只能挂到超时: 等满一轮仍是同样结果就如实报错, 让客户端看到原因。
 		blockedRounds := 0
@@ -194,6 +195,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 在渠道授权支持的协议内选出本轮上游协议, 按该协议的路径与授权绑定的凭据构造出站转换器。
 			// 先于登记本轮目标: 选中的协议是本轮目标的一部分, 需与渠道和模型一并推给界面。
 			outbound, targetProtocol, passthrough, err := buildOutbound(channel, grant, *channelKey, requestProtocol)
+			if err == nil && channel.ResponsesAutoCompact && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && !responsesCompactionAttempted && responsesHistoryNeedsCompaction(raw.Body) {
+				responsesCompactionAttempted = true
+				if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds); compactErr == nil && changed {
+					raw.Body = compacted
+				}
+			}
 
 			// 为本轮上游调用建立独立取消入口并登记当前目标; 取消原因用于区分人工中止与响应超时。
 			roundCtx, cancelRoundCause := context.WithCancelCause(ctx)
@@ -267,6 +274,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						response := inbound.TransformError(ctx, failure)
 						c.Data(http.StatusBadRequest, "application/json", response.Body)
 						return
+					}
+				}
+				if upstreamAttempted && channel.ResponsesAutoCompact && !responsesCompactionAttempted && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && isResponsesSessionTurnLimitError(err) {
+					responsesCompactionAttempted = true
+					if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds); compactErr == nil && changed {
+						raw.Body = compacted
+						releaseRouteProbe(group, item.ID)
+						cancelRound()
+						continue
 					}
 				}
 				// 上游快速报错(不是超时, 故上下文没有取消原因)时才值得剥掉思维凭据再试:

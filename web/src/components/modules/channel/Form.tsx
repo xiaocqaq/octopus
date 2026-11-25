@@ -263,6 +263,13 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
 
                     {step === 'advanced' && (
                         <div className="space-y-4 pt-2">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <Switch
+                                    checked={state.responses_auto_compact}
+                                    onCheckedChange={(checked) => updateState({ ...state, responses_auto_compact: checked })}
+                                />
+                                <span className="text-sm">{t('responsesAutoCompact')}</span>
+                            </label>
                             {([
                                 ['channel_proxy', t('channelProxy')],
                                 ['match_regex', t('matchRegex')],

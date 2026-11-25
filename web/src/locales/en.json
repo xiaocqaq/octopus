@@ -567,6 +567,7 @@
             "modelAddConfirm": "Add",
             "channelProxy": "Channel proxy",
             "matchRegex": "Match regex",
+            "responsesAutoCompact": "Auto-compact and continue Responses conversations",
             "paramOverride": "Param override",
             "customHeader": "Custom headers",
             "customHeaderKey": "Header key",

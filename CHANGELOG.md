@@ -3,6 +3,14 @@
 All notable changes to this project's fork are documented here.
 This fork tracks upstream `bestruirui/octopus` and carries fork-specific v0.13.9.x features.
 
+## [v0.13.14] — 2026-11-25
+
+- 渠道编辑页「高级」新增「Responses 对话自动续接」开关，默认关闭。
+- 开启后，Responses 直通请求在接近轮数上限时生成交接摘要，并保留近期历史及当前任务；收到 `session_turn_limit_exceeded` 时尝试摘要续接并重试一次。
+- 摘要使用流式 Responses 请求；兼容工具调用历史，并轮换上游会话标识。
+- 新增数据库迁移 015，旧渠道保持关闭；支持开关创建、修改和读取。
+- 已验证本机隔离网关的 90 轮提前压缩及 100 轮工具历史超限恢复；摘要可能省略旧历史细节，开启后会产生额外的摘要调用。
+
 ## [v0.13.9.8] — 2026-10-03
 
 **修复内置更新下不动包** — 两处都是代码问题, 与网络通不通无关; 另修回模型监控行内的测活时间。
