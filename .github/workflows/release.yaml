@@ -115,6 +115,38 @@ jobs:
           test "$(find build/archives -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 7
 
       - name: Upload Release
+        id: upload_release_1
+        continue-on-error: true
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            build/archives/*.zip
+            build/archives/SHA256SUMS
+          prerelease: false
+          tag_name: ${{ steps.version.outputs.version }}
+
+      - name: Wait before Release upload retry
+        if: steps.upload_release_1.outcome == 'failure'
+        run: sleep 10
+      - name: Upload Release attempt 2
+        id: upload_release_2_action
+        if: steps.upload_release_1.outcome == 'failure'
+        continue-on-error: true
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            build/archives/*.zip
+            build/archives/SHA256SUMS
+          prerelease: false
+          tag_name: ${{ steps.version.outputs.version }}
+
+      - name: Wait before final Release upload retry
+        if: steps.upload_release_1.outcome == 'failure' && steps.upload_release_2_action.outcome == 'failure'
+        run: sleep 20
+      - name: Upload Release attempt 3
+        id: upload_release_3
+        if: steps.upload_release_1.outcome == 'failure' && steps.upload_release_2_action.outcome == 'failure'
+        continue-on-error: true
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -160,3 +192,15 @@ jobs:
             APP_VERSION=${{ steps.version.outputs.version }}
             GITHUB_REPO=https://github.com/${{ github.repository }}
             BUILD_TIME=${{ steps.metadata.outputs.build-time }}
+
+      - name: Check Release upload
+        if: always()
+        env:
+          UPLOAD_1: ${{ steps.upload_release_1.outcome }}
+          UPLOAD_2: ${{ steps.upload_release_2_action.outcome }}
+          UPLOAD_3: ${{ steps.upload_release_3.outcome }}
+        run: |
+          if [ "${UPLOAD_1}" = "failure" ] && [ "${UPLOAD_2}" = "failure" ] && [ "${UPLOAD_3}" = "failure" ]; then
+            echo "Release asset upload failed after three attempts"
+            exit 1
+          fi
