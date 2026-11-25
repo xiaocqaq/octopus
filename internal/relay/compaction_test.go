@@ -74,7 +74,7 @@ func TestCompactResponsesBody(t *testing.T) {
 	}
 }
 
-func TestCompactResponsesBodySkipsBelowThresholdAndDoesNotLoseOriginalOnFailure(t *testing.T) {
+func TestCompactResponsesBodySkipsBelowThresholdAndPreservesHistoryOnSummaryFailure(t *testing.T) {
 	input := make([]any, 0, responsesCompactAtTurns*2)
 	for i := 0; i < responsesCompactAtTurns-1; i++ {
 		input = append(input, map[string]any{"role": "assistant", "content": "answer"})
@@ -88,8 +88,16 @@ func TestCompactResponsesBodySkipsBelowThresholdAndDoesNotLoseOriginalOnFailure(
 	input = append(input[:len(input)-1], map[string]any{"role": "assistant", "content": "last answer"}, map[string]any{"role": "user", "content": "question"})
 	body, _ = json.Marshal(map[string]any{"input": input})
 	got, changed, err := compactResponsesBody(body, func([]byte) (string, error) { return "", errors.New("summary failed") })
-	if err == nil || changed || string(got) != string(body) {
-		t.Fatalf("failed summary did not preserve original body: changed=%v err=%v", changed, err)
+	if err != nil || !changed {
+		t.Fatalf("failed summary did not fall back to a transcript: changed=%v err=%v", changed, err)
+	}
+	_, items, err := decodeResponsesInput(got)
+	if err != nil || responsesModelTurns(items) != 0 || len(items) != 2 {
+		t.Fatalf("fallback transcript did not reduce model turns: %s err=%v", got, err)
+	}
+	transcript, _ := json.Marshal(input[:len(input)-1])
+	if !strings.HasSuffix(items[0].(map[string]any)["content"].(string), string(transcript)) || items[1].(map[string]any)["content"] != "question" {
+		t.Fatalf("fallback transcript lost conversation content: %s", got)
 	}
 }
 
@@ -123,6 +131,40 @@ func TestCompactResponsesBodyCountsFunctionCallsAsTurns(t *testing.T) {
 	}
 	if responsesModelTurns(got.Input) >= responsesCompactAtTurns {
 		t.Fatalf("compacted request still has %d model turns", responsesModelTurns(got.Input))
+	}
+}
+
+func TestCompactResponsesBodyPreservesEarlyFactsWhenSummaryFails(t *testing.T) {
+	input := make([]any, 0, 82*2+2)
+	input = append(input, map[string]any{"role": "developer", "content": "Keep task context"}, map[string]any{"role": "user", "content": "Early identifier FALLBACK-827"})
+	for i := 0; i < responsesCompactAtTurns+10; i++ {
+		input = append(input,
+			map[string]any{"role": "user", "content": fmt.Sprintf("question %d", i)},
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("answer %d", i)},
+		)
+	}
+	input = append(input, map[string]any{"role": "user", "content": "active question"})
+	body, err := json.Marshal(map[string]any{"model": "test", "input": input, "previous_response_id": "old", "store": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compacted, changed, err := compactResponsesBody(body, func([]byte) (string, error) { return "", errors.New("upstream_error") })
+	if err != nil || !changed {
+		t.Fatalf("fallback compaction failed: changed=%v err=%v", changed, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(compacted, &got); err != nil {
+		t.Fatal(err)
+	}
+	items := got["input"].([]any)
+	if got["previous_response_id"] != nil || got["store"] != false {
+		t.Fatalf("fallback retained server-side state: %s", compacted)
+	}
+	if !strings.Contains(string(compacted), "Early identifier FALLBACK-827") || items[0].(map[string]any)["content"] != "Keep task context" {
+		t.Fatalf("fallback lost earlier facts or developer instructions: %s", compacted)
+	}
+	if responsesModelTurns(items) != responsesRetainedTurns || items[len(items)-1].(map[string]any)["content"] != "active question" {
+		t.Fatalf("fallback retained wrong history: turns=%d body=%s", responsesModelTurns(items), compacted)
 	}
 }
 

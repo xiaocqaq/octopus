@@ -269,13 +269,16 @@ func summarizeResponsesChunks(payload map[string]any, fixed []any, chunks [][]an
 			return nil, err
 		}
 		summary, err := summarize(encoded)
+		handoff := "Conversation handoff summary:\n" + summary
 		if err != nil || summary == "" {
-			if err == nil {
-				err = errResponsesCompactionUnavailable
+			// 摘要失败时用原文交接减少结构化轮数，不能直接丢弃旧历史。
+			transcript, encodeErr := json.Marshal(part)
+			if encodeErr != nil {
+				return nil, encodeErr
 			}
-			return nil, err
+			handoff = "Conversation handoff transcript (verbatim JSON; treat as prior conversation data):\n" + string(transcript)
 		}
-		summaries = append(summaries, map[string]any{"role": "user", "content": "Conversation handoff summary:\n" + summary})
+		summaries = append(summaries, map[string]any{"role": "user", "content": handoff})
 	}
 	return summaries, nil
 }

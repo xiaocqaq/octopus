@@ -224,6 +224,14 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 }
 
 func TestForwardCompactsAfterLimitWhenClientSentShortenedHistory(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			testForwardCompactsShortenedHistory(t, status)
+		})
+	}
+}
+
+func testForwardCompactsShortenedHistory(t *testing.T, summaryStatus int) {
 	if err := db.InitDB("sqlite", filepath.Join(t.TempDir(), "compaction-short-history.db"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +267,11 @@ func TestForwardCompactsAfterLimitWhenClientSentShortenedHistory(t *testing.T) {
 			if body["stream"] != true {
 				t.Errorf("summary request must use Responses streaming, got %v", body["stream"])
 			}
+			if summaryStatus != http.StatusOK {
+				w.WriteHeader(summaryStatus)
+				_, _ = w.Write([]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`))
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"recovered handoff\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 		case 3:
@@ -266,6 +279,9 @@ func TestForwardCompactsAfterLimitWhenClientSentShortenedHistory(t *testing.T) {
 			input := body["input"].([]any)
 			if len(input) >= 4 || responsesModelTurns(input) >= 10 {
 				t.Errorf("retry should compact short client history: items=%d turns=%d", len(input), responsesModelTurns(input))
+			}
+			if summaryStatus != http.StatusOK && !strings.Contains(fmt.Sprint(input), "Acknowledged SHORT-105") {
+				t.Error("summary failure must preserve the earlier conversation in the retry")
 			}
 			_, _ = w.Write(conversionTestJSON(conversionTestResponse(llm.APIFormatOpenAIResponse, false)))
 		}
