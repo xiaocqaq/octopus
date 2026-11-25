@@ -32,8 +32,22 @@ func isResponsesSessionTurnLimitError(err error) bool {
 		err != nil && bytes.Contains(bytes.ToLower([]byte(err.Error())), []byte("session_turn_limit_exceeded"))
 }
 
-func compactResponsesForChannel(ctx context.Context, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, modelName string, timeoutSeconds int) ([]byte, bool, error) {
-	compacted, changed, err := compactResponsesBody(raw.Body, func(body []byte) (string, error) {
+func compactResponsesForChannel(ctx context.Context, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, modelName string, timeoutSeconds int, force bool) ([]byte, bool, error) {
+	body := raw.Body
+	threshold := responsesCompactAtTurns
+	sessionRotated := false
+	if force {
+		body, _ = scrubSignedReasoning(body, model.ProtocolOpenAIResponse)
+		threshold = 1
+		var changed bool
+		var err error
+		body, changed, err = rotateResponsesSession(body, raw.Headers)
+		if err != nil || !changed {
+			return body, changed, err
+		}
+		sessionRotated = true
+	}
+	compacted, changed, err := compactResponsesBodyAt(body, threshold, func(body []byte) (string, error) {
 		request := *raw
 		request.Body = body
 		request.Headers = raw.Headers.Clone()
@@ -67,7 +81,14 @@ func compactResponsesForChannel(ctx context.Context, raw *httpclient.Request, ch
 		return text.String(), nil
 	})
 	if err != nil || !changed {
-		return compacted, changed, err
+		if err != nil || !force {
+			return compacted, changed, err
+		}
+		compacted = body
+		changed = true
+	}
+	if sessionRotated {
+		return compacted, true, nil
 	}
 	return rotateResponsesSession(compacted, raw.Headers)
 }
@@ -113,18 +134,23 @@ func rotateResponsesSession(body []byte, headers http.Header) ([]byte, bool, err
 
 // compactResponsesBody replaces old Responses history with chunk summaries and keeps the active user turn.
 func compactResponsesBody(body []byte, summarize func([]byte) (string, error)) ([]byte, bool, error) {
+	return compactResponsesBodyAt(body, responsesCompactAtTurns, summarize)
+}
+
+func compactResponsesBodyAt(body []byte, threshold int, summarize func([]byte) (string, error)) ([]byte, bool, error) {
 	payload, input, err := decodeResponsesInput(body)
 	if err != nil || len(input) < 2 {
 		return body, false, err
 	}
-	if responsesModelTurns(input) < responsesCompactAtTurns {
+	turns := responsesModelTurns(input)
+	if turns < threshold {
 		return body, false, nil
 	}
 	activeStart := lastResponsesUser(input)
 	if activeStart < 0 {
 		return body, false, errResponsesCompactionUnavailable
 	}
-	fixed, chunks, recent := partitionResponsesHistory(input[:activeStart], responsesModelTurns(input)-responsesRetainedTurns)
+	fixed, chunks, recent := partitionResponsesHistory(input[:activeStart], max(turns-responsesRetainedTurns, 1))
 	if len(chunks) == 0 {
 		return body, false, nil
 	}

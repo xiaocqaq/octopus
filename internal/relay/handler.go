@@ -87,6 +87,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// reasoningStripped 表示已为去掉思维凭据额外重试过一次; 每个请求只做一次, 之后凭据已不在请求体里。
 		reasoningStripped := false
 		responsesCompactionAttempted := false
+		responsesCompactionApplied := false
 		// blockedRounds 是连续"一个可转发的目标都选不出来"的轮数: 没选中成员, 或选中了而它指向的授权/渠道已不可用。
 		// 这类等待原本没有出口, 客户端只能挂到超时: 等满一轮仍是同样结果就如实报错, 让客户端看到原因。
 		blockedRounds := 0
@@ -197,8 +198,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			outbound, targetProtocol, passthrough, err := buildOutbound(channel, grant, *channelKey, requestProtocol)
 			if err == nil && channel.ResponsesAutoCompact && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && !responsesCompactionAttempted && responsesHistoryNeedsCompaction(raw.Body) {
 				responsesCompactionAttempted = true
-				if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds); compactErr == nil && changed {
+				if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds, false); compactErr == nil && changed {
 					raw.Body = compacted
+					responsesCompactionApplied = true
 				}
 			}
 
@@ -276,10 +278,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						return
 					}
 				}
-				if upstreamAttempted && channel.ResponsesAutoCompact && !responsesCompactionAttempted && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && isResponsesSessionTurnLimitError(err) {
+				if upstreamAttempted && channel.ResponsesAutoCompact && !responsesCompactionApplied && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && isResponsesSessionTurnLimitError(err) {
 					responsesCompactionAttempted = true
-					if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds); compactErr == nil && changed {
+					if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds, true); compactErr == nil && changed {
 						raw.Body = compacted
+						responsesCompactionApplied = true
 						releaseRouteProbe(group, item.ID)
 						cancelRound()
 						continue
