@@ -42,6 +42,10 @@ func TestChannelResponsesAutoCompactRoundTrip(t *testing.T) {
 	if !created.ResponsesAutoCompact {
 		t.Fatal("created channel lost responses_auto_compact")
 	}
+	if created.ResponsesSummaryTimeoutSeconds != model.DefaultResponsesSummaryTimeoutSeconds {
+		t.Fatalf("default summary timeout=%d", created.ResponsesSummaryTimeoutSeconds)
+	}
+	created.ResponsesSummaryTimeoutSeconds = 600
 	created.ResponsesAutoCompact = false
 	updated, err := ChannelUpdate(created, ctx)
 	if err != nil {
@@ -50,9 +54,22 @@ func TestChannelResponsesAutoCompactRoundTrip(t *testing.T) {
 	if updated.ResponsesAutoCompact {
 		t.Fatal("updated channel did not persist responses_auto_compact=false")
 	}
+	if updated.ResponsesSummaryTimeoutSeconds != 600 {
+		t.Fatalf("updated summary timeout=%d", updated.ResponsesSummaryTimeoutSeconds)
+	}
+	var persisted model.Channel
+	if err := db.GetDB().First(&persisted, created.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResponsesSummaryTimeoutSeconds != 600 {
+		t.Fatalf("persisted summary timeout=%d", persisted.ResponsesSummaryTimeoutSeconds)
+	}
 	loaded, err := ChannelDetailGet(created.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if loaded.ResponsesSummaryTimeoutSeconds != 600 {
+		t.Fatalf("cached summary timeout=%d", loaded.ResponsesSummaryTimeoutSeconds)
 	}
 	if loaded.ResponsesAutoCompact {
 		t.Fatal("channel cache did not refresh responses_auto_compact=false")

@@ -270,6 +270,27 @@ function ChannelFormFields({ channel, onBack }: { channel?: ChannelDetail; onBac
                                 />
                                 <span className="text-sm">{t('responsesAutoCompact')}</span>
                             </label>
+                            <div className="space-y-2">
+                                <Label htmlFor={`${idPrefix}-summary-timeout`}>{t('responsesSummaryTimeout')}</Label>
+                                <Input
+                                    id={`${idPrefix}-summary-timeout`}
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={86400}
+                                    step={1}
+                                    value={String(state.responses_summary_timeout_seconds)}
+                                    onChange={(event) => {
+                                        const value = Number.parseInt(event.target.value, 10);
+                                        updateState({ ...state, responses_summary_timeout_seconds: Number.isFinite(value) ? Math.min(86400, Math.max(1, value)) : 120 });
+                                    }}
+                                    aria-describedby={`${idPrefix}-summary-timeout-hint`}
+                                    className="rounded-xl"
+                                />
+                                <p id={`${idPrefix}-summary-timeout-hint`} className="text-sm text-muted-foreground">
+                                    {t('responsesSummaryTimeoutHint')}
+                                </p>
+                            </div>
                             {([
                                 ['channel_proxy', t('channelProxy')],
                                 ['match_regex', t('matchRegex')],

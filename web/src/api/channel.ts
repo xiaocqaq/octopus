@@ -79,6 +79,7 @@ export type ChannelDetail = {
     channel_proxy: string;
     match_regex: string;
     responses_auto_compact: boolean;
+    responses_summary_timeout_seconds: number;
 };
 
 // ChannelModelStats 是单个渠道模型的累计统计，自带名称。

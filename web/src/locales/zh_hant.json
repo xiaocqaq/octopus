@@ -570,6 +570,8 @@
             "channelProxy": "通道代理",
             "matchRegex": "匹配正則",
             "responsesAutoCompact": "Responses 對話自動續接",
+            "responsesSummaryTimeout": "對話摘要逾時（秒）",
+            "responsesSummaryTimeoutHint": "每次摘要請求的最長等待時間，預設 120 秒，不占正式回答的通道逾時，可適當設長（最多 24 小時）。",
             "paramOverride": "參數覆寫",
             "customHeader": "自訂 Header",
             "customHeaderKey": "Header Key",

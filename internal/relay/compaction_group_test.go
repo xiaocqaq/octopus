@@ -100,10 +100,19 @@ func TestForwardSummaryUsesGroupChannels(t *testing.T) {
 				if body["model"] != "backup-model" || body["stream"] != true || backupCalls.Load() == 1 && (!strings.Contains(encoded, "EARLY-FACT") || !strings.Contains(encoded, "tool result")) {
 					t.Error("backup received incorrect model or incomplete history")
 				}
-				if strings.Contains(encoded, "encrypted-secret") || body["reasoning"] != nil || body["tools"] != nil {
+				if strings.Contains(encoded, "encrypted-secret") || body["tools"] != nil {
 					t.Error("summary inherited private history or original generation settings")
 				}
+				if tc.format == llm.APIFormatOpenAIResponse && gjson.Get(encoded, "reasoning.effort").String() != "high" {
+					t.Error("Responses summary lost reasoning effort")
+				}
+				if tc.format == llm.APIFormatOpenAIChatCompletion && gjson.Get(encoded, "reasoning_effort").String() != "high" {
+					t.Error("Chat summary lost reasoning effort")
+				}
 				if tc.format == llm.APIFormatAnthropicMessage {
+					if gjson.Get(encoded, "output_config.effort").String() != "high" {
+						t.Error("Anthropic summary lost reasoning effort")
+					}
 					if r.Header.Get("X-Api-Key") != "key-backup" {
 						t.Error("backup credential not used")
 					}
@@ -214,7 +223,7 @@ func TestSummaryChunksShareTotalBudget(t *testing.T) {
 	body := conversionTestJSON(map[string]any{"model": "model", "input": input})
 	started := time.Now()
 	got, changed, err := compactResponsesBody(body, func(body []byte) (string, error) {
-		return summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, []responsesSummaryTarget{target}, responsesSummaryAttemptTimeout)
+		return summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, []responsesSummaryTarget{target})
 	})
 	if err != nil || !changed || calls.Load() != 1 || time.Since(started) > time.Second {
 		t.Fatalf("summary budget reset between chunks: changed=%t calls=%d err=%v", changed, calls.Load(), err)
@@ -258,13 +267,7 @@ func TestSummaryRetriesAndSwitches(t *testing.T) {
 					}
 					return
 				}
-				fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
-				w.(http.Flusher).Flush()
-				select {
-				case <-r.Context().Done():
-				case <-time.After(time.Second):
-					t.Error("retry did not cancel stalled summary stream")
-				}
+				w.WriteHeader(http.StatusServiceUnavailable)
 			}))
 			defer server.Close()
 			var targets []responsesSummaryTarget
@@ -274,7 +277,7 @@ func TestSummaryRetriesAndSwitches(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			body := conversionTestJSON(map[string]any{"model": "original", "stream": true, "input": []any{map[string]any{"role": "user", "content": "summarize"}}})
-			text, err := summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, targets, 20*time.Millisecond)
+			text, err := summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, targets)
 			mu.Lock()
 			gotSequence := append([]string(nil), sequence...)
 			mu.Unlock()

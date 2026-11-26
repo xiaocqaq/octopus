@@ -570,6 +570,8 @@
             "channelProxy": "Channel proxy",
             "matchRegex": "Match regex",
             "responsesAutoCompact": "Auto-compact and continue Responses conversations",
+            "responsesSummaryTimeout": "Conversation summary timeout (seconds)",
+            "responsesSummaryTimeoutHint": "Maximum wait for each summary request. Defaults to 120 seconds and is separate from the channel timeout for regular answers. You can allow more time, up to 24 hours.",
             "paramOverride": "Param override",
             "customHeader": "Custom headers",
             "customHeaderKey": "Header key",
