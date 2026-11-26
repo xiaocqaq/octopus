@@ -480,6 +480,8 @@
             "waitingChannelSelection": "Waiting for channel selection",
             "firstToken": "Time from request arrival to first output, including retries",
             "cacheRate": "Cache Hit Rate",
+            "compactingConversation": "Summarizing conversation",
+            "preparingRequest": "Preparing request or waiting to retry",
             "waitingResponse": "Waiting for upstream response",
             "responseStreaming": "Upstream responded; streaming is in progress"
         }

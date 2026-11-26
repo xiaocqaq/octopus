@@ -196,13 +196,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 在渠道授权支持的协议内选出本轮上游协议, 按该协议的路径与授权绑定的凭据构造出站转换器。
 			// 先于登记本轮目标: 选中的协议是本轮目标的一部分, 需与渠道和模型一并推给界面。
 			outbound, targetProtocol, passthrough, err := buildOutbound(channel, grant, *channelKey, requestProtocol)
-			if err == nil && channel.ResponsesAutoCompact && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && !responsesCompactionAttempted && responsesHistoryNeedsCompaction(raw.Body) {
-				responsesCompactionAttempted = true
-				if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds, false); compactErr == nil && changed {
-					raw.Body = compacted
-					responsesCompactionApplied = true
-				}
-			}
 
 			// 为本轮上游调用建立独立取消入口并登记当前目标; 取消原因用于区分人工中止与响应超时。
 			roundCtx, cancelRoundCause := context.WithCancelCause(ctx)
@@ -211,6 +204,28 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				cancelRoundCause(context.Canceled)
 			}
 			request.startRound(cancelRound, channel.Name+" · "+channelKey.Name, channelModel.Name, targetProtocol)
+
+			// 摘要同样请求上游: 先公布目标与阶段, 并使用本轮取消入口。
+			compactResponses := func(force bool) bool {
+				request.setCompacting(true)
+				defer request.setCompacting(false)
+				prepared := *raw
+				prepared.Headers = raw.Headers.Clone()
+				compacted, changed, compactErr := compactResponsesForGroup(roundCtx, &prepared, group, grant.ID, force)
+				if compactErr != nil || !changed || roundCtx.Err() != nil {
+					return false
+				}
+				raw.Body, raw.Headers = compacted, prepared.Headers
+				responsesCompactionApplied = true
+				return true
+			}
+			if err == nil && channel.ResponsesAutoCompact && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && !responsesCompactionAttempted && responsesHistoryNeedsCompaction(raw.Body) {
+				responsesCompactionAttempted = true
+				compactResponses(false)
+			}
+			if roundCtx.Err() != nil {
+				err = roundCtx.Err()
+			}
 
 			roundStartedAt := time.Now() // 本轮上游调用的开始时间, 用于统计首个有效响应耗时。
 
@@ -265,11 +280,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					releaseRouteProbe(group, item.ID)
 					continue
 				}
-				// 真实上游/转换错误在进入剥离思维凭据或换目标前保留, 供日志页展示。
-				request.finishRound(err.Error())
 				// 本地协议能力或请求格式不匹配，重试同一请求不会恢复，且不应惩罚渠道。
 				if !passthrough {
 					if failure := conversionClientError(err); failure != nil {
+						request.finishRound(err.Error())
 						cancelRound()
 						releaseRouteProbe(group, item.ID)
 						request.markFailed(failure, "", nil)
@@ -280,14 +294,22 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				if upstreamAttempted && channel.ResponsesAutoCompact && !responsesCompactionApplied && passthrough && requestProtocol == model.ProtocolOpenAIResponse && targetProtocol == model.ProtocolOpenAIResponse && isResponsesSessionTurnLimitError(err) {
 					responsesCompactionAttempted = true
-					if compacted, changed, compactErr := compactResponsesForChannel(ctx, raw, channel, outbound, channelModel.Name, group.RelayConfig.MemberNonStreamResponseTimeoutSeconds, true); compactErr == nil && changed {
-						raw.Body = compacted
-						responsesCompactionApplied = true
+					compacted := compactResponses(true)
+					// 保留触发恢复的真实错误, 摘要运行期间仍可中止本轮。
+					request.finishRound(err.Error())
+					if ctx.Err() != nil {
+						releaseRouteProbe(group, item.ID)
+						request.markCanceled(ctx.Err(), "", nil)
+						return
+					}
+					if compacted || roundCtx.Err() != nil {
 						releaseRouteProbe(group, item.ID)
 						cancelRound()
 						continue
 					}
 				}
+				// 真实上游/转换错误在剥离思维凭据或换目标前保留。
+				request.finishRound(err.Error())
 				// 上游快速报错(不是超时, 故上下文没有取消原因)时才值得剥掉思维凭据再试:
 				// 凭据只有签发它的账号认, 换账号或换密钥都会被拒, 这是转发的锅不该记在成员头上。
 				// 不计失败也不等待, 也就不会把它推进冷却; 少了这一步, 坏凭据会让成员接连冷却, 整个分组停摆。

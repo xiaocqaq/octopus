@@ -380,6 +380,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                         channelKey={log.target_channel_key}
                                         startedAt={formatRoundStartedAt(log.round_started_at)}
                                         sending={log.sending}
+                                        compacting={log.compacting}
                                         error={errorText}
                                     />
                                 </div>

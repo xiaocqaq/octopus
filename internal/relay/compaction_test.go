@@ -63,11 +63,14 @@ func TestCompactResponsesBody(t *testing.T) {
 		t.Fatalf("compacted request retained server-side state: %s", got)
 	}
 	items := compacted["input"].([]any)
-	if len(summaries) != 1 || items[0].(map[string]any)["content"] != "Keep this instruction" {
+	if len(summaries) != 2 || items[0].(map[string]any)["content"] != "Keep this instruction" {
 		t.Fatalf("unexpected compacted input: %s", got)
 	}
-	if got := responsesAssistantTurns(items); got != responsesRetainedTurns {
-		t.Fatalf("retained assistant turns=%d want=%d", got, responsesRetainedTurns)
+	if got := responsesAssistantTurns(items); got != 30 {
+		t.Fatalf("retained assistant turns=%d want=30", got)
+	}
+	if strings.Contains(string(got), "question 69") || !strings.Contains(string(got), "question 70") || !strings.Contains(string(got), "answer 99") {
+		t.Fatalf("compaction did not retain exactly the latest 30 turns: %s", got)
 	}
 	if items[len(items)-2].(map[string]any)["content"] != "active question" || items[len(items)-1].(map[string]any)["call_id"] != "active_call" {
 		t.Fatalf("active turn was not preserved: %s", got)

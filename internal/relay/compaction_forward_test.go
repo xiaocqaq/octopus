@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
+	"github.com/tidwall/gjson"
 )
 
 func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
@@ -32,6 +34,9 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 
 	calls := 0
 	autoCompactEnabled := true
+	allowFullHistory := false
+	var cancelSummary func(RequestState)
+	var summaryDone chan struct{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var body map[string]any
@@ -49,6 +54,17 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied conversation segment") {
+			state := assertCompactionRequestState(t, "compaction-test", true)
+			if cancelSummary != nil {
+				defer close(summaryDone)
+				cancelSummary(state)
+				select {
+				case <-r.Context().Done():
+				case <-time.After(2 * time.Second):
+					t.Error("summary was not canceled")
+				}
+				return
+			}
 			if body["stream"] != true {
 				t.Error("summary request must use Responses streaming")
 			}
@@ -56,7 +72,8 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 			_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"handoff summary\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 			return
 		}
-		if autoCompactEnabled && assistantTurns >= responsesCompactAtTurns {
+		assertCompactionRequestState(t, "compaction-test", false)
+		if autoCompactEnabled && !allowFullHistory && assistantTurns >= responsesCompactAtTurns {
 			t.Errorf("full history reached upstream: %d turns", assistantTurns)
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"code":"session_turn_limit_exceeded"}}`))
@@ -111,8 +128,8 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") {
 		t.Fatalf("forward failed after compaction: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if calls != 2 {
-		t.Fatalf("upstream calls=%d, want one summary and one response", calls)
+	if calls != 3 {
+		t.Fatalf("upstream calls=%d, want two summaries and one response", calls)
 	}
 
 	autoCompactEnabled = false
@@ -125,9 +142,66 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 	c.Request.Header.Set("Content-Type", "application/json")
 	Forward(llm.APIFormatOpenAIResponse)(c)
-	if recorder.Code != http.StatusOK || calls != 3 {
+	if recorder.Code != http.StatusOK || calls != 4 {
 		t.Fatalf("disabled channel must forward without a summary: status=%d calls=%d", recorder.Code, calls)
 	}
+
+	channel.ResponsesAutoCompact = true
+	if _, err := op.ChannelUpdate(channel, ctx); err != nil {
+		t.Fatal(err)
+	}
+	allowFullHistory = true
+	for _, entireRequest := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel_request_%t", entireRequest), func(t *testing.T) {
+			beforeCalls := calls
+			summaryDone = make(chan struct{})
+			cancelSummary = func(state RequestState) {
+				if entireRequest {
+					CancelRequest(state.ID)
+				} else {
+					Interrupt(state.ID, state.Round)
+				}
+			}
+			recorder = httptest.NewRecorder()
+			c, _ = gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			Forward(llm.APIFormatOpenAIResponse)(c)
+			<-summaryDone
+			states, updates := OpenRequestStream()
+			CloseRequestStream(updates)
+			state := states[0]
+			wantCalls, wantStatus := 2, StatusSuccess
+			if entireRequest {
+				wantCalls, wantStatus = 1, StatusCanceled
+			}
+			if calls-beforeCalls != wantCalls || state.Status != wantStatus || len(state.RetryErrors) != 0 {
+				t.Errorf("canceled summary: calls=%d state=%+v", calls-beforeCalls, state)
+			}
+		})
+	}
+}
+
+// Assert the serialized state that the log SSE sends while the upstream is busy.
+func assertCompactionRequestState(t *testing.T, modelName string, compacting bool) RequestState {
+	t.Helper()
+	states, updates := OpenRequestStream()
+	CloseRequestStream(updates)
+	for _, state := range states {
+		if state.Model != modelName || state.Status != StatusRunning {
+			continue
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Error(err)
+		}
+		if state.Round == 0 || state.RoundStartedAt.IsZero() || !state.Sending || state.TargetChannelKey == "" || state.TargetModel != "model" || state.TargetProtocol != model.ProtocolOpenAIResponse || gjson.GetBytes(encoded, "compacting").Bool() != compacting {
+			t.Errorf("unexpected active round during compaction=%t: %s", compacting, encoded)
+		}
+		return state
+	}
+	t.Errorf("no active request for %s", modelName)
+	return RequestState{}
 }
 
 func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
@@ -144,6 +218,8 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 	t.Cleanup(Clear)
 
 	var calls int
+	var cancelSummary func(RequestState)
+	var summaryDone chan struct{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var body map[string]any
@@ -153,19 +229,33 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		switch calls {
-		case 1:
+		switch {
+		case calls == 1:
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"code":"session_turn_limit_exceeded","message":"100 turn limit"}}`))
-		case 2:
+		case strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied conversation segment"):
+			state := assertCompactionRequestState(t, "compaction-retry-test", true)
+			if cancelSummary != nil {
+				defer close(summaryDone)
+				cancelSummary(state)
+				select {
+				case <-r.Context().Done():
+				case <-time.After(2 * time.Second):
+					t.Error("forced summary was not canceled")
+				}
+				return
+			}
 			if body["stream"] != true {
 				t.Errorf("summary request must use Responses streaming, got %v", body["stream"])
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"handoff summary\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
-		case 3:
+		default:
+			if cancelSummary != nil && (r.Header.Get("Session-Id") != "original-session" || body["prompt_cache_key"] != "original-session") {
+				t.Error("canceled forced summary changed the original session")
+			}
 			items := body["input"].([]any)
-			if responsesModelTurns(items) >= responsesCompactAtTurns {
+			if cancelSummary == nil && responsesModelTurns(items) >= responsesCompactAtTurns {
 				t.Errorf("retried request still at limit: turns=%d", responsesModelTurns(items))
 			}
 			_, _ = w.Write(conversionTestJSON(conversionTestResponse(llm.APIFormatOpenAIResponse, false)))
@@ -211,16 +301,47 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 		)
 	}
 	input = append(input, map[string]any{"role": "user", "content": "active task"})
-	body := conversionTestJSON(map[string]any{"model": group.Name, "input": input, "stream": false})
+	body := conversionTestJSON(map[string]any{"model": group.Name, "input": input, "stream": false, "prompt_cache_key": "original-session"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req.WithContext(ctx)
 	Forward(llm.APIFormatOpenAIResponse)(c)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") || calls != 3 {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") || calls != 4 {
 		t.Fatalf("post-limit compaction failed: status=%d calls=%d body=%s", recorder.Code, calls, recorder.Body.String())
 	}
+	for _, entireRequest := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel_request_%t", entireRequest), func(t *testing.T) {
+			calls = 0
+			summaryDone = make(chan struct{})
+			cancelSummary = func(state RequestState) {
+				if entireRequest {
+					CancelRequest(state.ID)
+				} else {
+					Interrupt(state.ID, state.Round)
+				}
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Header.Set("Session-Id", "original-session")
+			Forward(llm.APIFormatOpenAIResponse)(c)
+			<-summaryDone
+			states, updates := OpenRequestStream()
+			CloseRequestStream(updates)
+			state := states[0]
+			wantCalls, wantStatus := 3, StatusSuccess
+			if entireRequest {
+				wantCalls, wantStatus = 2, StatusCanceled
+			}
+			if calls != wantCalls || state.Status != wantStatus || len(state.RetryErrors) != 1 || !strings.Contains(state.RetryErrors[0].Error, "session_turn_limit_exceeded") {
+				t.Errorf("canceled forced summary: calls=%d state=%+v", calls, state)
+			}
+		})
+	}
+
 }
 
 func TestForwardCompactsAfterLimitWhenClientSentShortenedHistory(t *testing.T) {
@@ -258,11 +379,11 @@ func testForwardCompactsShortenedHistory(t *testing.T, summaryStatus int) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		switch calls {
-		case 1:
+		switch {
+		case calls == 1:
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"code":"session_turn_limit_exceeded","message":"105 turn limit"}}`))
-		case 2:
+		case strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied"):
 			summarySessionID = r.Header.Get("Session-Id")
 			if body["stream"] != true {
 				t.Errorf("summary request must use Responses streaming, got %v", body["stream"])
@@ -274,7 +395,7 @@ func testForwardCompactsShortenedHistory(t *testing.T, summaryStatus int) {
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"recovered handoff\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
-		case 3:
+		default:
 			retrySessionID = r.Header.Get("Session-Id")
 			input := body["input"].([]any)
 			if len(input) >= 4 || responsesModelTurns(input) >= 10 {
@@ -330,7 +451,11 @@ func testForwardCompactsShortenedHistory(t *testing.T, summaryStatus int) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req.WithContext(ctx)
 	Forward(llm.APIFormatOpenAIResponse)(c)
-	if recorder.Code != http.StatusOK || calls != 3 || !strings.Contains(recorder.Body.String(), "Hello back") || retrySessionID == "" || retrySessionID == firstSessionID || summarySessionID != retrySessionID {
+	wantCalls := 3
+	if summaryStatus != http.StatusOK {
+		wantCalls = 2 + responsesSummaryMaxAttempts
+	}
+	if recorder.Code != http.StatusOK || calls != wantCalls || !strings.Contains(recorder.Body.String(), "Hello back") || retrySessionID == "" || retrySessionID == firstSessionID || summarySessionID != retrySessionID {
 		t.Fatalf("short-history post-limit recovery failed: status=%d calls=%d summary session=%q retry session=%q body=%s", recorder.Code, calls, summarySessionID, retrySessionID, recorder.Body.String())
 	}
 }

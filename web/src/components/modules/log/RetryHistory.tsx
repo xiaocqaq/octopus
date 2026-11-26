@@ -40,7 +40,7 @@ export function RetryHistory({ errors, active }: { errors: RelayRetryError[]; ac
 }
 
 // RetryHistoryPending 渲染正在进行中的轮次, 用于让详情面板在等待上游时仍然有内容可看。
-export function RetryHistoryPending({ round, channelKey, startedAt, sending, error }: { round: number; channelKey: string; startedAt: string; sending: boolean; error: string }) {
+export function RetryHistoryPending({ round, channelKey, startedAt, sending, compacting, error }: { round: number; channelKey: string; startedAt: string; sending: boolean; compacting?: boolean; error: string }) {
     const t = useTranslations('log.card');
     return (
         <div className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
@@ -55,7 +55,7 @@ export function RetryHistoryPending({ round, channelKey, startedAt, sending, err
             ) : (
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     <Loader2 className="size-3.5 animate-spin" />
-                    {sending ? t('waitingResponse') : t('waitingChannelSelection')}
+                    {compacting ? t('compactingConversation') : sending ? t('waitingResponse') : t('preparingRequest')}
                 </div>
             )}
         </div>

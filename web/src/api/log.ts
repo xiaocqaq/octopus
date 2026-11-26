@@ -41,6 +41,7 @@ export interface RelayLogOverview {
     target_model: string;
     target_protocol: number;
     sending: boolean;
+    compacting?: boolean;
     error?: string;
     // retry_errors 是本次请求全部失败轮次的历史, 只增不减, 由服务端随状态流推送。
     retry_errors?: RelayRetryError[];

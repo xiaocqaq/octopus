@@ -57,6 +57,7 @@ type RequestState struct {
 	TargetModel      string         `json:"target_model"`       // 最新一轮实际请求上游的模型名称。
 	TargetProtocol   model.Protocol `json:"target_protocol"`    // 最新一轮实际请求上游的协议, 与 Protocol 不同即本轮做了跨协议转换; 0 表示尚未选出。
 	Sending          bool           `json:"sending"`            // 最新一轮是否仍在等待上游响应。
+	Compacting       bool           `json:"compacting"`         // 正在生成会话摘要, 尚未转发当前问题。
 	Error            string         `json:"error,omitempty"`    // 最新一轮的失败原因, 请求结束后即为最终错误。
 
 	RetryErrors []RetryError `json:"retry_errors,omitempty"` // 本次请求全部失败轮次的历史, 只增不减, 最近 maxRetryErrors 条。
@@ -125,10 +126,19 @@ func (r *RequestState) startRound(cancel context.CancelFunc, channelKeyName, mod
 	r.TargetModel = modelName
 	r.TargetProtocol = protocol
 	r.Sending = true
+	r.Compacting = false
 	r.Error = ""
 	r.roundCancel = cancel
 	publishRequestLocked(r)
 	return r.Round
+}
+
+// setCompacting 发布摘要阶段, 保留本轮目标和取消入口。
+func (r *RequestState) setCompacting(compacting bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	r.Compacting = compacting
+	publishRequestLocked(r)
 }
 
 // finishRound 记录本轮上游结果, errText 为空表示已取得可提交响应。
@@ -137,6 +147,7 @@ func (r *RequestState) finishRound(errText string) {
 	defer mu.Unlock()
 
 	r.Sending = false
+	r.Compacting = false
 	r.Error = errText
 	r.appendRetryErrorLocked(errText)
 	r.roundCancel = nil
@@ -308,6 +319,7 @@ func (r *RequestState) markCanceled(err error, responseBody string, usage *llm.U
 // finishLocked 写入用量和费用, 发布终态, 更新请求级统计并裁剪历史; 调用方必须持有锁。
 func (r *RequestState) finishLocked(usage *llm.Usage) {
 	r.Sending = false
+	r.Compacting = false
 	r.roundCancel = nil
 	if r.requestCancel != nil {
 		r.requestCancel()

@@ -480,6 +480,8 @@
             "waitingChannelSelection": "正在等待選擇供應源",
             "firstToken": "首字耗時：從請求到達到首字輸出，包含重試",
             "cacheRate": "快取命中率",
+            "compactingConversation": "正在產生對話摘要",
+            "preparingRequest": "正在準備請求或等待重試",
             "waitingResponse": "正在等待上游回應",
             "responseStreaming": "上游已回應，串流傳輸正在進行"
         }
