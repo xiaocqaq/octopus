@@ -45,7 +45,7 @@ func TestForwardSummaryUsesGroupChannels(t *testing.T) {
 		t.Run(conversionTestName(tc.format)+"_"+tc.failure, func(t *testing.T) {
 			var primarySummaries, primaryResponses, backupCalls atomic.Int32
 			var summaryDone sync.WaitGroup
-			summaryDone.Add(2)
+			summaryDone.Add(1)
 			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -163,7 +163,7 @@ func TestForwardSummaryUsesGroupChannels(t *testing.T) {
 			started := time.Now()
 			Forward(llm.APIFormatOpenAIResponse)(c)
 			summaryDone.Wait()
-			if recorder.Code != http.StatusOK || primarySummaries.Load() != 2 || primaryResponses.Load() != 1 || backupCalls.Load() != 2 {
+			if recorder.Code != http.StatusOK || primarySummaries.Load() != 1 || primaryResponses.Load() != 1 || backupCalls.Load() != 1 {
 				t.Fatalf("summary failover failed: status=%d primary summaries=%d responses=%d backup=%d body=%s", recorder.Code, primarySummaries.Load(), primaryResponses.Load(), backupCalls.Load(), recorder.Body.String())
 			}
 			if time.Since(started) > 4*time.Second {
@@ -192,7 +192,7 @@ func createSummaryGroupMember(t *testing.T, name, modelName, baseURL string, pro
 	return 0
 }
 
-func TestSummaryChunksShareTotalBudget(t *testing.T) {
+func TestSummaryDeadlineFallsBackToTranscript(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -226,7 +226,7 @@ func TestSummaryChunksShareTotalBudget(t *testing.T) {
 		return summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, []responsesSummaryTarget{target})
 	})
 	if err != nil || !changed || calls.Load() != 1 || time.Since(started) > time.Second {
-		t.Fatalf("summary budget reset between chunks: changed=%t calls=%d err=%v", changed, calls.Load(), err)
+		t.Fatalf("summary did not honor the overall deadline: changed=%t calls=%d err=%v", changed, calls.Load(), err)
 	}
 	for _, fact := range []string{"EARLY-FACT", "active question", "199"} {
 		if !strings.Contains(string(got), fact) {

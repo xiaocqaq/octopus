@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,14 +37,23 @@ func TestCompactResponsesBody(t *testing.T) {
 		if err := json.Unmarshal(request, &payload); err != nil {
 			t.Fatal(err)
 		}
+		var transcript struct{ Input []map[string]any }
+		text := payload.Input[0]["content"].(string)
+		_, text, ok := strings.Cut(text, "\n")
+		if !ok {
+			t.Fatal("missing summary transcript")
+		}
+		if err := json.Unmarshal([]byte(text), &transcript); err != nil {
+			t.Fatal(err)
+		}
 		count := 0
-		for _, item := range payload.Input {
+		for _, item := range transcript.Input {
 			if item["role"] == "assistant" {
 				count++
 			}
 		}
-		if count > responsesSummaryChunkTurns {
-			t.Fatalf("summary chunk has %d assistant turns", count)
+		if count != 70 {
+			t.Fatalf("single summary should contain all 70 selected turns, got %d", count)
 		}
 		if payload.Instructions == "" {
 			t.Fatal("summary request must override the original task instructions")
@@ -63,7 +73,7 @@ func TestCompactResponsesBody(t *testing.T) {
 		t.Fatalf("compacted request retained server-side state: %s", got)
 	}
 	items := compacted["input"].([]any)
-	if len(summaries) != 2 || items[0].(map[string]any)["content"] != "Keep this instruction" {
+	if len(summaries) != 1 || items[0].(map[string]any)["content"] != "Keep this instruction" {
 		t.Fatalf("unexpected compacted input: %s", got)
 	}
 	if got := responsesAssistantTurns(items); got != 30 {
@@ -123,8 +133,8 @@ func TestCompactResponsesBodyCountsFunctionCallsAsTurns(t *testing.T) {
 		summaryCalls++
 		return "tool handoff", nil
 	})
-	if err != nil || !changed || summaryCalls == 0 {
-		t.Fatalf("function-call turns were not compacted: changed=%v summaries=%d err=%v", changed, summaryCalls, err)
+	if err != nil || !changed || summaryCalls != 1 {
+		t.Fatalf("compact small tool history in one summary: changed=%v summaries=%d err=%v", changed, summaryCalls, err)
 	}
 	var got struct {
 		Input []any `json:"input"`
@@ -134,6 +144,39 @@ func TestCompactResponsesBodyCountsFunctionCallsAsTurns(t *testing.T) {
 	}
 	if responsesModelTurns(got.Input) >= responsesCompactAtTurns {
 		t.Fatalf("compacted request still has %d model turns", responsesModelTurns(got.Input))
+	}
+}
+
+func TestCompactResponsesBodySummarizesOnlyRecentHistoryWhenOversized(t *testing.T) {
+	input := []any{map[string]any{"role": "developer", "content": "FIXED INSTRUCTIONS"}}
+	for i := 0; i < 90; i++ {
+		input = append(input,
+			map[string]any{"role": "user", "content": fmt.Sprintf("HISTORY-%03d", i)},
+			map[string]any{"role": "assistant", "content": strings.Repeat(`\`, 10<<10)},
+		)
+	}
+	input = append(input, map[string]any{"role": "user", "content": "CURRENT QUESTION"})
+	body, _ := json.Marshal(map[string]any{"input": input})
+	calls := 0
+	compacted, changed, err := compactResponsesBody(body, func(request []byte) (string, error) {
+		calls++
+		if len(request) > responsesSummaryMaxInputBytes {
+			t.Errorf("encoded summary body has %d bytes, limit %d", len(request), responsesSummaryMaxInputBytes)
+		}
+		if strings.Contains(string(request), "HISTORY-000") || !strings.Contains(string(request), "HISTORY-059") || !strings.Contains(string(request), "FIXED INSTRUCTIONS") {
+			t.Error("summary must omit the oldest history and include the newest eligible history and instructions")
+		}
+		return "", errors.New("summary unavailable")
+	})
+	if err != nil || !changed || calls != 1 {
+		t.Fatalf("expected one summary attempt: changed=%v calls=%d err=%v", changed, calls, err)
+	}
+	_, output, err := decodeResponsesInput(compacted)
+	if err != nil || responsesAssistantTurns(output) != 30 {
+		t.Fatalf("recent structured history was not retained: %v", err)
+	}
+	if strings.Contains(string(compacted), "HISTORY-000") || !strings.Contains(string(compacted), "HISTORY-059") || !strings.Contains(string(compacted), "CURRENT QUESTION") {
+		t.Fatal("fallback must keep the selected history and current question without restoring discarded history")
 	}
 }
 
@@ -196,5 +239,47 @@ func TestRotateResponsesSession(t *testing.T) {
 	newID, _ := payload["prompt_cache_key"].(string)
 	if newID == "" || newID == "old" || headers.Get("Session-Id") != newID || headers.Get("Thread-Id") != newID {
 		t.Fatalf("session identifiers were not consistently rotated: %s %#v", rotated, headers)
+	}
+}
+
+func TestCompactResponsesBodyRejectsHistoryWhenNoSummarySuffixFits(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input []any
+	}{
+		{
+			name: "single oversized turn",
+			input: func() []any {
+				items := []any{map[string]any{"role": "user", "content": strings.Repeat("x", responsesSummaryMaxInputBytes)}}
+				for i := 0; i < responsesCompactAtTurns; i++ {
+					items = append(items, map[string]any{"role": "assistant", "content": "answer"})
+				}
+				items = append(items, map[string]any{"role": "user", "content": "active"})
+				return items
+			}(),
+		},
+		{
+			name: "fixed instructions exceed limit",
+			input: func() []any {
+				items := []any{map[string]any{"role": "developer", "content": strings.Repeat("x", responsesSummaryMaxInputBytes)}}
+				for i := 0; i < responsesCompactAtTurns; i++ {
+					items = append(items, map[string]any{"role": "user", "content": "question"}, map[string]any{"role": "assistant", "content": "answer"})
+				}
+				items = append(items, map[string]any{"role": "user", "content": "active"})
+				return items
+			}(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"input": tc.input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			got, changed, err := compactResponsesBody(body, func([]byte) (string, error) { calls++; return "summary", nil })
+			if err == nil || changed || calls != 0 || !bytes.Equal(got, body) {
+				t.Fatalf("unsafe compaction: changed=%v calls=%d err=%v bodyPreserved=%v", changed, calls, err, bytes.Equal(got, body))
+			}
+		})
 	}
 }

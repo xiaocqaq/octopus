@@ -86,7 +86,7 @@ func TestSummaryInheritsReasoningEffort(t *testing.T) {
 				payload["reasoning"] = map[string]any{"effort": effort, "summary": "auto"}
 			}
 			calls := 0
-			_, err := summarizeResponsesChunks(payload, nil, [][]any{{map[string]any{"role": "user", "content": "first"}}, {map[string]any{"role": "user", "content": "second"}}}, func(body []byte) (string, error) {
+			_, err := summarizeResponsesHistory(payload, nil, []any{map[string]any{"role": "user", "content": "first"}}, func(body []byte) (string, error) {
 				calls++
 				if got := gjson.GetBytes(body, "reasoning.effort").String(); got != effort {
 					t.Errorf("reasoning effort=%q want=%q", got, effort)
@@ -106,7 +106,7 @@ func TestSummaryInheritsReasoningEffort(t *testing.T) {
 				}
 				return "summary", nil
 			})
-			if err != nil || calls != 2 {
+			if err != nil || calls != 1 {
 				t.Fatalf("summaries=%d err=%v", calls, err)
 			}
 		})

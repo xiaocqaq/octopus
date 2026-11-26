@@ -2,7 +2,7 @@ package main
 
 import "github.com/bestruirui/octopus/cmd"
 
-// Version v0.13.15.3
+// Version v0.13.15.4
 // 修复 Responses 超限恢复: 客户端裁剪历史时强制压缩, 摘要先切换到新会话避免继续撞旧限制。
 // 新增渠道级 Responses 自动续接开关: 会话接近 100 轮时生成摘要并切换上游会话。
 // 合并上游 v0.13.13: 修复 CVE-2026-111943 —— axonhub/llm 依赖升到 20261022142814-128e5d7f533e,

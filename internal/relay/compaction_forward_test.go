@@ -54,7 +54,7 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied conversation segment") {
+		if strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied") {
 			state := assertCompactionRequestState(t, "compaction-test", true)
 			if cancelSummary != nil {
 				defer close(summaryDone)
@@ -75,8 +75,8 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 		}
 		assertCompactionRequestState(t, "compaction-test", false)
 		if body["stream"] == true {
-			if compacted := string(conversionTestJSON(input)); assistantTurns != responsesRetainedTurns || strings.Count(compacted, `Conversation handoff summary:\nhandoff summary`) != 2 || !strings.Contains(compacted, "active question") {
-				t.Errorf("formal request is missing the two summaries, retained turns, or active question")
+			if compacted := string(conversionTestJSON(input)); assistantTurns != responsesRetainedTurns || strings.Count(compacted, `Conversation handoff summary:\nhandoff summary`) != 1 || !strings.Contains(compacted, "active question") {
+				t.Errorf("formal request is missing the summary, retained turns, or active question")
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, conversionTestStream(llm.APIFormatOpenAIResponse, false, true))
@@ -147,8 +147,8 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 	if len(states) != 1 || states[0].Status != StatusSuccess || states[0].Compacting {
 		t.Fatalf("expected successful formal response with compaction cleared: %+v", states)
 	}
-	if calls != 3 {
-		t.Fatalf("upstream calls=%d, want two summaries and one response", calls)
+	if calls != 2 {
+		t.Fatalf("upstream calls=%d, want one summary and one response", calls)
 	}
 
 	autoCompactEnabled = false
@@ -162,7 +162,7 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 	c.Request.Header.Set("Content-Type", "application/json")
 	Forward(llm.APIFormatOpenAIResponse)(c)
-	if recorder.Code != http.StatusOK || calls != 4 {
+	if recorder.Code != http.StatusOK || calls != 3 {
 		t.Fatalf("disabled channel must forward without a summary: status=%d calls=%d", recorder.Code, calls)
 	}
 
@@ -253,7 +253,7 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 		case calls == 1:
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"code":"session_turn_limit_exceeded","message":"100 turn limit"}}`))
-		case strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied conversation segment"):
+		case strings.Contains(fmt.Sprint(body["instructions"]), "Summarize the supplied"):
 			state := assertCompactionRequestState(t, "compaction-retry-test", true)
 			if cancelSummary != nil {
 				defer close(summaryDone)
@@ -328,7 +328,7 @@ func TestForwardCompactsAfterSessionLimitError(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req.WithContext(ctx)
 	Forward(llm.APIFormatOpenAIResponse)(c)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") || calls != 4 {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") || calls != 3 {
 		t.Fatalf("post-limit compaction failed: status=%d calls=%d body=%s", recorder.Code, calls, recorder.Body.String())
 	}
 	for _, entireRequest := range []bool{false, true} {

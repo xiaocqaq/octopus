@@ -28,7 +28,7 @@ func TestSummaryRejectsIncompleteOutput(t *testing.T) {
 			target := responsesSummaryTarget{outbound: conversionTestOutbound(t, llm.APIFormatOpenAIResponse, server.URL), modelName: "model", passthrough: true}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			summaries, err := summarizeResponsesChunks(map[string]any{"model": "model", "reasoning": map[string]any{"effort": "high"}}, nil, [][]any{{map[string]any{"role": "user", "content": "EARLY FACT MUST SURVIVE"}}}, func(body []byte) (string, error) {
+			summary, err := summarizeResponsesHistory(map[string]any{"model": "model", "reasoning": map[string]any{"effort": "high"}}, nil, []any{map[string]any{"role": "user", "content": "EARLY FACT MUST SURVIVE"}}, func(body []byte) (string, error) {
 				return summarizeResponsesForGroup(ctx, &httpclient.Request{Headers: make(http.Header)}, body, []responsesSummaryTarget{target})
 			})
 			if err != nil {
@@ -37,7 +37,7 @@ func TestSummaryRejectsIncompleteOutput(t *testing.T) {
 			if calls.Load() != responsesSummaryMaxAttempts {
 				t.Errorf("attempts=%d want=%d", calls.Load(), responsesSummaryMaxAttempts)
 			}
-			result := string(conversionTestJSON(summaries))
+			result := string(conversionTestJSON(summary))
 			if strings.Contains(result, "PARTIAL SUMMARY") || !strings.Contains(result, "EARLY FACT MUST SURVIVE") || !strings.Contains(result, "Conversation handoff transcript") {
 				t.Fatalf("incomplete output replaced original history: %s", result)
 			}
