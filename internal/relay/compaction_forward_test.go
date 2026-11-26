@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -69,10 +70,18 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 				t.Error("summary request must use Responses streaming")
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"handoff summary\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
+			fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"handoff summary\"}]}]}}\n\n")
 			return
 		}
 		assertCompactionRequestState(t, "compaction-test", false)
+		if body["stream"] == true {
+			if compacted := string(conversionTestJSON(input)); assistantTurns != responsesRetainedTurns || strings.Count(compacted, `Conversation handoff summary:\nhandoff summary`) != 2 || !strings.Contains(compacted, "active question") {
+				t.Errorf("formal request is missing the two summaries, retained turns, or active question")
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, conversionTestStream(llm.APIFormatOpenAIResponse, false, true))
+			return
+		}
 		if autoCompactEnabled && !allowFullHistory && assistantTurns >= responsesCompactAtTurns {
 			t.Errorf("full history reached upstream: %d turns", assistantTurns)
 			w.WriteHeader(http.StatusBadRequest)
@@ -117,16 +126,26 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 		input = append(input, map[string]any{"role": "user", "content": "question"}, map[string]any{"role": "assistant", "content": "answer"})
 	}
 	input = append(input, map[string]any{"role": "user", "content": "active question"})
-	body := conversionTestJSON(map[string]any{"model": group.Name, "input": input, "stream": false})
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = req.WithContext(ctx)
-	Forward(llm.APIFormatOpenAIResponse)(c)
-
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Hello back") {
-		t.Fatalf("forward failed after compaction: status=%d body=%s", recorder.Code, recorder.Body.String())
+	streamBody := conversionTestJSON(map[string]any{"model": group.Name, "input": input, "stream": true})
+	router := gin.New()
+	router.POST("/v1/responses", Forward(llm.APIFormatOpenAIResponse))
+	gateway := httptest.NewServer(router)
+	defer gateway.Close()
+	client := gateway.Client()
+	client.Timeout = 3 * time.Second
+	response, err := client.Post(gateway.URL+"/v1/responses", "application/json", strings.NewReader(string(streamBody)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(answer), "Hello back") || !strings.Contains(string(answer), "response.completed") || strings.Contains(string(answer), "handoff summary") {
+		t.Fatalf("formal stream not delivered after compaction: status=%d err=%v body=%s", response.StatusCode, err, answer)
+	}
+	states, updates := OpenRequestStream()
+	CloseRequestStream(updates)
+	if len(states) != 1 || states[0].Status != StatusSuccess || states[0].Compacting {
+		t.Fatalf("expected successful formal response with compaction cleared: %+v", states)
 	}
 	if calls != 3 {
 		t.Fatalf("upstream calls=%d, want two summaries and one response", calls)
@@ -137,8 +156,9 @@ func TestForwardCompactsResponsesBeforeLimit(t *testing.T) {
 	if _, err := op.ChannelUpdate(channel, ctx); err != nil {
 		t.Fatal(err)
 	}
-	recorder = httptest.NewRecorder()
-	c, _ = gin.CreateTestContext(recorder)
+	body := conversionTestJSON(map[string]any{"model": group.Name, "input": input, "stream": false})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 	c.Request.Header.Set("Content-Type", "application/json")
 	Forward(llm.APIFormatOpenAIResponse)(c)

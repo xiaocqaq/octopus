@@ -186,20 +186,33 @@ func requestResponsesSummary(ctx context.Context, raw *httpclient.Request, body 
 	if response.closeIdle != nil {
 		defer response.closeIdle()
 	}
-	var text strings.Builder
+	var deltas, doneText strings.Builder
 	for event := response.first; event != nil; {
 		last, err := inspectStreamEvent(llm.APIFormatOpenAIResponse, event)
 		if err != nil {
 			return "", err
 		}
-		if gjson.GetBytes(event.Data, "type").String() == "response.output_text.delta" {
-			text.WriteString(gjson.GetBytes(event.Data, "delta").String())
+		parsed := gjson.ParseBytes(event.Data)
+		switch parsed.Get("type").String() {
+		case "response.output_text.delta":
+			deltas.WriteString(parsed.Get("delta").String())
+		case "response.output_text.done":
+			doneText.WriteString(parsed.Get("text").String())
+		case "response.incomplete":
+			return "", errors.New("summary response incomplete")
 		}
-		if gjson.GetBytes(event.Data, "type").String() == "response.incomplete" || gjson.GetBytes(event.Data, "response.status").String() == "incomplete" {
+		if parsed.Get("response.status").String() == "incomplete" {
 			return "", errors.New("summary response incomplete")
 		}
 		if last {
-			return text.String(), nil
+			// Prefer the complete snapshot; some upstreams omit some or all delta events.
+			if text := responsesOutputText([]byte(parsed.Get("response").Raw)); strings.TrimSpace(text) != "" {
+				return text, nil
+			}
+			if strings.TrimSpace(doneText.String()) != "" {
+				return doneText.String(), nil
+			}
+			return deltas.String(), nil
 		}
 		if !response.events.Next() {
 			if err := response.events.Err(); err != nil {
